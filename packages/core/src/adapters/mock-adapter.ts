@@ -55,19 +55,31 @@ function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition<T>[]):
 
 /**
  * In-memory DataStore implementation for testing
+ * Uses an index (Map) for O(1) ID lookups instead of O(N) array scan
  */
 export class MockAdapter<T extends Row & { id: string | number }> implements DataStore<T> {
   private data: T[] = []
   private nextId = 1
+  /** Index for O(1) lookups by ID - maps id to array index */
+  private idIndex: Map<string | number, number> = new Map()
 
   constructor(initialData: T[] = []) {
     this.data = [...initialData]
+    this.rebuildIndex()
     // Update nextId based on existing data
     if (initialData.length > 0) {
       const maxId = Math.max(...initialData.map(r => 
         typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
       ))
       this.nextId = maxId + 1
+    }
+  }
+
+  /** Rebuild the ID index from scratch */
+  private rebuildIndex(): void {
+    this.idIndex.clear()
+    for (let i = 0; i < this.data.length; i++) {
+      this.idIndex.set(this.data[i].id, i)
     }
   }
 
@@ -103,36 +115,51 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
     return result
   }
 
+  /**
+   * Find a single row by ID - O(1) using index
+   * Optimized: uses Map lookup instead of array scan
+   */
   findById(id: string | number): T | undefined {
-    return this.data.find(row => row.id === id)
+    const index = this.idIndex.get(id)
+    if (index === undefined) return undefined
+    return this.data[index]
   }
 
   insert(data: Omit<T, 'id'>): T {
     const id = this.nextId++
     const newRow = { ...data, id } as T
+    const index = this.data.length
     this.data.push(newRow)
+    this.idIndex.set(id, index)
     return newRow
   }
 
+  /**
+   * Update a row by ID - O(1) using index
+   */
   update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
-    const index = this.data.findIndex(row => row.id === id)
-    if (index === -1) return undefined
+    const index = this.idIndex.get(id)
+    if (index === undefined) return undefined
     
     this.data[index] = { ...this.data[index], ...data }
     return this.data[index]
   }
 
   delete(id: string | number): boolean {
-    const index = this.data.findIndex(row => row.id === id)
-    if (index === -1) return false
+    const index = this.idIndex.get(id)
+    if (index === undefined) return false
     
     this.data.splice(index, 1)
+    this.idIndex.delete(id)
+    // Rebuild index since splice shifts all subsequent elements
+    this.rebuildIndex()
     return true
   }
 
   /** Test helper: reset all data */
   reset(data: T[] = []): void {
     this.data = [...data]
+    this.rebuildIndex()
     if (data.length > 0) {
       const maxId = Math.max(...data.map(r => 
         typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
