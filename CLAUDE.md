@@ -63,6 +63,7 @@ src/
 | `development-flow`   | GitHub sync and task workflow        |
 | `project-management` | Issues, PRs, milestone workflow      |
 | `library-dev`        | Library development best practices   |
+| `gas-environment`    | GAS runtime, limits, clasp deploy    |
 
 ## Core Rules
 
