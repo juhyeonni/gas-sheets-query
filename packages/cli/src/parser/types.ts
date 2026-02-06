@@ -114,11 +114,20 @@ export interface SchemaAST {
 // ============================================================================
 
 /**
+ * Raw table structure with fields, indexes, unique sections
+ */
+export interface RawTableDefinition {
+  fields: Record<string, string>
+  indexes?: Array<string[]>
+  unique?: Array<string[]>
+}
+
+/**
  * Raw YAML schema structure (before parsing)
  */
 export interface RawSchema {
   enums?: Record<string, string[]>
-  tables?: Record<string, Record<string, string>>
+  tables?: Record<string, RawTableDefinition>
 }
 
 /**
