@@ -1,0 +1,528 @@
+/**
+ * Schema Parser Tests
+ * TDD for #19 - YAML 스키마를 AST로 파싱
+ */
+
+import { describe, it, expect } from 'vitest'
+import {
+  parseFieldType,
+  parseFieldAttributes,
+  parseField,
+  parseEnum,
+  parseTable,
+  parseBlockAttributeArrays,
+  parseSchema,
+  ParseError,
+} from '../../src/parser/schema-parser'
+
+// =============================================================================
+// Field Type Parsing
+// =============================================================================
+
+describe('parseFieldType', () => {
+  it('should parse simple types', () => {
+    expect(parseFieldType('string')).toEqual({ type: 'string', optional: false })
+    expect(parseFieldType('number')).toEqual({ type: 'number', optional: false })
+    expect(parseFieldType('boolean')).toEqual({ type: 'boolean', optional: false })
+    expect(parseFieldType('datetime')).toEqual({ type: 'datetime', optional: false })
+  })
+
+  it('should parse optional types (with ?)', () => {
+    expect(parseFieldType('string?')).toEqual({ type: 'string', optional: true })
+    expect(parseFieldType('number?')).toEqual({ type: 'number', optional: true })
+  })
+
+  it('should parse enum types', () => {
+    expect(parseFieldType('Role')).toEqual({ type: 'Role', optional: false })
+    expect(parseFieldType('Status?')).toEqual({ type: 'Status', optional: true })
+  })
+})
+
+// =============================================================================
+// Field Attributes Parsing
+// =============================================================================
+
+describe('parseFieldAttributes', () => {
+  it('should parse simple attributes', () => {
+    const attrs = parseFieldAttributes('@id')
+    expect(attrs).toEqual([{ name: 'id', args: [] }])
+  })
+
+  it('should parse @unique', () => {
+    const attrs = parseFieldAttributes('@unique')
+    expect(attrs).toEqual([{ name: 'unique', args: [] }])
+  })
+
+  it('should parse @updatedAt', () => {
+    const attrs = parseFieldAttributes('@updatedAt')
+    expect(attrs).toEqual([{ name: 'updatedAt', args: [] }])
+  })
+
+  it('should parse @default with function', () => {
+    expect(parseFieldAttributes('@default(autoincrement)')).toEqual([
+      { name: 'default', args: ['autoincrement'] }
+    ])
+    expect(parseFieldAttributes('@default(now)')).toEqual([
+      { name: 'default', args: ['now'] }
+    ])
+  })
+
+  it('should parse @default with literal values', () => {
+    expect(parseFieldAttributes('@default(0)')).toEqual([
+      { name: 'default', args: [0] }
+    ])
+    expect(parseFieldAttributes('@default(100)')).toEqual([
+      { name: 'default', args: [100] }
+    ])
+    expect(parseFieldAttributes('@default(true)')).toEqual([
+      { name: 'default', args: [true] }
+    ])
+    expect(parseFieldAttributes('@default(false)')).toEqual([
+      { name: 'default', args: [false] }
+    ])
+  })
+
+  it('should parse @default with string values', () => {
+    expect(parseFieldAttributes('@default("#888888")')).toEqual([
+      { name: 'default', args: ['#888888'] }
+    ])
+    expect(parseFieldAttributes('@default("hello")')).toEqual([
+      { name: 'default', args: ['hello'] }
+    ])
+  })
+
+  it('should parse @default with enum values', () => {
+    expect(parseFieldAttributes('@default(USER)')).toEqual([
+      { name: 'default', args: ['USER'] }
+    ])
+    expect(parseFieldAttributes('@default(DRAFT)')).toEqual([
+      { name: 'default', args: ['DRAFT'] }
+    ])
+  })
+
+  it('should parse multiple attributes', () => {
+    const attrs = parseFieldAttributes('@id @default(autoincrement)')
+    expect(attrs).toEqual([
+      { name: 'id', args: [] },
+      { name: 'default', args: ['autoincrement'] }
+    ])
+  })
+})
+
+// =============================================================================
+// Full Field Parsing
+// =============================================================================
+
+describe('parseField', () => {
+  it('should parse simple field', () => {
+    expect(parseField('name', 'string')).toEqual({
+      name: 'name',
+      type: 'string',
+      optional: false,
+      attributes: []
+    })
+  })
+
+  it('should parse optional field', () => {
+    expect(parseField('nickname', 'string?')).toEqual({
+      name: 'nickname',
+      type: 'string',
+      optional: true,
+      attributes: []
+    })
+  })
+
+  it('should parse field with attributes', () => {
+    expect(parseField('id', 'number @id @default(autoincrement)')).toEqual({
+      name: 'id',
+      type: 'number',
+      optional: false,
+      attributes: [
+        { name: 'id', args: [] },
+        { name: 'default', args: ['autoincrement'] }
+      ]
+    })
+  })
+
+  it('should parse field with @unique', () => {
+    expect(parseField('email', 'string @unique')).toEqual({
+      name: 'email',
+      type: 'string',
+      optional: false,
+      attributes: [{ name: 'unique', args: [] }]
+    })
+  })
+
+  it('should parse field with enum type and default', () => {
+    expect(parseField('role', 'Role @default(USER)')).toEqual({
+      name: 'role',
+      type: 'Role',
+      optional: false,
+      attributes: [{ name: 'default', args: ['USER'] }]
+    })
+  })
+
+  it('should parse datetime with @default(now)', () => {
+    expect(parseField('createdAt', 'datetime @default(now)')).toEqual({
+      name: 'createdAt',
+      type: 'datetime',
+      optional: false,
+      attributes: [{ name: 'default', args: ['now'] }]
+    })
+  })
+
+  it('should parse datetime with @updatedAt', () => {
+    expect(parseField('updatedAt', 'datetime @updatedAt')).toEqual({
+      name: 'updatedAt',
+      type: 'datetime',
+      optional: false,
+      attributes: [{ name: 'updatedAt', args: [] }]
+    })
+  })
+})
+
+// =============================================================================
+// Enum Parsing
+// =============================================================================
+
+describe('parseEnum', () => {
+  it('should parse enum values', () => {
+    expect(parseEnum('Role', ['USER', 'ADMIN', 'MODERATOR'])).toEqual({
+      name: 'Role',
+      values: ['USER', 'ADMIN', 'MODERATOR']
+    })
+  })
+
+  it('should parse single value enum', () => {
+    expect(parseEnum('SingleValue', ['ONLY'])).toEqual({
+      name: 'SingleValue',
+      values: ['ONLY']
+    })
+  })
+})
+
+// =============================================================================
+// Block Attributes Parsing (New syntax: indexes/unique arrays)
+// =============================================================================
+
+describe('parseBlockAttributeArrays', () => {
+  it('should parse single index', () => {
+    const result = parseBlockAttributeArrays('index', [['ownerId']])
+    expect(result).toEqual([
+      { name: 'index', fields: ['ownerId'] }
+    ])
+  })
+
+  it('should parse multiple indexes', () => {
+    const result = parseBlockAttributeArrays('index', [
+      ['ownerId'],
+      ['email', 'createdAt']
+    ])
+    expect(result).toEqual([
+      { name: 'index', fields: ['ownerId'] },
+      { name: 'index', fields: ['email', 'createdAt'] }
+    ])
+  })
+
+  it('should parse unique constraints', () => {
+    const result = parseBlockAttributeArrays('unique', [
+      ['email'],
+      ['projectId', 'name']
+    ])
+    expect(result).toEqual([
+      { name: 'unique', fields: ['email'] },
+      { name: 'unique', fields: ['projectId', 'name'] }
+    ])
+  })
+
+  it('should handle empty array', () => {
+    const result = parseBlockAttributeArrays('index', [])
+    expect(result).toEqual([])
+  })
+})
+
+// =============================================================================
+// Table Parsing (New syntax: fields/indexes/unique sections)
+// =============================================================================
+
+describe('parseTable', () => {
+  it('should parse simple table with fields section', () => {
+    const raw = {
+      fields: {
+        id: 'number @id',
+        name: 'string',
+      }
+    }
+    const result = parseTable('Simple', raw)
+    expect(result).toEqual({
+      name: 'Simple',
+      fields: [
+        { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+        { name: 'name', type: 'string', optional: false, attributes: [] },
+      ],
+      blockAttributes: []
+    })
+  })
+
+  it('should parse table with indexes section', () => {
+    const raw = {
+      fields: {
+        id: 'number @id',
+        ownerId: 'number',
+      },
+      indexes: [
+        ['ownerId']
+      ]
+    }
+    const result = parseTable('Project', raw)
+    expect(result).toEqual({
+      name: 'Project',
+      fields: [
+        { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+        { name: 'ownerId', type: 'number', optional: false, attributes: [] },
+      ],
+      blockAttributes: [
+        { name: 'index', fields: ['ownerId'] }
+      ]
+    })
+  })
+
+  it('should parse table with indexes and unique sections', () => {
+    const raw = {
+      fields: {
+        id: 'number @id',
+        projectId: 'number',
+        title: 'string',
+      },
+      indexes: [
+        ['projectId']
+      ],
+      unique: [
+        ['projectId', 'title']
+      ]
+    }
+    const result = parseTable('Task', raw)
+    expect(result.blockAttributes).toEqual([
+      { name: 'index', fields: ['projectId'] },
+      { name: 'unique', fields: ['projectId', 'title'] }
+    ])
+  })
+
+  it('should parse table with multiple indexes', () => {
+    const raw = {
+      fields: {
+        id: 'number @id',
+        email: 'string',
+        createdAt: 'datetime',
+        status: 'string',
+      },
+      indexes: [
+        ['email'],
+        ['email', 'createdAt'],
+        ['status']
+      ]
+    }
+    const result = parseTable('User', raw)
+    expect(result.blockAttributes).toEqual([
+      { name: 'index', fields: ['email'] },
+      { name: 'index', fields: ['email', 'createdAt'] },
+      { name: 'index', fields: ['status'] }
+    ])
+  })
+})
+
+// =============================================================================
+// Full Schema Parsing (New syntax)
+// =============================================================================
+
+describe('parseSchema', () => {
+  it('should parse minimal schema', () => {
+    const yaml = `
+tables:
+  User:
+    fields:
+      id: number @id
+      name: string
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(true)
+    expect(result.schema?.tables.User).toBeDefined()
+    expect(result.schema?.tables.User.fields).toHaveLength(2)
+  })
+
+  it('should parse schema with enums', () => {
+    const yaml = `
+enums:
+  Role:
+    - USER
+    - ADMIN
+
+tables:
+  User:
+    fields:
+      id: number @id
+      role: Role @default(USER)
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(true)
+    expect(result.schema?.enums.Role).toEqual({
+      name: 'Role',
+      values: ['USER', 'ADMIN']
+    })
+    expect(result.schema?.tables.User.fields[1]).toEqual({
+      name: 'role',
+      type: 'Role',
+      optional: false,
+      attributes: [{ name: 'default', args: ['USER'] }]
+    })
+  })
+
+  it('should parse complex schema with all features', () => {
+    const yaml = `
+enums:
+  Status:
+    - OPEN
+    - DONE
+
+tables:
+  Task:
+    fields:
+      id: number @id @default(autoincrement)
+      title: string
+      description: string?
+      status: Status @default(OPEN)
+      assigneeId: number?
+      createdAt: datetime @default(now)
+      updatedAt: datetime @updatedAt
+    indexes:
+      - [status]
+    unique:
+      - [title]
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(true)
+    
+    const task = result.schema?.tables.Task
+    expect(task).toBeDefined()
+    expect(task?.fields).toHaveLength(7)
+    
+    // Check optional field
+    const description = task?.fields.find(f => f.name === 'description')
+    expect(description?.optional).toBe(true)
+    
+    // Check enum field with default
+    const status = task?.fields.find(f => f.name === 'status')
+    expect(status?.type).toBe('Status')
+    expect(status?.attributes).toContainEqual({ name: 'default', args: ['OPEN'] })
+    
+    // Check block attributes
+    expect(task?.blockAttributes).toContainEqual({ name: 'index', fields: ['status'] })
+    expect(task?.blockAttributes).toContainEqual({ name: 'unique', fields: ['title'] })
+  })
+
+  it('should return errors for invalid YAML', () => {
+    const yaml = `
+this is not valid yaml:
+  - [ unbalanced
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(false)
+    expect(result.errors.length).toBeGreaterThan(0)
+  })
+
+  it('should handle empty schema', () => {
+    const yaml = ``
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(true)
+    expect(result.schema?.enums).toEqual({})
+    expect(result.schema?.tables).toEqual({})
+  })
+
+  it('should parse composite indexes', () => {
+    const yaml = `
+tables:
+  Task:
+    fields:
+      id: number @id
+      projectId: number
+      assigneeId: number
+      status: string
+    indexes:
+      - [projectId]
+      - [assigneeId]
+      - [projectId, status]
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(true)
+    expect(result.schema?.tables.Task.blockAttributes).toEqual([
+      { name: 'index', fields: ['projectId'] },
+      { name: 'index', fields: ['assigneeId'] },
+      { name: 'index', fields: ['projectId', 'status'] }
+    ])
+  })
+})
+
+// =============================================================================
+// Error Handling
+// =============================================================================
+
+describe('Error Handling', () => {
+  it('should collect errors with table context', () => {
+    const yaml = `
+tables:
+  User:
+    id: number @id
+    email: string @unknown_attribute
+`
+    const result = parseSchema(yaml)
+    // Should still succeed but might have warnings about unknown attributes
+    expect(result.success).toBe(true)
+  })
+})
+
+// =============================================================================
+// Integration Test with Example File
+// =============================================================================
+
+describe('Integration', () => {
+  it('should parse the example schema file', async () => {
+    // Read and parse the example file
+    const fs = await import('fs')
+    const path = await import('path')
+    
+    const examplePath = path.resolve(__dirname, '../../../../examples/schema.gsq.yaml')
+    const content = fs.readFileSync(examplePath, 'utf-8')
+    
+    const result = parseSchema(content)
+    
+    expect(result.success).toBe(true)
+    expect(result.errors).toEqual([])
+    
+    // Check enums
+    expect(result.schema?.enums.Role).toBeDefined()
+    expect(result.schema?.enums.Role.values).toEqual(['USER', 'ADMIN', 'MODERATOR'])
+    expect(result.schema?.enums.Priority).toBeDefined()
+    expect(result.schema?.enums.Status).toBeDefined()
+    
+    // Check tables
+    expect(result.schema?.tables.User).toBeDefined()
+    expect(result.schema?.tables.Project).toBeDefined()
+    expect(result.schema?.tables.Task).toBeDefined()
+    expect(result.schema?.tables.Comment).toBeDefined()
+    expect(result.schema?.tables.Label).toBeDefined()
+    
+    // Verify User table structure
+    const user = result.schema?.tables.User
+    expect(user?.fields.map(f => f.name)).toEqual([
+      'id', 'email', 'name', 'nickname', 'role', 'active', 'loginCount', 'createdAt', 'updatedAt'
+    ])
+    
+    // Verify Task table block attributes (3 indexes + 1 unique)
+    const task = result.schema?.tables.Task
+    expect(task?.blockAttributes.length).toBe(4)
+    expect(task?.blockAttributes).toContainEqual({ name: 'index', fields: ['projectId'] })
+    expect(task?.blockAttributes).toContainEqual({ name: 'index', fields: ['assigneeId'] })
+    expect(task?.blockAttributes).toContainEqual({ name: 'index', fields: ['status'] })
+    expect(task?.blockAttributes).toContainEqual({ name: 'unique', fields: ['projectId', 'title'] })
+  })
+})
