@@ -2,12 +2,16 @@
  * Repository - high-level CRUD operations over a DataStore
  */
 import type { Row, DataStore, QueryOptions } from './types'
+import { RowNotFoundError } from './errors'
 
 /**
  * Repository provides a clean CRUD interface over any DataStore implementation
  */
 export class Repository<T extends Row & { id: string | number }> {
-  constructor(private readonly store: DataStore<T>) {}
+  constructor(
+    private readonly store: DataStore<T>,
+    private readonly tableName?: string
+  ) {}
 
   /**
    * Get all rows from the repository
@@ -25,12 +29,12 @@ export class Repository<T extends Row & { id: string | number }> {
 
   /**
    * Find a single row by ID
-   * @throws Error if not found
+   * @throws RowNotFoundError if not found
    */
   findById(id: string | number): T {
     const row = this.store.findById(id)
     if (!row) {
-      throw new Error(`Row with id "${id}" not found`)
+      throw new RowNotFoundError(id, this.tableName)
     }
     return row
   }
@@ -51,12 +55,12 @@ export class Repository<T extends Row & { id: string | number }> {
 
   /**
    * Update a row by ID
-   * @throws Error if not found
+   * @throws RowNotFoundError if not found
    */
   update(id: string | number, data: Partial<Omit<T, 'id'>>): T {
     const updated = this.store.update(id, data)
     if (!updated) {
-      throw new Error(`Row with id "${id}" not found`)
+      throw new RowNotFoundError(id, this.tableName)
     }
     return updated
   }
@@ -70,12 +74,12 @@ export class Repository<T extends Row & { id: string | number }> {
 
   /**
    * Delete a row by ID
-   * @throws Error if not found
+   * @throws RowNotFoundError if not found
    */
   delete(id: string | number): void {
     const deleted = this.store.delete(id)
     if (!deleted) {
-      throw new Error(`Row with id "${id}" not found`)
+      throw new RowNotFoundError(id, this.tableName)
     }
   }
 

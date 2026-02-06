@@ -11,6 +11,7 @@ import type {
 } from './types'
 import { Repository } from './repository'
 import { QueryBuilder, createQueryBuilder } from './query-builder'
+import { TableNotFoundError, MissingStoreError } from './errors'
 
 /**
  * Table handle providing Repository and QueryBuilder access
@@ -56,9 +57,10 @@ export interface SheetsDB<Tables extends Record<string, RowWithId>> {
  * Create a TableHandle for a given store
  */
 function createTableHandle<T extends RowWithId>(
-  store: DataStore<T>
+  store: DataStore<T>,
+  tableName: string
 ): TableHandle<T> {
-  const repo = new Repository<T>(store)
+  const repo = new Repository<T>(store, tableName)
   
   return {
     repo,
@@ -107,7 +109,7 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
   // Validate that all tables in config have stores
   for (const tableName of Object.keys(config.tables)) {
     if (!(tableName in stores)) {
-      throw new Error(`Missing store for table "${tableName}"`)
+      throw new MissingStoreError(tableName)
     }
   }
   
@@ -119,13 +121,11 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
     
     from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K]> {
       if (!(tableName in config.tables)) {
-        throw new Error(
-          `Table "${tableName}" not found. Available: ${Object.keys(config.tables).join(', ')}`
-        )
+        throw new TableNotFoundError(tableName, Object.keys(config.tables))
       }
       
       if (!(tableName in handles)) {
-        handles[tableName] = createTableHandle(stores[tableName])
+        handles[tableName] = createTableHandle(stores[tableName], tableName)
       }
       
       return handles[tableName] as TableHandle<Tables[K]>
@@ -133,9 +133,7 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
     
     getStore<K extends keyof Tables & string>(tableName: K): DataStore<Tables[K]> {
       if (!(tableName in stores)) {
-        throw new Error(
-          `Store for table "${tableName}" not found. Available: ${Object.keys(stores).join(', ')}`
-        )
+        throw new TableNotFoundError(tableName, Object.keys(stores))
       }
       return stores[tableName]
     }
@@ -227,7 +225,7 @@ export function defineSheetsDB<
   // Validate stores
   for (const tableName of Object.keys(tables)) {
     if (!(tableName in stores)) {
-      throw new Error(`Missing store for table "${tableName}"`)
+      throw new MissingStoreError(tableName)
     }
   }
   
@@ -241,14 +239,12 @@ export function defineSheetsDB<
     
     from<K extends keyof InferredTables & string>(tableName: K): TableHandle<InferredTables[K]> {
       if (!(tableName in tables)) {
-        throw new Error(
-          `Table "${tableName}" not found. Available: ${Object.keys(tables).join(', ')}`
-        )
+        throw new TableNotFoundError(tableName, Object.keys(tables))
       }
       
       if (!(tableName in handles)) {
         const store = stores[tableName as keyof typeof stores]
-        handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>)
+        handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>, tableName)
       }
       
       return handles[tableName] as TableHandle<InferredTables[K]>
@@ -256,9 +252,7 @@ export function defineSheetsDB<
     
     getStore<K extends keyof InferredTables & string>(tableName: K): DataStore<InferredTables[K]> {
       if (!(tableName in stores)) {
-        throw new Error(
-          `Store for table "${tableName}" not found. Available: ${Object.keys(stores).join(', ')}`
-        )
+        throw new TableNotFoundError(tableName, Object.keys(stores))
       }
       return stores[tableName as keyof typeof stores] as DataStore<InferredTables[K]>
     }

@@ -34,4 +34,15 @@ export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOption
 // Adapters
 export { MockAdapter } from './adapters/mock-adapter'
 
+// Errors
+export {
+  SheetsQueryError,
+  TableNotFoundError,
+  RowNotFoundError,
+  NoResultsError,
+  MissingStoreError,
+  ValidationError,
+  InvalidOperatorError
+} from './core/errors'
+
 export const VERSION = '0.1.0'

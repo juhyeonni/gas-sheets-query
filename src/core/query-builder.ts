@@ -2,6 +2,7 @@
  * Query Builder - fluent API for building queries
  */
 import type { Row, DataStore, QueryOptions, Operator, SortDirection, WhereCondition, OrderByCondition } from './types'
+import { NoResultsError } from './errors'
 
 /**
  * QueryBuilder provides a fluent interface for building and executing queries
@@ -131,11 +132,12 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
 
   /**
    * Execute and return the first result or throw
+   * @throws NoResultsError if no results found
    */
   firstOrFail(): T {
     const result = this.first()
     if (!result) {
-      throw new Error('No results found')
+      throw new NoResultsError()
     }
     return result
   }

@@ -178,7 +178,7 @@ describe('createSheetsDB', () => {
       expect(() => {
         // @ts-expect-error - testing runtime error
         db.getStore('unknown')
-      }).toThrow('Store for table "unknown" not found')
+      }).toThrow('Table "unknown" not found')
     })
   })
 
