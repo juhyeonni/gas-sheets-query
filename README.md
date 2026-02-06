@@ -46,10 +46,10 @@ npm install gas-sheets-query
 ## 로드맵
 
 - [x] v0.1 - Core (MVP): 기본 CRUD + Query Builder
-- [ ] v0.2 - Performance: 최적화, Batch, 인덱싱
-- [ ] v0.3 - Advanced Query: Visualization API, JOIN, Aggregation
-- [ ] v0.4 - DX: 마이그레이션, 문서화
 - [x] v0.5 - Schema Generator: CLI (`gsq generate`), 타입/클라이언트 코드 생성
+- [ ] v0.6 - Performance: 최적화, Batch, 인덱싱
+- [ ] v0.7 - Advanced Query: Visualization API, JOIN, Aggregation
+- [ ] v0.8 - DX: 마이그레이션, 문서화
 - [ ] v1.0 - Production: npm 배포, 실사용 검증
 
 ## 라이선스
