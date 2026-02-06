@@ -19,6 +19,8 @@ export type {
 // Core classes
 export { Repository } from './core/repository'
 export { QueryBuilder, createQueryBuilder } from './core/query-builder'
+export { createSheetsDB } from './core/sheets-db'
+export type { SheetsDB, TableHandle, CreateSheetsDBOptions } from './core/sheets-db'
 
 // Adapters
 export { MockAdapter } from './adapters/mock-adapter'
