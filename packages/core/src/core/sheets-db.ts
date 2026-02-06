@@ -11,6 +11,7 @@ import type {
 } from './types'
 import { Repository } from './repository'
 import { QueryBuilder, createQueryBuilder } from './query-builder'
+import { JoinQueryBuilder, createJoinQueryBuilder, StoreResolver } from './join-query-builder'
 import { TableNotFoundError, MissingStoreError } from './errors'
 
 /**
@@ -22,6 +23,9 @@ export interface TableHandle<T extends RowWithId> {
   
   /** Create a new query builder for this table */
   query(): QueryBuilder<T>
+  
+  /** Create a new query builder with JOIN support */
+  joinQuery(): JoinQueryBuilder<T>
   
   /** Shorthand: create a row */
   create(data: Omit<T, 'id'>): T
@@ -64,13 +68,15 @@ export interface SheetsDB<Tables extends Record<string, RowWithId>> {
  */
 function createTableHandle<T extends RowWithId>(
   store: DataStore<T>,
-  tableName: string
+  tableName: string,
+  storeResolver: StoreResolver
 ): TableHandle<T> {
   const repo = new Repository<T>(store, tableName)
   
   return {
     repo,
     query: () => createQueryBuilder(store),
+    joinQuery: () => createJoinQueryBuilder(store, tableName, storeResolver),
     create: (data) => repo.create(data),
     findById: (id) => repo.findById(id),
     findAll: () => repo.findAll(),
@@ -121,6 +127,14 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
     }
   }
   
+  // Create store resolver for JOIN support
+  const storeResolver: StoreResolver = <T extends RowWithId>(tableName: string) => {
+    if (!(tableName in stores)) {
+      throw new TableNotFoundError(tableName, Object.keys(stores))
+    }
+    return stores[tableName as keyof typeof stores] as DataStore<T>
+  }
+  
   // Cache table handles
   const handles: Record<string, unknown> = {}
   
@@ -133,7 +147,7 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
       }
       
       if (!(tableName in handles)) {
-        handles[tableName] = createTableHandle(stores[tableName], tableName)
+        handles[tableName] = createTableHandle(stores[tableName], tableName, storeResolver)
       }
       
       return handles[tableName] as TableHandle<Tables[K]>
@@ -237,10 +251,18 @@ export function defineSheetsDB<
     }
   }
   
+  type InferredTables = InferTablesFromConfig<TableSchemas>
+  
+  // Create store resolver for JOIN support
+  const storeResolver: StoreResolver = <T extends RowWithId>(tableName: string) => {
+    if (!(tableName in stores)) {
+      throw new TableNotFoundError(tableName, Object.keys(stores))
+    }
+    return stores[tableName as keyof typeof stores] as DataStore<T>
+  }
+  
   // Cache table handles
   const handles: Record<string, unknown> = {}
-  
-  type InferredTables = InferTablesFromConfig<TableSchemas>
   
   return {
     config,
@@ -252,7 +274,7 @@ export function defineSheetsDB<
       
       if (!(tableName in handles)) {
         const store = stores[tableName as keyof typeof stores]
-        handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>, tableName)
+        handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>, tableName, storeResolver)
       }
       
       return handles[tableName] as TableHandle<InferredTables[K]>
