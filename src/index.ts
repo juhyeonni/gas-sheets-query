@@ -18,6 +18,7 @@ export type {
 
 // Core classes
 export { Repository } from './core/repository'
+export { QueryBuilder, createQueryBuilder } from './core/query-builder'
 
 // Adapters
 export { MockAdapter } from './adapters/mock-adapter'
