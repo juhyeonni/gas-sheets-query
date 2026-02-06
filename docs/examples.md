@@ -1,26 +1,26 @@
 # Examples
 
-gas-sheets-query 실전 예제 모음입니다.
+A collection of practical examples for gas-sheets-query.
 
-## 목차
+## Table of Contents
 
-- [기본 CRUD](#기본-crud)
+- [Basic CRUD](#basic-crud)
 - [Query Builder](#query-builder)
 - [JOIN](#join)
 - [Aggregation](#aggregation)
 - [Migration](#migration)
-- [실전 패턴](#실전-패턴)
+- [Practical Patterns](#practical-patterns)
 
 ---
 
-## 기본 CRUD
+## Basic CRUD
 
-### 초기 설정
+### Initial Setup
 
 ```typescript
 import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
 
-// 타입 정의
+// Type definition
 interface User {
   id: number
   name: string
@@ -30,7 +30,7 @@ interface User {
   createdAt: Date
 }
 
-// DB 초기화
+// DB initialization
 const db = defineSheetsDB({
   tables: {
     users: {
@@ -56,7 +56,7 @@ const users = db.from('users')
 ### Create
 
 ```typescript
-// 단일 생성
+// Single create
 const user = users.create({
   name: 'John Doe',
   email: 'john@example.com',
@@ -64,9 +64,9 @@ const user = users.create({
   active: true,
   createdAt: new Date()
 })
-console.log(user.id)  // 자동 생성된 ID
+console.log(user.id)  // Auto-generated ID
 
-// 배치 생성
+// Batch create
 const newUsers = users.batchInsert([
   { name: 'Alice', email: 'alice@example.com', role: 'USER', active: true, createdAt: new Date() },
   { name: 'Bob', email: 'bob@example.com', role: 'USER', active: true, createdAt: new Date() },
@@ -77,13 +77,13 @@ const newUsers = users.batchInsert([
 ### Read
 
 ```typescript
-// ID로 찾기
+// Find by ID
 const user = users.findById(1)
 
-// 전체 조회
+// Get all
 const allUsers = users.findAll()
 
-// 쿼리로 조회
+// Query
 const activeUsers = users.query()
   .where('active', '=', true)
   .exec()
@@ -92,10 +92,10 @@ const activeUsers = users.query()
 ### Update
 
 ```typescript
-// 단일 업데이트
+// Single update
 users.update(1, { name: 'John Smith' })
 
-// 배치 업데이트
+// Batch update
 users.batchUpdate([
   { id: 1, data: { role: 'ADMIN' } },
   { id: 2, data: { active: false } }
@@ -105,10 +105,10 @@ users.batchUpdate([
 ### Delete
 
 ```typescript
-// 단일 삭제
+// Single delete
 users.delete(1)
 
-// 조건부 삭제 (직접 구현)
+// Conditional delete (manual implementation)
 const inactiveUsers = users.query().where('active', '=', false).exec()
 for (const user of inactiveUsers) {
   users.delete(user.id)
@@ -119,16 +119,16 @@ for (const user of inactiveUsers) {
 
 ## Query Builder
 
-### 기본 조건
+### Basic Conditions
 
 ```typescript
-// 같음
+// Equal
 users.query().where('role', '=', 'ADMIN').exec()
 
-// 다름
+// Not equal
 users.query().where('role', '!=', 'USER').exec()
 
-// 비교
+// Comparison
 users.query().where('age', '>', 18).exec()
 users.query().where('age', '>=', 21).exec()
 users.query().where('age', '<', 65).exec()
@@ -137,16 +137,16 @@ users.query().where('age', '<=', 30).exec()
 // IN
 users.query().where('role', 'in', ['ADMIN', 'MODERATOR']).exec()
 
-// LIKE (패턴 매칭)
-users.query().where('name', 'like', 'John%').exec()   // 시작
-users.query().where('email', 'like', '%@gmail.com').exec()  // 끝
-users.query().where('name', 'like', '%son%').exec()   // 포함
+// LIKE (pattern matching)
+users.query().where('name', 'like', 'John%').exec()   // Starts with
+users.query().where('email', 'like', '%@gmail.com').exec()  // Ends with
+users.query().where('name', 'like', '%son%').exec()   // Contains
 ```
 
-### 다중 조건 (AND)
+### Multiple Conditions (AND)
 
 ```typescript
-// 모든 조건 충족
+// All conditions must match
 const result = users.query()
   .where('active', '=', true)
   .where('role', '=', 'ADMIN')
@@ -154,33 +154,33 @@ const result = users.query()
   .exec()
 ```
 
-### 정렬
+### Sorting
 
 ```typescript
-// 단일 정렬
+// Single sort
 users.query()
   .orderBy('name', 'asc')
   .exec()
 
-// 다중 정렬
+// Multiple sort
 users.query()
   .orderBy('role', 'asc')
   .orderBy('name', 'asc')
   .exec()
 ```
 
-### 페이지네이션
+### Pagination
 
 ```typescript
 // limit/offset
 const first10 = users.query().limit(10).exec()
 const next10 = users.query().offset(10).limit(10).exec()
 
-// page 메서드 (편의)
-const page1 = users.query().page(1, 10).exec()  // 1페이지
-const page2 = users.query().page(2, 10).exec()  // 2페이지
+// page method (convenience)
+const page1 = users.query().page(1, 10).exec()  // Page 1
+const page2 = users.query().page(2, 10).exec()  // Page 2
 
-// 페이지네이션 헬퍼
+// Pagination helper
 function paginate(query, pageNum, pageSize) {
   const total = query.clone().count()
   const data = query.page(pageNum, pageSize).exec()
@@ -197,10 +197,10 @@ function paginate(query, pageNum, pageSize) {
 }
 ```
 
-### 결과 처리
+### Result Handling
 
 ```typescript
-// 첫 번째 결과
+// First result
 const first = users.query()
   .where('email', '=', 'john@example.com')
   .first()
@@ -209,7 +209,7 @@ if (first) {
   console.log('Found:', first.name)
 }
 
-// 첫 번째 결과 (없으면 에러)
+// First result (throws if not found)
 try {
   const user = users.query()
     .where('email', '=', 'notfound@example.com')
@@ -218,18 +218,18 @@ try {
   console.log('User not found')
 }
 
-// 존재 여부
+// Existence check
 const exists = users.query()
   .where('email', '=', 'john@example.com')
   .exists()
 
-// 개수
+// Count
 const count = users.query()
   .where('active', '=', true)
   .count()
 ```
 
-### 편의 메서드
+### Convenience Methods
 
 ```typescript
 // whereEq (=)
@@ -249,21 +249,21 @@ users.query().whereLike('name', 'John%')
 
 ## JOIN
 
-### 기본 JOIN
+### Basic JOIN
 
 ```typescript
-// 게시글 + 작성자
+// Posts + Author
 const posts = db.from('posts')
   .joinQuery()
   .join('users', 'authorId', 'id')
   .exec()
 
-// 결과: [
+// Result: [
 //   { id: 1, title: '...', authorId: 1, users: { id: 1, name: 'John', ... } }
 // ]
 ```
 
-### 별칭 사용
+### Using Aliases
 
 ```typescript
 const posts = db.from('posts')
@@ -271,22 +271,22 @@ const posts = db.from('posts')
   .join('users', 'authorId', 'id', { as: 'author' })
   .exec()
 
-// 결과: [
+// Result: [
 //   { id: 1, title: '...', author: { id: 1, name: 'John', ... } }
 // ]
 ```
 
-### 다중 JOIN
+### Multiple JOINs
 
 ```typescript
-// 댓글 + 게시글 + 작성자
+// Comments + Post + Author
 const comments = db.from('comments')
   .joinQuery()
   .join('posts', 'postId', 'id', { as: 'post' })
   .join('users', 'authorId', 'id', { as: 'author' })
   .exec()
 
-// 결과: [
+// Result: [
 //   { 
 //     id: 1, 
 //     content: '...', 
@@ -299,14 +299,14 @@ const comments = db.from('comments')
 ### Inner JOIN
 
 ```typescript
-// 매칭되는 것만 반환
+// Return only matching records
 const postsWithAuthors = db.from('posts')
   .joinQuery()
   .innerJoin('users', 'authorId', 'id', { as: 'author' })
   .exec()
 ```
 
-### JOIN + 조건/정렬
+### JOIN + Conditions/Sorting
 
 ```typescript
 const recentPosts = db.from('posts')
@@ -322,32 +322,32 @@ const recentPosts = db.from('posts')
 
 ## Aggregation
 
-### 기본 집계
+### Basic Aggregation
 
 ```typescript
-// 개수
+// Count
 const userCount = db.from('users').query().count()
 
-// 합계
+// Sum
 const totalRevenue = db.from('orders')
   .query()
   .where('status', '=', 'PAID')
   .sum('amount')
 
-// 평균
+// Average
 const avgOrderAmount = db.from('orders')
   .query()
   .avg('amount')
 
-// 최솟값/최댓값
+// Min/Max
 const minPrice = db.from('products').query().min('price')
 const maxPrice = db.from('products').query().max('price')
 ```
 
-### 그룹별 집계
+### Group Aggregation
 
 ```typescript
-// 카테고리별 통계
+// Statistics by category
 const categoryStats = db.from('products')
   .query()
   .groupBy('category')
@@ -359,16 +359,16 @@ const categoryStats = db.from('products')
     maxPrice: 'max:price'
   })
 
-// 결과: [
+// Result: [
 //   { category: 'Electronics', productCount: 50, totalStock: 1000, avgPrice: 500, ... },
 //   { category: 'Clothing', productCount: 100, totalStock: 5000, avgPrice: 50, ... }
 // ]
 ```
 
-### 다중 그룹
+### Multiple Groups
 
 ```typescript
-// 연도-월별 매출
+// Revenue by year-month
 const monthlyRevenue = db.from('orders')
   .query()
   .where('status', '=', 'PAID')
@@ -380,10 +380,10 @@ const monthlyRevenue = db.from('orders')
   })
 ```
 
-### Having (그룹 필터)
+### Having (Group Filter)
 
 ```typescript
-// 10개 초과 주문이 있는 카테고리만
+// Only categories with more than 10 orders
 const popularCategories = db.from('products')
   .query()
   .groupBy('category')
@@ -398,7 +398,7 @@ const popularCategories = db.from('products')
 
 ## Migration
 
-### 마이그레이션 파일
+### Migration File
 
 ```typescript
 // migrations/001_initial.ts
@@ -409,20 +409,20 @@ export const migration: Migration = {
   name: 'initial_schema',
   
   up: (db) => {
-    // 새 컬럼 추가
+    // Add new columns
     db.addColumn('users', 'nickname', { default: '' })
     db.addColumn('users', 'bio', { default: '' })
   },
   
   down: (db) => {
-    // 컬럼 제거
+    // Remove columns
     db.removeColumn('users', 'nickname')
     db.removeColumn('users', 'bio')
   }
 }
 ```
 
-### 컬럼 이름 변경
+### Rename Column
 
 ```typescript
 // migrations/002_rename_column.ts
@@ -440,7 +440,7 @@ export const migration: Migration = {
 }
 ```
 
-### 마이그레이션 실행
+### Running Migrations
 
 ```typescript
 import { createMigrationRunner, MockAdapter } from 'gas-sheets-query'
@@ -453,24 +453,24 @@ const runner = createMigrationRunner({
   migrations: [m1, m2]
 })
 
-// 상태 확인
+// Check status
 console.log('Current version:', runner.getCurrentVersion())
 console.log('Pending:', runner.getPendingMigrations())
 
-// 실행
+// Run
 const result = await runner.migrate()
 console.log('Applied:', result.applied)
 
-// 롤백
+// Rollback
 const rollback = await runner.rollback()
 console.log('Rolled back:', rollback.rolledBack)
 ```
 
 ---
 
-## 실전 패턴
+## Practical Patterns
 
-### Repository 패턴
+### Repository Pattern
 
 ```typescript
 class UserRepository {
@@ -505,23 +505,23 @@ class UserRepository {
 }
 ```
 
-### 트랜잭션 패턴
+### Transaction Pattern
 
 ```typescript
-// 의사 트랜잭션 (롤백 지원 없음)
+// Pseudo-transaction (no rollback support)
 async function createOrderWithItems(order: Order, items: OrderItem[]) {
-  // 1. 주문 생성
+  // 1. Create order
   const created = db.from('orders').create(order)
   
   try {
-    // 2. 주문 항목 생성
+    // 2. Create order items
     const orderItems = items.map(item => ({
       ...item,
       orderId: created.id
     }))
     db.from('orderItems').batchInsert(orderItems)
     
-    // 3. 재고 업데이트
+    // 3. Update stock
     for (const item of items) {
       const product = db.from('products').findById(item.productId)
       db.from('products').update(item.productId, {
@@ -531,7 +531,7 @@ async function createOrderWithItems(order: Order, items: OrderItem[]) {
     
     return created
   } catch (error) {
-    // 실패 시 주문 삭제
+    // Delete order on failure
     db.from('orders').delete(created.id)
     throw error
   }
@@ -541,7 +541,7 @@ async function createOrderWithItems(order: Order, items: OrderItem[]) {
 ### Soft Delete
 
 ```typescript
-// deletedAt 컬럼 사용
+// Using deletedAt column
 class SoftDeleteRepository<T extends { id: number; deletedAt: Date | null }> {
   constructor(
     private table: TableHandle<T>
@@ -571,7 +571,7 @@ class SoftDeleteRepository<T extends { id: number; deletedAt: Date | null }> {
 }
 ```
 
-### 감사 로그
+### Audit Log
 
 ```typescript
 function createAuditedTable<T extends { id: number }>(table: TableHandle<T>) {
@@ -624,8 +624,8 @@ function createAuditedTable<T extends { id: number }>(table: TableHandle<T>) {
 
 ---
 
-## 다음 단계
+## Next Steps
 
-- [Getting Started](./getting-started.md) - 시작 가이드
-- [API Reference](./api-reference.md) - 상세 API 문서
-- [Schema Syntax](./schema-syntax.md) - 스키마 문법
+- [Getting Started](./getting-started.md) - Getting started guide
+- [API Reference](./api-reference.md) - Detailed API documentation
+- [Schema Syntax](./schema-syntax.md) - Schema syntax

@@ -1,8 +1,8 @@
 # API Reference
 
-gas-sheets-query의 전체 API 문서입니다.
+Complete API documentation for gas-sheets-query.
 
-## 목차
+## Table of Contents
 
 - [SheetsDB](#sheetsdb)
 - [TableHandle](#tablehandle)
@@ -10,7 +10,7 @@ gas-sheets-query의 전체 API 문서입니다.
 - [JoinQueryBuilder](#joinquerybuilder)
 - [Aggregation](#aggregation)
 - [Migration](#migration)
-- [CLI 명령어](#cli-명령어)
+- [CLI Commands](#cli-commands)
 - [Errors](#errors)
 
 ---
@@ -19,7 +19,7 @@ gas-sheets-query의 전체 API 문서입니다.
 
 ### defineSheetsDB
 
-스키마 기반 자동 타입 추론을 사용하는 팩토리 함수입니다. (권장)
+Factory function using schema-based automatic type inference. (Recommended)
 
 ```typescript
 import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
@@ -45,15 +45,15 @@ const db = defineSheetsDB({
 
 #### Options
 
-| 속성 | 타입 | 필수 | 설명 |
-|------|------|------|------|
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
 | `spreadsheetId` | `string` | ✗ | Google Spreadsheet ID |
-| `tables` | `Record<string, TableSchemaTyped>` | ✓ | 테이블 스키마 정의 |
-| `stores` | `Record<string, DataStore>` | ✓ | 각 테이블의 DataStore |
+| `tables` | `Record<string, TableSchemaTyped>` | ✓ | Table schema definitions |
+| `stores` | `Record<string, DataStore>` | ✓ | DataStore for each table |
 
 ### createSheetsDB
 
-명시적 타입을 사용하는 레거시 팩토리 함수입니다.
+Legacy factory function using explicit types.
 
 ```typescript
 import { createSheetsDB, MockAdapter } from 'gas-sheets-query'
@@ -76,17 +76,17 @@ const db = createSheetsDB<{ users: User }>({
 })
 ```
 
-### SheetsDB 인터페이스
+### SheetsDB Interface
 
 ```typescript
 interface SheetsDB<Tables> {
-  // 테이블 핸들 가져오기
+  // Get table handle
   from<K extends keyof Tables>(tableName: K): TableHandle<Tables[K]>
   
-  // 기본 DataStore 접근
+  // Access underlying DataStore
   getStore<K extends keyof Tables>(tableName: K): DataStore<Tables[K]>
   
-  // 설정
+  // Configuration
   readonly config: SheetsDBConfig
 }
 ```
@@ -95,35 +95,35 @@ interface SheetsDB<Tables> {
 
 ## TableHandle
 
-테이블별 CRUD 및 쿼리 작업을 위한 핸들입니다.
+Handle for table-specific CRUD and query operations.
 
-### 속성 및 메서드
+### Properties and Methods
 
 ```typescript
 interface TableHandle<T> {
-  // Repository 직접 접근
+  // Direct repository access
   readonly repo: Repository<T>
   
-  // 쿼리 빌더 생성
+  // Create query builder
   query(): QueryBuilder<T>
   
-  // JOIN 지원 쿼리 빌더
+  // JOIN-enabled query builder
   joinQuery(): JoinQueryBuilder<T>
   
-  // CRUD 단축 메서드
+  // CRUD shortcut methods
   create(data: Omit<T, 'id'>): T
   findById(id: string | number): T
   findAll(): T[]
   update(id: string | number, data: Partial<Omit<T, 'id'>>): T
   delete(id: string | number): void
   
-  // 배치 작업
+  // Batch operations
   batchInsert(data: Omit<T, 'id'>[]): T[]
   batchUpdate(items: { id: string | number; data: Partial<Omit<T, 'id'>> }[]): T[]
 }
 ```
 
-### 예시
+### Example
 
 ```typescript
 const users = db.from('users')
@@ -134,7 +134,7 @@ const found = users.findById(1)
 users.update(1, { name: 'John Doe' })
 users.delete(1)
 
-// 배치 작업
+// Batch operations
 const newUsers = users.batchInsert([
   { name: 'Alice', email: 'alice@example.com' },
   { name: 'Bob', email: 'bob@example.com' }
@@ -145,93 +145,93 @@ const newUsers = users.batchInsert([
 
 ## QueryBuilder
 
-fluent 인터페이스로 쿼리를 구성합니다.
+Build queries with a fluent interface.
 
-### 생성
+### Creation
 
 ```typescript
 const query = db.from('users').query()
 ```
 
-### 조건 (Where)
+### Conditions (Where)
 
 ```typescript
-// 기본 조건
+// Basic condition
 query.where('field', 'operator', 'value')
 
-// 지원 연산자
-query.where('age', '=', 25)     // 같음
-query.where('age', '!=', 25)    // 다름
-query.where('age', '>', 25)     // 초과
-query.where('age', '>=', 25)    // 이상
-query.where('age', '<', 25)     // 미만
-query.where('age', '<=', 25)    // 이하
-query.where('role', 'in', ['ADMIN', 'USER'])  // 포함
-query.where('name', 'like', 'John%')  // 패턴 매칭
+// Supported operators
+query.where('age', '=', 25)     // Equal
+query.where('age', '!=', 25)    // Not equal
+query.where('age', '>', 25)     // Greater than
+query.where('age', '>=', 25)    // Greater than or equal
+query.where('age', '<', 25)     // Less than
+query.where('age', '<=', 25)    // Less than or equal
+query.where('role', 'in', ['ADMIN', 'USER'])  // In list
+query.where('name', 'like', 'John%')  // Pattern matching
 
-// 단축 메서드
+// Shortcut methods
 query.whereEq('role', 'ADMIN')           // where('role', '=', 'ADMIN')
 query.whereNot('status', 'DELETED')      // where('status', '!=', 'DELETED')
 query.whereIn('role', ['ADMIN', 'USER']) // where('role', 'in', [...])
 query.whereLike('name', 'John%')         // where('name', 'like', ...)
 ```
 
-### 정렬 (OrderBy)
+### Sorting (OrderBy)
 
 ```typescript
-query.orderBy('name', 'asc')   // 오름차순
-query.orderBy('createdAt', 'desc')  // 내림차순
+query.orderBy('name', 'asc')   // Ascending
+query.orderBy('createdAt', 'desc')  // Descending
 
-// 다중 정렬
+// Multiple sort
 query
   .orderBy('role', 'asc')
   .orderBy('name', 'asc')
 ```
 
-### 페이지네이션
+### Pagination
 
 ```typescript
 // limit/offset
 query.limit(10)
 query.offset(20)
 
-// page (편의 메서드)
-query.page(2, 10)  // 2페이지, 10개씩 = offset(10).limit(10)
+// page (convenience method)
+query.page(2, 10)  // Page 2, 10 per page = offset(10).limit(10)
 ```
 
-### 실행
+### Execution
 
 ```typescript
-// 모든 결과
+// All results
 const results: User[] = query.exec()
 
-// 첫 번째 결과
+// First result
 const first: User | undefined = query.first()
 
-// 첫 번째 결과 (없으면 에러)
+// First result (throws if not found)
 const firstOrFail: User = query.firstOrFail()  // throws NoResultsError
 
-// 결과 개수
+// Result count
 const count: number = query.count()
 
-// 존재 여부
+// Existence check
 const exists: boolean = query.exists()
 ```
 
-### 쿼리 빌드
+### Query Building
 
 ```typescript
-// 옵션 객체로 빌드 (실행하지 않음)
+// Build as options object (without executing)
 const options = query
   .where('role', '=', 'ADMIN')
   .orderBy('name')
   .build()
 
-// clone
+// Clone
 const cloned = query.clone()
 ```
 
-### 전체 예시
+### Full Example
 
 ```typescript
 const admins = db.from('users')
@@ -247,31 +247,31 @@ const admins = db.from('users')
 
 ## JoinQueryBuilder
 
-JOIN을 지원하는 확장된 QueryBuilder입니다.
+Extended QueryBuilder with JOIN support.
 
-### 생성
+### Creation
 
 ```typescript
 const query = db.from('posts').joinQuery()
 ```
 
-### JOIN 메서드
+### JOIN Methods
 
 ```typescript
-// 기본 JOIN (left join)
+// Basic JOIN (left join)
 query.join('users', 'authorId', 'id')
 
-// 별칭 지정
+// With alias
 query.join('users', 'authorId', 'id', { as: 'author' })
 
-// Left Join (명시적)
+// Left Join (explicit)
 query.leftJoin('users', 'authorId', 'id')
 
-// Inner Join (매칭 없으면 제외)
+// Inner Join (excludes non-matching)
 query.innerJoin('users', 'authorId', 'id')
 ```
 
-### 다중 JOIN
+### Multiple JOINs
 
 ```typescript
 const result = db.from('comments')
@@ -280,10 +280,10 @@ const result = db.from('comments')
   .join('users', 'authorId', 'id', { as: 'author' })
   .exec()
 
-// 결과: { ...comment, post: {...}, author: {...} }
+// Result: { ...comment, post: {...}, author: {...} }
 ```
 
-### 전체 예시
+### Full Example
 
 ```typescript
 const publishedPosts = db.from('posts')
@@ -294,7 +294,7 @@ const publishedPosts = db.from('posts')
   .limit(10)
   .exec()
 
-// 결과: [
+// Result: [
 //   { id: 1, title: '...', author: { id: 1, name: 'John', ... } },
 //   ...
 // ]
@@ -304,31 +304,31 @@ const publishedPosts = db.from('posts')
 
 ## Aggregation
 
-### 단일 집계
+### Single Aggregation
 
 ```typescript
 const query = db.from('orders').query()
 
-// 개수
+// Count
 const count = query.count()
 
-// 합계
+// Sum
 const total = query.sum('amount')
 
-// 평균
+// Average
 const average = query.avg('amount')
 
-// 최솟값
+// Minimum
 const min = query.min('amount')
 
-// 최댓값
+// Maximum
 const max = query.max('amount')
 ```
 
-### 그룹별 집계
+### Group Aggregation
 
 ```typescript
-// 그룹화
+// Grouping
 const stats = db.from('orders')
   .query()
   .where('status', '=', 'PAID')
@@ -341,7 +341,7 @@ const stats = db.from('orders')
     maxAmount: 'max:amount'
   })
 
-// 결과: [
+// Result: [
 //   { category: 'FOOD', count: 50, totalAmount: 5000, avgAmount: 100, ... },
 //   { category: 'DRINKS', count: 30, totalAmount: 1500, avgAmount: 50, ... }
 // ]
@@ -350,26 +350,26 @@ const stats = db.from('orders')
 ### Having
 
 ```typescript
-// 그룹 필터링
+// Filter groups
 const bigCategories = db.from('orders')
   .query()
   .groupBy('category')
-  .having('count', '>', 10)  // 10개 초과인 그룹만
+  .having('count', '>', 10)  // Only groups with more than 10 items
   .agg({
     count: 'count',
     total: 'sum:amount'
   })
 ```
 
-### AggSpec 타입
+### AggSpec Types
 
-| 스펙 | 설명 |
-|------|------|
-| `'count'` | 행 개수 |
-| `'sum:field'` | 필드 합계 |
-| `'avg:field'` | 필드 평균 |
-| `'min:field'` | 필드 최솟값 |
-| `'max:field'` | 필드 최댓값 |
+| Spec | Description |
+|------|-------------|
+| `'count'` | Row count |
+| `'sum:field'` | Field sum |
+| `'avg:field'` | Field average |
+| `'min:field'` | Field minimum |
+| `'max:field'` | Field maximum |
 
 ---
 
@@ -381,7 +381,7 @@ const bigCategories = db.from('orders')
 import { createMigrationRunner, MockAdapter } from 'gas-sheets-query'
 
 const runner = createMigrationRunner({
-  migrationsStore: new MockAdapter(),  // 마이그레이션 기록 저장
+  migrationsStore: new MockAdapter(),  // Store migration records
   storeResolver: (table) => stores[table],
   migrations: [
     {
@@ -398,69 +398,69 @@ const runner = createMigrationRunner({
 })
 ```
 
-### 메서드
+### Methods
 
 ```typescript
-// 현재 버전 확인
+// Get current version
 const version = runner.getCurrentVersion()
 
-// 대기 중인 마이그레이션
+// Get pending migrations
 const pending = runner.getPendingMigrations()
 
-// 마이그레이션 실행
+// Run migrations
 const result = await runner.migrate()
 // { applied: [{ version: 1, name: 'add_nickname' }], currentVersion: 1 }
 
-// 특정 버전까지만 실행
+// Migrate to specific version
 await runner.migrate({ to: 3 })
 
-// 롤백
+// Rollback
 const rollback = await runner.rollback()
 // { rolledBack: { version: 1, name: '...' }, currentVersion: 0 }
 
-// 전체 롤백
+// Rollback all
 await runner.rollbackAll()
 
-// 상태 확인
+// Get status
 const status = runner.getStatus()
 // { currentVersion: 1, applied: [...], pending: [...] }
 ```
 
-### SchemaBuilder 메서드
+### SchemaBuilder Methods
 
 ```typescript
 interface SchemaBuilder {
-  // 컬럼 추가
+  // Add column
   addColumn(table: string, column: string, options?: {
     default?: unknown
     type?: 'string' | 'number' | 'boolean' | 'date'
   }): void
   
-  // 컬럼 삭제
+  // Remove column
   removeColumn(table: string, column: string): void
   
-  // 컬럼 이름 변경
+  // Rename column
   renameColumn(table: string, oldName: string, newName: string): void
 }
 ```
 
 ---
 
-## CLI 명령어
+## CLI Commands
 
 ### gsq init
 
-프로젝트를 초기화합니다.
+Initialize project.
 
 ```bash
 gsq init [options]
 
 Options:
   -s, --spreadsheet-id <id>   Google Spreadsheet ID
-  -f, --force                 기존 설정 덮어쓰기
+  -f, --force                 Overwrite existing config
 ```
 
-생성되는 `gsq.config.json`:
+Generated `gsq.config.json`:
 
 ```json
 {
@@ -473,23 +473,23 @@ Options:
 
 ### gsq generate
 
-스키마에서 타입과 클라이언트를 생성합니다.
+Generate types and client from schema.
 
 ```bash
 gsq generate [options]
 
 Options:
-  -s, --schema <path>     스키마 파일 경로 (기본: schema.gsq.yaml)
-  -o, --output <dir>      출력 디렉토리 (기본: generated/)
+  -s, --schema <path>     Schema file path (default: schema.gsq.yaml)
+  -o, --output <dir>      Output directory (default: generated/)
 ```
 
-생성되는 파일:
-- `generated/types.ts` - 타입 정의
-- `generated/client.ts` - DB 클라이언트
+Generated files:
+- `generated/types.ts` - Type definitions
+- `generated/client.ts` - DB client
 
 ### gsq migration:create
 
-새 마이그레이션 파일을 생성합니다.
+Create new migration file.
 
 ```bash
 gsq migration:create <name>
@@ -499,23 +499,23 @@ Examples:
   gsq migration:create add_nickname_to_users
 ```
 
-생성되는 파일:
+Generated file:
 - `migrations/NNNN_name.ts`
 
 ### gsq migrate
 
-대기 중인 마이그레이션을 실행합니다.
+Run pending migrations.
 
 ```bash
 gsq migrate [options]
 
 Options:
-  --to <version>    특정 버전까지만 실행
+  --to <version>    Migrate to specific version only
 ```
 
 ### gsq rollback
 
-마지막 마이그레이션을 롤백합니다.
+Rollback last migration.
 
 ```bash
 gsq rollback
@@ -525,22 +525,22 @@ gsq rollback
 
 ## Errors
 
-### 에러 클래스
+### Error Classes
 
-| 에러 | 설명 |
-|------|------|
-| `SheetsQueryError` | 기본 에러 클래스 |
-| `TableNotFoundError` | 테이블을 찾을 수 없음 |
-| `RowNotFoundError` | 행을 찾을 수 없음 |
-| `NoResultsError` | 쿼리 결과가 없음 (`firstOrFail`) |
-| `MissingStoreError` | DataStore가 없음 |
-| `ValidationError` | 유효성 검사 실패 |
-| `InvalidOperatorError` | 잘못된 연산자 |
-| `MigrationVersionError` | 마이그레이션 버전 에러 |
-| `MigrationExecutionError` | 마이그레이션 실행 실패 |
-| `NoMigrationsToRollbackError` | 롤백할 마이그레이션 없음 |
+| Error | Description |
+|-------|-------------|
+| `SheetsQueryError` | Base error class |
+| `TableNotFoundError` | Table not found |
+| `RowNotFoundError` | Row not found |
+| `NoResultsError` | No query results (`firstOrFail`) |
+| `MissingStoreError` | DataStore not found |
+| `ValidationError` | Validation failed |
+| `InvalidOperatorError` | Invalid operator |
+| `MigrationVersionError` | Migration version error |
+| `MigrationExecutionError` | Migration execution failed |
+| `NoMigrationsToRollbackError` | No migrations to rollback |
 
-### 예시
+### Example
 
 ```typescript
 import { TableNotFoundError, NoResultsError } from 'gas-sheets-query'
@@ -559,8 +559,8 @@ try {
 
 ---
 
-## 다음 단계
+## Next Steps
 
-- [Getting Started](./getting-started.md) - 시작 가이드
-- [Examples](./examples.md) - 실전 예제
-- [Schema Syntax](./schema-syntax.md) - 스키마 문법
+- [Getting Started](./getting-started.md) - Getting started guide
+- [Examples](./examples.md) - Practical examples
+- [Schema Syntax](./schema-syntax.md) - Schema syntax

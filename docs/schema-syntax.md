@@ -1,42 +1,42 @@
 # GSQ Schema Syntax
 
-GSQ 스키마는 YAML 형식으로 데이터베이스 구조를 정의합니다.
+GSQ schema defines database structure in YAML format.
 
-## 기본 구조
+## Basic Structure
 
 ```yaml
 # schema.gsq.yaml
 
 enums:
-  # enum 정의
+  # enum definitions
 
 tables:
-  # 테이블 정의
+  # table definitions
 ```
 
-## 타입
+## Types
 
-### 기본 타입
+### Basic Types
 
-| 타입 | TypeScript | 설명 |
-|------|------------|------|
-| `string` | `string` | 문자열 |
-| `number` | `number` | 숫자 (정수, 소수) |
-| `boolean` | `boolean` | 불린 (true/false) |
-| `datetime` | `Date` | 날짜/시간 |
+| Type | TypeScript | Description |
+|------|------------|-------------|
+| `string` | `string` | String |
+| `number` | `number` | Number (integer, decimal) |
+| `boolean` | `boolean` | Boolean (true/false) |
+| `datetime` | `Date` | Date/Time |
 
-### Optional 타입
+### Optional Types
 
-타입 뒤에 `?`를 붙이면 optional이 됩니다.
+Add `?` after the type to make it optional.
 
 ```yaml
 name: string?    # string | undefined
 age: number?     # number | undefined
 ```
 
-### Enum 타입
+### Enum Types
 
-`enums` 섹션에서 정의한 이름을 사용합니다.
+Use names defined in the `enums` section.
 
 ```yaml
 enums:
@@ -51,9 +51,9 @@ tables:
       role: Role    # 'USER' | 'ADMIN' | 'MODERATOR'
 ```
 
-## 테이블 정의
+## Table Definition
 
-테이블은 `fields`, `indexes`, `unique` 섹션으로 구성됩니다.
+Tables consist of `fields`, `indexes`, and `unique` sections.
 
 ```yaml
 tables:
@@ -67,7 +67,7 @@ tables:
       - [field1, field2]
 ```
 
-### 예시
+### Example
 
 ```yaml
 tables:
@@ -81,11 +81,11 @@ tables:
       createdAt: datetime @default(now)
 ```
 
-## 필드 속성 (Attributes)
+## Field Attributes
 
 ### @id
 
-필드를 기본키로 지정합니다. 테이블당 하나만 가능합니다.
+Designates the field as primary key. Only one per table.
 
 ```yaml
 id: number @id
@@ -93,16 +93,16 @@ id: number @id
 
 ### @default(value)
 
-기본값을 지정합니다.
+Sets the default value.
 
-| 값 | 설명 |
-|----|------|
-| `autoincrement` | 자동 증가 (number 전용) |
-| `now` | 현재 시간 (datetime 전용) |
-| `true` / `false` | 불린 값 |
-| `0`, `100` | 숫자 값 |
-| `"text"` | 문자열 값 |
-| `EnumValue` | Enum 값 |
+| Value | Description |
+|-------|-------------|
+| `autoincrement` | Auto-increment (number only) |
+| `now` | Current time (datetime only) |
+| `true` / `false` | Boolean value |
+| `0`, `100` | Numeric value |
+| `"text"` | String value |
+| `EnumValue` | Enum value |
 
 ```yaml
 id: number @default(autoincrement)
@@ -114,7 +114,7 @@ createdAt: datetime @default(now)
 
 ### @unique
 
-필드 값이 유니크해야 함을 지정합니다.
+Specifies that the field value must be unique.
 
 ```yaml
 email: string @unique
@@ -122,19 +122,19 @@ email: string @unique
 
 ### @updatedAt
 
-레코드 수정 시 자동으로 현재 시간으로 업데이트됩니다.
+Automatically updates to current time when record is modified.
 
 ```yaml
 updatedAt: datetime @updatedAt
 ```
 
-## 블록 속성 (Block Attributes)
+## Block Attributes
 
-테이블 레벨에서 적용되는 속성입니다.
+Attributes applied at the table level.
 
 ### indexes
 
-인덱스를 생성합니다.
+Creates indexes.
 
 ```yaml
 tables:
@@ -149,7 +149,7 @@ tables:
 
 ### unique
 
-복합 유니크 제약을 생성합니다.
+Creates composite unique constraints.
 
 ```yaml
 tables:
@@ -161,7 +161,7 @@ tables:
       - [authorId, slug]
 ```
 
-## 전체 예시
+## Full Example
 
 ```yaml
 # schema.gsq.yaml
@@ -212,9 +212,9 @@ tables:
       - [authorId]
 ```
 
-## 생성 결과
+## Generated Output
 
-위 스키마에서 생성되는 TypeScript:
+TypeScript generated from the above schema:
 
 ```typescript
 // generated/types.ts

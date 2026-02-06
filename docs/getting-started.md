@@ -1,29 +1,29 @@
 # Getting Started
 
-gas-sheets-query를 사용한 프로젝트 설정 가이드입니다.
+A project setup guide using gas-sheets-query.
 
-## 목차
+## Table of Contents
 
-1. [설치](#설치)
-2. [프로젝트 초기화](#프로젝트-초기화)
-3. [스키마 정의](#스키마-정의)
-4. [타입 생성](#타입-생성)
-5. [DB 연결](#db-연결)
-6. [기본 사용법](#기본-사용법)
+1. [Installation](#installation)
+2. [Project Initialization](#project-initialization)
+3. [Schema Definition](#schema-definition)
+4. [Type Generation](#type-generation)
+5. [DB Connection](#db-connection)
+6. [Basic Usage](#basic-usage)
 
 ---
 
-## 설치
+## Installation
 
-### Node.js 요구사항
+### Node.js Requirements
 
-- Node.js 18 이상
-- pnpm (권장) 또는 npm
+- Node.js 18 or higher
+- pnpm (recommended) or npm
 
-### 패키지 설치
+### Package Installation
 
 ```bash
-# pnpm (권장)
+# pnpm (recommended)
 pnpm add gas-sheets-query
 
 # npm
@@ -35,15 +35,15 @@ yarn add gas-sheets-query
 
 ---
 
-## 프로젝트 초기화
+## Project Initialization
 
-### 1. CLI로 설정 파일 생성
+### 1. Generate Config File with CLI
 
 ```bash
 npx gsq init --spreadsheet-id YOUR_SPREADSHEET_ID
 ```
 
-이 명령은 `gsq.config.json` 파일을 생성합니다:
+This command creates a `gsq.config.json` file:
 
 ```json
 {
@@ -54,16 +54,16 @@ npx gsq init --spreadsheet-id YOUR_SPREADSHEET_ID
 }
 ```
 
-### 2. 옵션
+### 2. Options
 
-| 옵션 | 설명 |
-|------|------|
+| Option | Description |
+|--------|-------------|
 | `-s, --spreadsheet-id <id>` | Google Spreadsheet ID |
-| `-f, --force` | 기존 설정 파일 덮어쓰기 |
+| `-f, --force` | Overwrite existing config file |
 
-### 3. Spreadsheet ID 찾기
+### 3. Finding Spreadsheet ID
 
-Google Sheets URL에서 ID를 찾을 수 있습니다:
+You can find the ID from the Google Sheets URL:
 
 ```
 https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit
@@ -71,11 +71,11 @@ https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit
 
 ---
 
-## 스키마 정의
+## Schema Definition
 
-### 1. 스키마 파일 생성
+### 1. Create Schema File
 
-프로젝트 루트에 `schema.gsq.yaml` 파일을 생성합니다:
+Create a `schema.gsq.yaml` file in your project root:
 
 ```yaml
 # schema.gsq.yaml
@@ -115,62 +115,62 @@ tables:
       - [authorId]
 ```
 
-### 2. 스키마 문법
+### 2. Schema Syntax
 
-#### 타입
+#### Types
 
-| 타입 | TypeScript | 설명 |
-|------|------------|------|
-| `string` | `string` | 문자열 |
-| `number` | `number` | 숫자 |
-| `boolean` | `boolean` | 불린 |
-| `datetime` | `Date` | 날짜/시간 |
+| Type | TypeScript | Description |
+|------|------------|-------------|
+| `string` | `string` | String |
+| `number` | `number` | Number |
+| `boolean` | `boolean` | Boolean |
+| `datetime` | `Date` | Date/Time |
 
-#### Optional 타입
+#### Optional Type
 
 ```yaml
 nickname: string?    # string | undefined
 ```
 
-#### 속성 (Attributes)
+#### Attributes
 
-| 속성 | 설명 |
-|------|------|
-| `@id` | 기본키 지정 |
-| `@unique` | 유니크 제약 |
-| `@default(value)` | 기본값 |
-| `@updatedAt` | 자동 업데이트 시간 |
+| Attribute | Description |
+|-----------|-------------|
+| `@id` | Primary key |
+| `@unique` | Unique constraint |
+| `@default(value)` | Default value |
+| `@updatedAt` | Auto-update timestamp |
 
-#### 기본값 예시
+#### Default Value Examples
 
 ```yaml
-id: number @default(autoincrement)     # 자동 증가
-active: boolean @default(true)          # 불린
-count: number @default(0)               # 숫자
+id: number @default(autoincrement)     # Auto-increment
+active: boolean @default(true)          # Boolean
+count: number @default(0)               # Number
 role: Role @default(USER)               # Enum
-createdAt: datetime @default(now)       # 현재 시간
+createdAt: datetime @default(now)       # Current time
 ```
 
-자세한 문법은 [Schema Syntax](./schema-syntax.md)를 참고하세요.
+For detailed syntax, see [Schema Syntax](./schema-syntax.md).
 
 ---
 
-## 타입 생성
+## Type Generation
 
-### 1. 타입 생성 명령
+### 1. Generate Types Command
 
 ```bash
 npx gsq generate
 ```
 
-### 2. 생성 결과
+### 2. Generated Output
 
-`generated/` 폴더에 파일이 생성됩니다:
+Files are generated in the `generated/` folder:
 
 ```
 generated/
-├── types.ts      # 타입 정의
-└── client.ts     # 타입이 적용된 DB 클라이언트
+├── types.ts      # Type definitions
+└── client.ts     # Typed DB client
 ```
 
 #### types.ts
@@ -202,11 +202,11 @@ export interface Post {
 
 ---
 
-## DB 연결
+## DB Connection
 
-### 로컬 개발 (MockAdapter)
+### Local Development (MockAdapter)
 
-테스트 및 로컬 개발 시에는 `MockAdapter`를 사용합니다:
+Use `MockAdapter` for testing and local development:
 
 ```typescript
 import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
@@ -230,12 +230,12 @@ const db = defineSheetsDB({
 })
 ```
 
-### GAS 환경 (SheetsAdapter)
+### GAS Environment (SheetsAdapter)
 
-실제 Google Sheets와 연결할 때는 SheetsAdapter를 사용합니다:
+Use SheetsAdapter when connecting to actual Google Sheets:
 
 ```typescript
-// GAS 환경에서 실행
+// Running in GAS environment
 import { createSheetsDB, SheetsAdapter } from 'gas-sheets-query'
 
 const spreadsheet = SpreadsheetApp.openById('YOUR_SPREADSHEET_ID')
@@ -257,9 +257,9 @@ const db = createSheetsDB({
 
 ---
 
-## 기본 사용법
+## Basic Usage
 
-### CRUD 작업
+### CRUD Operations
 
 ```typescript
 // Create
@@ -280,23 +280,23 @@ db.from('users').update(user.id, { name: 'John Smith' })
 db.from('users').delete(user.id)
 ```
 
-### 쿼리
+### Queries
 
 ```typescript
-// 조건 검색
+// Conditional search
 const admins = db.from('users')
   .query()
   .where('role', '=', 'ADMIN')
   .orderBy('name', 'asc')
   .exec()
 
-// 페이지네이션
+// Pagination
 const page2 = db.from('users')
   .query()
-  .page(2, 10)  // 2페이지, 10개씩
+  .page(2, 10)  // Page 2, 10 items per page
   .exec()
 
-// 첫 번째 결과
+// First result
 const first = db.from('users')
   .query()
   .where('email', '=', 'john@example.com')
@@ -305,8 +305,8 @@ const first = db.from('users')
 
 ---
 
-## 다음 단계
+## Next Steps
 
-- [API Reference](./api-reference.md) - 상세 API 문서
-- [Examples](./examples.md) - 실전 예제
-- [Schema Syntax](./schema-syntax.md) - 스키마 문법 상세
+- [API Reference](./api-reference.md) - Detailed API documentation
+- [Examples](./examples.md) - Practical examples
+- [Schema Syntax](./schema-syntax.md) - Detailed schema syntax
