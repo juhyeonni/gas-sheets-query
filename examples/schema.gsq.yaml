@@ -1,0 +1,85 @@
+# Example GSQ Schema
+# This file demonstrates all supported features
+
+enums:
+  Role:
+    - USER
+    - ADMIN
+    - MODERATOR
+
+  Priority:
+    - LOW
+    - MEDIUM
+    - HIGH
+    - CRITICAL
+
+  Status:
+    - OPEN
+    - IN_PROGRESS
+    - DONE
+    - ARCHIVED
+
+tables:
+  # User table - basic CRUD with enum
+  User:
+    id: number @id @default(autoincrement)
+    email: string @unique
+    name: string
+    nickname: string?
+    role: Role @default(USER)
+    active: boolean @default(true)
+    loginCount: number @default(0)
+    createdAt: datetime @default(now)
+    updatedAt: datetime @updatedAt
+
+  # Project table - with optional fields
+  Project:
+    id: number @id @default(autoincrement)
+    name: string
+    description: string?
+    ownerId: number
+    isPublic: boolean @default(false)
+    createdAt: datetime @default(now)
+    updatedAt: datetime @updatedAt
+
+    @@index([ownerId])
+
+  # Task table - complex example with multiple enums
+  Task:
+    id: number @id @default(autoincrement)
+    title: string
+    description: string?
+    status: Status @default(OPEN)
+    priority: Priority @default(MEDIUM)
+    projectId: number
+    assigneeId: number?
+    dueDate: datetime?
+    completedAt: datetime?
+    createdAt: datetime @default(now)
+    updatedAt: datetime @updatedAt
+
+    @@index([projectId])
+    @@index([assigneeId])
+    @@index([status])
+    @@unique([projectId, title])
+
+  # Comment table - simple relation example
+  Comment:
+    id: number @id @default(autoincrement)
+    content: string
+    taskId: number
+    authorId: number
+    createdAt: datetime @default(now)
+
+    @@index([taskId])
+    @@index([authorId])
+
+  # Label table - many-to-many prep
+  Label:
+    id: number @id @default(autoincrement)
+    name: string @unique
+    color: string @default("#888888")
+    projectId: number
+
+    @@index([projectId])
+    @@unique([projectId, name])
