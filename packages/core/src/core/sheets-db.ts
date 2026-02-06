@@ -37,6 +37,12 @@ export interface TableHandle<T extends RowWithId> {
   
   /** Shorthand: delete by id */
   delete(id: string | number): void
+  
+  /** Batch insert multiple rows at once */
+  batchInsert(data: Omit<T, 'id'>[]): T[]
+  
+  /** Batch update multiple rows at once */
+  batchUpdate(items: { id: string | number; data: Partial<Omit<T, 'id'>> }[]): T[]
 }
 
 /**
@@ -69,7 +75,9 @@ function createTableHandle<T extends RowWithId>(
     findById: (id) => repo.findById(id),
     findAll: () => repo.findAll(),
     update: (id, data) => repo.update(id, data),
-    delete: (id) => repo.delete(id)
+    delete: (id) => repo.delete(id),
+    batchInsert: (data) => repo.batchInsert(data),
+    batchUpdate: (items) => repo.batchUpdate(items)
   }
 }
 

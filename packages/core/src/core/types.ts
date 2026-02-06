@@ -35,6 +35,12 @@ export interface QueryOptions<T = Row> {
   offsetValue?: number
 }
 
+/** Batch update item - id and data to update */
+export interface BatchUpdateItem<T extends Row = Row> {
+  id: string | number
+  data: Partial<Omit<T, 'id'>>
+}
+
 /**
  * DataStore interface - abstraction over data storage
  * Implemented by GasAdapter (real Sheets) and MockAdapter (testing)
@@ -57,6 +63,12 @@ export interface DataStore<T extends Row = Row> {
   
   /** Delete a row by ID, returns true if deleted */
   delete(id: string | number): boolean
+  
+  /** Batch insert multiple rows at once (optional) */
+  batchInsert?(data: Omit<T, 'id'>[]): T[]
+  
+  /** Batch update multiple rows at once (optional) */
+  batchUpdate?(items: BatchUpdateItem<T>[]): T[]
 }
 
 // ============================================================================

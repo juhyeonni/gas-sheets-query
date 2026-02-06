@@ -1,7 +1,7 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { Row, DataStore, QueryOptions } from './types'
+import type { Row, DataStore, QueryOptions, BatchUpdateItem } from './types'
 import { RowNotFoundError } from './errors'
 
 /**
@@ -102,5 +102,36 @@ export class Repository<T extends Row & { id: string | number }> {
    */
   exists(id: string | number): boolean {
     return this.store.findById(id) !== undefined
+  }
+
+  /**
+   * Batch insert multiple rows at once
+   * More efficient than calling create() in a loop
+   */
+  batchInsert(data: Omit<T, 'id'>[]): T[] {
+    if (this.store.batchInsert) {
+      return this.store.batchInsert(data)
+    }
+    // Fallback: insert one by one
+    return data.map(row => this.store.insert(row))
+  }
+
+  /**
+   * Batch update multiple rows at once
+   * Skips rows that don't exist (no error thrown)
+   */
+  batchUpdate(items: { id: string | number; data: Partial<Omit<T, 'id'>> }[]): T[] {
+    if (this.store.batchUpdate) {
+      return this.store.batchUpdate(items as BatchUpdateItem<T>[])
+    }
+    // Fallback: update one by one
+    const results: T[] = []
+    for (const { id, data } of items) {
+      const updated = this.store.update(id, data)
+      if (updated) {
+        results.push(updated)
+      }
+    }
+    return results
   }
 }

@@ -1,7 +1,7 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { Row, DataStore, QueryOptions, WhereCondition, OrderByCondition } from '../core/types'
+import type { Row, DataStore, QueryOptions, WhereCondition, OrderByCondition, BatchUpdateItem } from '../core/types'
 
 /**
  * Evaluate a single where condition against a row
@@ -154,6 +154,43 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
     // Rebuild index since splice shifts all subsequent elements
     this.rebuildIndex()
     return true
+  }
+
+  /**
+   * Batch insert multiple rows at once
+   * More efficient than calling insert() in a loop
+   */
+  batchInsert(data: Omit<T, 'id'>[]): T[] {
+    const results: T[] = []
+    const startIndex = this.data.length
+    
+    for (let i = 0; i < data.length; i++) {
+      const id = this.nextId++
+      const newRow = { ...data[i], id } as T
+      this.data.push(newRow)
+      this.idIndex.set(id, startIndex + i)
+      results.push(newRow)
+    }
+    
+    return results
+  }
+
+  /**
+   * Batch update multiple rows at once
+   * Returns array of updated rows (skips rows that don't exist)
+   */
+  batchUpdate(items: BatchUpdateItem<T>[]): T[] {
+    const results: T[] = []
+    
+    for (const { id, data } of items) {
+      const index = this.idIndex.get(id)
+      if (index === undefined) continue
+      
+      this.data[index] = { ...this.data[index], ...data }
+      results.push(this.data[index])
+    }
+    
+    return results
   }
 
   /** Test helper: reset all data */

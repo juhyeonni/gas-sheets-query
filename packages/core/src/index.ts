@@ -13,6 +13,7 @@ export type {
   OrderByCondition,
   QueryOptions,
   DataStore,
+  BatchUpdateItem,
   TableSchema,
   SheetsDBConfig,
   // Schema-based type inference
