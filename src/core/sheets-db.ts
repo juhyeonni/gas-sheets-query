@@ -1,14 +1,21 @@
 /**
  * SheetsDB - Main entry point for gas-sheets-query
  */
-import type { Row, DataStore, SheetsDBConfig } from './types'
+import type { 
+  RowWithId,
+  DataStore, 
+  SheetsDBConfig,
+  TableSchemaTyped,
+  InferRowFromSchema,
+  InferTablesFromConfig
+} from './types'
 import { Repository } from './repository'
 import { QueryBuilder, createQueryBuilder } from './query-builder'
 
 /**
  * Table handle providing Repository and QueryBuilder access
  */
-export interface TableHandle<T extends Row & { id: string | number }> {
+export interface TableHandle<T extends RowWithId> {
   /** Repository for CRUD operations */
   readonly repo: Repository<T>
   
@@ -34,7 +41,7 @@ export interface TableHandle<T extends Row & { id: string | number }> {
 /**
  * SheetsDB instance with typed table access
  */
-export interface SheetsDB<Tables extends Record<string, Row & { id: string | number }>> {
+export interface SheetsDB<Tables extends Record<string, RowWithId>> {
   /** Get a table handle by name */
   from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K]>
   
@@ -48,7 +55,7 @@ export interface SheetsDB<Tables extends Record<string, Row & { id: string | num
 /**
  * Create a TableHandle for a given store
  */
-function createTableHandle<T extends Row & { id: string | number }>(
+function createTableHandle<T extends RowWithId>(
   store: DataStore<T>
 ): TableHandle<T> {
   const repo = new Repository<T>(store)
@@ -64,10 +71,14 @@ function createTableHandle<T extends Row & { id: string | number }>(
   }
 }
 
+// ============================================================================
+// Legacy API (explicit types)
+// ============================================================================
+
 /**
- * Factory options for createSheetsDB
+ * Factory options for createSheetsDB (legacy - explicit types)
  */
-export interface CreateSheetsDBOptions<Tables extends Record<string, Row & { id: string | number }>> {
+export interface CreateSheetsDBOptions<Tables extends Record<string, RowWithId>> {
   /** Database configuration */
   config: SheetsDBConfig
   
@@ -76,36 +87,19 @@ export interface CreateSheetsDBOptions<Tables extends Record<string, Row & { id:
 }
 
 /**
- * Create a SheetsDB instance
+ * Create a SheetsDB instance with explicit type parameters
  * 
  * @example
  * ```ts
- * // With mock adapters for testing
- * const db = createSheetsDB({
- *   config: {
- *     tables: {
- *       users: { columns: ['id', 'name', 'email'] },
- *       posts: { columns: ['id', 'title', 'userId'] }
- *     }
- *   },
- *   stores: {
- *     users: new MockAdapter(),
- *     posts: new MockAdapter()
- *   }
+ * interface User { id: number; name: string; email: string }
+ * 
+ * const db = createSheetsDB<{ users: User }>({
+ *   config: { tables: { users: { columns: ['id', 'name', 'email'] } } },
+ *   stores: { users: new MockAdapter() }
  * })
- * 
- * // Use fluent API
- * const activeUsers = db.from('users')
- *   .query()
- *   .where('active', '=', true)
- *   .orderBy('name')
- *   .exec()
- * 
- * // Or use repository methods
- * const user = db.from('users').create({ name: 'John', email: 'john@test.com' })
  * ```
  */
-export function createSheetsDB<Tables extends Record<string, Row & { id: string | number }>>(
+export function createSheetsDB<Tables extends Record<string, RowWithId>>(
   options: CreateSheetsDBOptions<Tables>
 ): SheetsDB<Tables> {
   const { config, stores } = options
@@ -117,7 +111,7 @@ export function createSheetsDB<Tables extends Record<string, Row & { id: string 
     }
   }
   
-  // Cache table handles - use unknown type for flexible caching
+  // Cache table handles
   const handles: Record<string, unknown> = {}
   
   return {
@@ -130,7 +124,6 @@ export function createSheetsDB<Tables extends Record<string, Row & { id: string 
         )
       }
       
-      // Return cached handle or create new one
       if (!(tableName in handles)) {
         handles[tableName] = createTableHandle(stores[tableName])
       }
@@ -145,6 +138,129 @@ export function createSheetsDB<Tables extends Record<string, Row & { id: string 
         )
       }
       return stores[tableName]
+    }
+  }
+}
+
+// ============================================================================
+// New API (schema-based type inference)
+// ============================================================================
+
+/**
+ * Options for defineSheetsDB with schema-based type inference
+ */
+export interface DefineSheetsDBOptions<
+  TableSchemas extends Record<string, TableSchemaTyped>
+> {
+  /** Spreadsheet ID (optional) */
+  spreadsheetId?: string
+  /** Table schemas with optional type hints */
+  tables: TableSchemas
+  /** Data stores (for testing or custom implementations) */
+  stores: { [K in keyof TableSchemas]: DataStore<InferRowFromSchema<TableSchemas[K]>> }
+}
+
+/**
+ * Create a SheetsDB instance with automatic type inference from schema
+ * 
+ * @example
+ * ```ts
+ * // Types are automatically inferred from the schema!
+ * const db = defineSheetsDB({
+ *   tables: {
+ *     users: {
+ *       columns: ['id', 'name', 'email', 'age', 'active'] as const,
+ *       types: {
+ *         id: 0,          // → number
+ *         name: '',       // → string
+ *         email: '',      // → string
+ *         age: 0,         // → number
+ *         active: true    // → boolean
+ *       }
+ *     },
+ *     posts: {
+ *       columns: ['id', 'title', 'userId', 'published'] as const,
+ *       types: {
+ *         id: 0,
+ *         title: '',
+ *         userId: 0,
+ *         published: false
+ *       }
+ *     }
+ *   },
+ *   stores: {
+ *     users: new MockAdapter(),
+ *     posts: new MockAdapter()
+ *   }
+ * })
+ * 
+ * // Full autocomplete! ✨
+ * db.from('users').query()
+ *   .where('name', '=', 'John')      // ✅ 'name' autocomplete
+ *   .where('age', '>', 18)           // ✅ 'age' autocomplete
+ *   .where('active', '=', true)      // ✅ boolean type
+ *   .exec()
+ * 
+ * // Type error on invalid columns
+ * db.from('users').query()
+ *   .where('foo', '=', 'bar')        // ❌ Error: 'foo' is not a valid column
+ * ```
+ */
+export function defineSheetsDB<
+  const TableSchemas extends Record<string, TableSchemaTyped>
+>(
+  options: DefineSheetsDBOptions<TableSchemas>
+): SheetsDB<InferTablesFromConfig<TableSchemas>> {
+  const { spreadsheetId, tables, stores } = options
+  
+  // Build legacy config
+  const config: SheetsDBConfig = {
+    spreadsheetId,
+    tables: Object.fromEntries(
+      Object.entries(tables).map(([name, schema]) => [
+        name,
+        { columns: schema.columns, idColumn: schema.idColumn }
+      ])
+    )
+  }
+  
+  // Validate stores
+  for (const tableName of Object.keys(tables)) {
+    if (!(tableName in stores)) {
+      throw new Error(`Missing store for table "${tableName}"`)
+    }
+  }
+  
+  // Cache table handles
+  const handles: Record<string, unknown> = {}
+  
+  type InferredTables = InferTablesFromConfig<TableSchemas>
+  
+  return {
+    config,
+    
+    from<K extends keyof InferredTables & string>(tableName: K): TableHandle<InferredTables[K]> {
+      if (!(tableName in tables)) {
+        throw new Error(
+          `Table "${tableName}" not found. Available: ${Object.keys(tables).join(', ')}`
+        )
+      }
+      
+      if (!(tableName in handles)) {
+        const store = stores[tableName as keyof typeof stores]
+        handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>)
+      }
+      
+      return handles[tableName] as TableHandle<InferredTables[K]>
+    },
+    
+    getStore<K extends keyof InferredTables & string>(tableName: K): DataStore<InferredTables[K]> {
+      if (!(tableName in stores)) {
+        throw new Error(
+          `Store for table "${tableName}" not found. Available: ${Object.keys(stores).join(', ')}`
+        )
+      }
+      return stores[tableName as keyof typeof stores] as DataStore<InferredTables[K]>
     }
   }
 }

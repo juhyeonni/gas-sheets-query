@@ -5,6 +5,9 @@
 /** Generic row type - any object with string keys */
 export type Row = Record<string, unknown>
 
+/** Row with required id field */
+export type RowWithId = Row & { id: string | number }
+
 /** Comparison operators for where clauses */
 export type Operator = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'like' | 'in'
 
@@ -56,7 +59,87 @@ export interface DataStore<T extends Row = Row> {
   delete(id: string | number): boolean
 }
 
-/** Table schema definition */
+// ============================================================================
+// Schema-based Type Inference
+// ============================================================================
+
+/**
+ * Primitive type samples for inference
+ * Use sample values to hint the type:
+ * - 0 or 1 → number
+ * - '' or 'sample' → string
+ * - true or false → boolean
+ * - null → null
+ * - new Date() → Date
+ */
+export type TypeSample = string | number | boolean | null | Date
+
+/**
+ * Infer TypeScript type from a sample value
+ */
+export type InferType<T> = 
+  T extends string ? string :
+  T extends number ? number :
+  T extends boolean ? boolean :
+  T extends Date ? Date :
+  T extends null ? null :
+  unknown
+
+/**
+ * Table schema with optional type hints
+ * 
+ * @example
+ * ```ts
+ * const schema = {
+ *   columns: ['id', 'name', 'email', 'age', 'active'] as const,
+ *   types: {
+ *     id: 0,          // number
+ *     name: '',       // string
+ *     email: '',      // string
+ *     age: 0,         // number
+ *     active: true    // boolean
+ *   }
+ * } satisfies TableSchemaTyped
+ * ```
+ */
+export interface TableSchemaTyped<
+  C extends readonly string[] = readonly string[],
+  T extends Partial<Record<C[number], TypeSample>> = Partial<Record<C[number], TypeSample>>
+> {
+  /** Column names in order (use `as const` for literal types) */
+  columns: C
+  /** Type hints using sample values */
+  types?: T
+  /** ID column name (default: 'id') */
+  idColumn?: string
+}
+
+/**
+ * Infer row type from a typed schema
+ * - If types provided: use inferred types from samples
+ * - If no types: fallback to { [column]: unknown }
+ */
+export type InferRowFromSchema<S extends TableSchemaTyped> = 
+  S extends TableSchemaTyped<infer C, infer T>
+    ? T extends Record<string, TypeSample>
+      ? { [K in C[number]]: K extends keyof T ? InferType<T[K]> : unknown } & { id: string | number }
+      : { [K in C[number]]: unknown } & { id: string | number }
+    : RowWithId
+
+/**
+ * Infer all table types from a tables config
+ */
+export type InferTablesFromConfig<
+  Tables extends Record<string, TableSchemaTyped>
+> = {
+  [K in keyof Tables]: InferRowFromSchema<Tables[K]>
+}
+
+// ============================================================================
+// Legacy types (backward compatible)
+// ============================================================================
+
+/** Table schema definition (legacy) */
 export interface TableSchema<T extends Row = Row> {
   /** Column names in order */
   columns: readonly (keyof T & string)[]
@@ -64,7 +147,7 @@ export interface TableSchema<T extends Row = Row> {
   idColumn?: string
 }
 
-/** Database configuration */
+/** Database configuration (legacy) */
 export interface SheetsDBConfig {
   /** Spreadsheet ID (optional, uses active spreadsheet if not provided) */
   spreadsheetId?: string
