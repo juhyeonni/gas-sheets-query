@@ -122,21 +122,20 @@ updatedAt: datetime @updatedAt
 
 테이블 레벨에서 적용되는 속성입니다. `@@`로 시작합니다.
 
-### @@index([fields])
+### "@@index([fields])":
 
-인덱스를 생성합니다.
+인덱스를 생성합니다. YAML 호환을 위해 따옴표와 콜론(`:`)을 붙입니다.
 
 ```yaml
 tables:
   Post:
     title: string
     authorId: number
-    
-    @@index([title])
-    @@index([authorId, title])
+    "@@index([title])":
+    "@@index([authorId, title])":
 ```
 
-### @@unique([fields])
+### "@@unique([fields])":
 
 복합 유니크 제약을 생성합니다.
 
@@ -145,8 +144,7 @@ tables:
   Post:
     authorId: number
     slug: string
-    
-    @@unique([authorId, slug])
+    "@@unique([authorId, slug])":
 ```
 
 ## 전체 예시
@@ -181,9 +179,8 @@ tables:
     authorId: number
     createdAt: datetime @default(now)
     updatedAt: datetime @updatedAt
-
-    @@index([authorId])
-    @@unique([authorId, title])
+    "@@index([authorId])":
+    "@@unique([authorId, title])":
 
   Comment:
     id: number @id @default(autoincrement)
@@ -191,9 +188,8 @@ tables:
     postId: number
     authorId: number
     createdAt: datetime @default(now)
-
-    @@index([postId])
-    @@index([authorId])
+    "@@index([postId])":
+    "@@index([authorId])":
 ```
 
 ## 생성 결과
