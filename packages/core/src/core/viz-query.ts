@@ -381,11 +381,11 @@ export function createVizFetcher(
     const result = buildVizQueryResult(spreadsheetId, options, vizOptions)
     
     // This is meant to be used in GAS environment
-    // @ts-expect-error UrlFetchApp is GAS global
-    const response = UrlFetchApp.fetch(result.url, {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const response = (globalThis as any).UrlFetchApp.fetch(result.url, {
       headers: {
-        // @ts-expect-error ScriptApp is GAS global
-        'Authorization': 'Bearer ' + ScriptApp.getOAuthToken()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        'Authorization': 'Bearer ' + (globalThis as any).ScriptApp.getOAuthToken()
       },
       muteHttpExceptions: true
     })

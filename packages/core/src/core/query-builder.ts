@@ -222,7 +222,7 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
     if (rows.length === 0) return 0
     const values = rows
       .map(row => row[field])
-      .filter((v): v is number => typeof v === 'number')
+      .filter(v => typeof v === 'number') as number[]
     return values.length > 0 ? Math.min(...values) : 0
   }
 
@@ -234,7 +234,7 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
     if (rows.length === 0) return 0
     const values = rows
       .map(row => row[field])
-      .filter((v): v is number => typeof v === 'number')
+      .filter(v => typeof v === 'number') as number[]
     return values.length > 0 ? Math.max(...values) : 0
   }
 
@@ -359,7 +359,7 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
         const [fn, field] = spec.split(':') as [string, keyof T & string]
         const values = rows
           .map(row => row[field])
-          .filter((v): v is number => typeof v === 'number')
+          .filter(v => typeof v === 'number') as number[]
         
         switch (fn) {
           case 'sum':
