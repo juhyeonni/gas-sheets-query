@@ -38,6 +38,21 @@ export { MockAdapter, MockAdapterOptions } from './adapters/mock-adapter'
 // Index Store
 export { IndexStore, IndexDefinition, createIndexKey, serializeValues } from './core/index-store'
 
+// Visualization API Query
+export {
+  buildVizQuery,
+  buildVizUrl,
+  buildVizQueryResult,
+  parseVizResponse,
+  createVizFetcher
+} from './core/viz-query'
+export type {
+  VizQueryOptions,
+  VizQueryResult,
+  VizApiResponse,
+  VizColumn
+} from './core/viz-query'
+
 // Errors
 export {
   SheetsQueryError,
