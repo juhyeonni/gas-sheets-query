@@ -27,6 +27,7 @@ export type {
 // Core classes
 export { Repository } from './core/repository'
 export { QueryBuilder, createQueryBuilder } from './core/query-builder'
+export type { AggSpec, AggResult, GroupedAggResult, HavingCondition } from './core/query-builder'
 export { JoinQueryBuilder, createJoinQueryBuilder, JoinConfig, StoreResolver } from './core/join-query-builder'
 
 // SheetsDB factory functions

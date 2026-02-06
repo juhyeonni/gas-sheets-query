@@ -5,6 +5,38 @@ import type { Row, DataStore, QueryOptions, Operator, SortDirection, WhereCondit
 import { NoResultsError } from './errors'
 
 /**
+ * Aggregation specification
+ * - 'count' - count of rows in group
+ * - 'sum:field' - sum of field values
+ * - 'avg:field' - average of field values
+ * - 'min:field' - minimum field value
+ * - 'max:field' - maximum field value
+ */
+export type AggSpec = 'count' | `sum:${string}` | `avg:${string}` | `min:${string}` | `max:${string}`
+
+/**
+ * Aggregation result object
+ */
+export type AggResult<T extends Record<string, AggSpec>> = {
+  [K in keyof T]: number
+}
+
+/**
+ * Grouped aggregation result with group key
+ */
+export type GroupedAggResult<G extends string, T extends Record<string, AggSpec>> = 
+  { [K in G]: unknown } & AggResult<T>
+
+/**
+ * Having condition for filtering groups
+ */
+export interface HavingCondition {
+  aggName: string
+  operator: Operator
+  value: number
+}
+
+/**
  * QueryBuilder provides a fluent interface for building and executing queries
  * 
  * @example
@@ -22,6 +54,8 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
   private orderByConditions: OrderByCondition<T>[] = []
   private limitValue?: number
   private offsetValue?: number
+  private groupByFields: (keyof T & string)[] = []
+  private havingConditions: HavingCondition[] = []
 
   constructor(private readonly store: DataStore<T>) {}
 
@@ -161,6 +195,114 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
   }
 
   /**
+   * Calculate sum of a numeric field
+   */
+  sum<K extends keyof T & string>(field: K): number {
+    const rows = this.getRowsForAggregation()
+    return rows.reduce((acc, row) => {
+      const value = row[field]
+      return acc + (typeof value === 'number' ? value : 0)
+    }, 0)
+  }
+
+  /**
+   * Calculate average of a numeric field
+   */
+  avg<K extends keyof T & string>(field: K): number {
+    const rows = this.getRowsForAggregation()
+    if (rows.length === 0) return 0
+    return this.sum(field) / rows.length
+  }
+
+  /**
+   * Find minimum value of a field
+   */
+  min<K extends keyof T & string>(field: K): number {
+    const rows = this.getRowsForAggregation()
+    if (rows.length === 0) return 0
+    const values = rows
+      .map(row => row[field])
+      .filter((v): v is number => typeof v === 'number')
+    return values.length > 0 ? Math.min(...values) : 0
+  }
+
+  /**
+   * Find maximum value of a field
+   */
+  max<K extends keyof T & string>(field: K): number {
+    const rows = this.getRowsForAggregation()
+    if (rows.length === 0) return 0
+    const values = rows
+      .map(row => row[field])
+      .filter((v): v is number => typeof v === 'number')
+    return values.length > 0 ? Math.max(...values) : 0
+  }
+
+  /**
+   * Group by one or more fields
+   */
+  groupBy<K extends keyof T & string>(...fields: K[]): this {
+    this.groupByFields = fields
+    return this
+  }
+
+  /**
+   * Filter groups by aggregation condition
+   * Only valid after groupBy()
+   */
+  having(aggName: string, operator: Operator, value: number): this {
+    this.havingConditions.push({ aggName, operator, value })
+    return this
+  }
+
+  /**
+   * Execute aggregation and return results
+   * If groupBy() was called, returns grouped results
+   * Otherwise returns a single aggregation result
+   */
+  agg<A extends Record<string, AggSpec>>(specs: A): GroupedAggResult<(typeof this.groupByFields)[number], A>[] {
+    const rows = this.getRowsForAggregation()
+    
+    if (this.groupByFields.length === 0) {
+      // No grouping - return single result
+      const result = this.computeAggregations(rows, specs)
+      return [result as GroupedAggResult<(typeof this.groupByFields)[number], A>]
+    }
+    
+    // Group rows by fields
+    const groups = new Map<string, T[]>()
+    for (const row of rows) {
+      const key = this.groupByFields.map(f => String(row[f])).join('|')
+      if (!groups.has(key)) {
+        groups.set(key, [])
+      }
+      groups.get(key)!.push(row)
+    }
+    
+    // Compute aggregations for each group
+    const results: GroupedAggResult<(typeof this.groupByFields)[number], A>[] = []
+    
+    for (const [, groupRows] of groups) {
+      const aggs = this.computeAggregations(groupRows, specs)
+      
+      // Apply having conditions
+      if (!this.passesHavingConditions(aggs)) {
+        continue
+      }
+      
+      // Add group key fields
+      const result: Record<string, unknown> = { ...aggs }
+      for (const field of this.groupByFields) {
+        result[field] = groupRows[0][field]
+      }
+      
+      results.push(result as GroupedAggResult<(typeof this.groupByFields)[number], A>)
+    }
+    
+    return results
+  }
+
+  /**
    * Check if any results exist
    */
   exists(): boolean {
@@ -176,7 +318,97 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
     cloned.orderByConditions = [...this.orderByConditions]
     cloned.limitValue = this.limitValue
     cloned.offsetValue = this.offsetValue
+    cloned.groupByFields = [...this.groupByFields]
+    cloned.havingConditions = [...this.havingConditions]
     return cloned
+  }
+
+  // ============================================================================
+  // Private helpers
+  // ============================================================================
+
+  /**
+   * Get rows for aggregation (ignores limit/offset)
+   */
+  private getRowsForAggregation(): T[] {
+    const original = { limit: this.limitValue, offset: this.offsetValue }
+    this.limitValue = undefined
+    this.offsetValue = undefined
+    
+    const rows = this.store.find(this.build())
+    
+    this.limitValue = original.limit
+    this.offsetValue = original.offset
+    
+    return rows
+  }
+
+  /**
+   * Compute aggregation values for a set of rows
+   */
+  private computeAggregations<A extends Record<string, AggSpec>>(
+    rows: T[],
+    specs: A
+  ): AggResult<A> {
+    const result: Record<string, number> = {}
+    
+    for (const [name, spec] of Object.entries(specs)) {
+      if (spec === 'count') {
+        result[name] = rows.length
+      } else {
+        const [fn, field] = spec.split(':') as [string, keyof T & string]
+        const values = rows
+          .map(row => row[field])
+          .filter((v): v is number => typeof v === 'number')
+        
+        switch (fn) {
+          case 'sum':
+            result[name] = values.reduce((a, b) => a + b, 0)
+            break
+          case 'avg':
+            result[name] = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0
+            break
+          case 'min':
+            result[name] = values.length > 0 ? Math.min(...values) : 0
+            break
+          case 'max':
+            result[name] = values.length > 0 ? Math.max(...values) : 0
+            break
+        }
+      }
+    }
+    
+    return result as AggResult<A>
+  }
+
+  /**
+   * Check if aggregation results pass all having conditions
+   */
+  private passesHavingConditions(aggs: Record<string, number>): boolean {
+    for (const cond of this.havingConditions) {
+      const value = aggs[cond.aggName]
+      if (value === undefined) continue
+      
+      if (!this.compareValues(value, cond.operator, cond.value)) {
+        return false
+      }
+    }
+    return true
+  }
+
+  /**
+   * Compare two values with an operator
+   */
+  private compareValues(left: number, operator: Operator, right: number): boolean {
+    switch (operator) {
+      case '=': return left === right
+      case '!=': return left !== right
+      case '>': return left > right
+      case '>=': return left >= right
+      case '<': return left < right
+      case '<=': return left <= right
+      default: return true
+    }
   }
 }
 
