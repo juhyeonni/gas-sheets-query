@@ -47,15 +47,24 @@ enums:
 
 tables:
   User:
-    role: Role    # 'USER' | 'ADMIN' | 'MODERATOR'
+    fields:
+      role: Role    # 'USER' | 'ADMIN' | 'MODERATOR'
 ```
 
-## 필드 정의
+## 테이블 정의
+
+테이블은 `fields`, `indexes`, `unique` 섹션으로 구성됩니다.
 
 ```yaml
 tables:
   TableName:
-    fieldName: type @attribute1 @attribute2(arg)
+    fields:
+      fieldName: type @attribute1 @attribute2(arg)
+    indexes:
+      - [field1]
+      - [field1, field2]
+    unique:
+      - [field1, field2]
 ```
 
 ### 예시
@@ -63,12 +72,13 @@ tables:
 ```yaml
 tables:
   User:
-    id: number @id @default(autoincrement)
-    email: string @unique
-    name: string?
-    age: number @default(0)
-    active: boolean @default(true)
-    createdAt: datetime @default(now)
+    fields:
+      id: number @id @default(autoincrement)
+      email: string @unique
+      name: string?
+      age: number @default(0)
+      active: boolean @default(true)
+      createdAt: datetime @default(now)
 ```
 
 ## 필드 속성 (Attributes)
@@ -120,31 +130,35 @@ updatedAt: datetime @updatedAt
 
 ## 블록 속성 (Block Attributes)
 
-테이블 레벨에서 적용되는 속성입니다. `@@`로 시작합니다.
+테이블 레벨에서 적용되는 속성입니다.
 
-### "@@index([fields])":
+### indexes
 
-인덱스를 생성합니다. YAML 호환을 위해 따옴표와 콜론(`:`)을 붙입니다.
+인덱스를 생성합니다.
 
 ```yaml
 tables:
   Post:
-    title: string
-    authorId: number
-    "@@index([title])":
-    "@@index([authorId, title])":
+    fields:
+      title: string
+      authorId: number
+    indexes:
+      - [title]
+      - [authorId, title]
 ```
 
-### "@@unique([fields])":
+### unique
 
 복합 유니크 제약을 생성합니다.
 
 ```yaml
 tables:
   Post:
-    authorId: number
-    slug: string
-    "@@unique([authorId, slug])":
+    fields:
+      authorId: number
+      slug: string
+    unique:
+      - [authorId, slug]
 ```
 
 ## 전체 예시
@@ -164,32 +178,38 @@ enums:
 
 tables:
   User:
-    id: number @id @default(autoincrement)
-    email: string @unique
-    name: string?
-    role: Role @default(USER)
-    createdAt: datetime @default(now)
-    updatedAt: datetime @updatedAt
+    fields:
+      id: number @id @default(autoincrement)
+      email: string @unique
+      name: string?
+      role: Role @default(USER)
+      createdAt: datetime @default(now)
+      updatedAt: datetime @updatedAt
 
   Post:
-    id: number @id @default(autoincrement)
-    title: string
-    content: string?
-    status: Status @default(DRAFT)
-    authorId: number
-    createdAt: datetime @default(now)
-    updatedAt: datetime @updatedAt
-    "@@index([authorId])":
-    "@@unique([authorId, title])":
+    fields:
+      id: number @id @default(autoincrement)
+      title: string
+      content: string?
+      status: Status @default(DRAFT)
+      authorId: number
+      createdAt: datetime @default(now)
+      updatedAt: datetime @updatedAt
+    indexes:
+      - [authorId]
+    unique:
+      - [authorId, title]
 
   Comment:
-    id: number @id @default(autoincrement)
-    content: string
-    postId: number
-    authorId: number
-    createdAt: datetime @default(now)
-    "@@index([postId])":
-    "@@index([authorId])":
+    fields:
+      id: number @id @default(autoincrement)
+      content: string
+      postId: number
+      authorId: number
+      createdAt: datetime @default(now)
+    indexes:
+      - [postId]
+      - [authorId]
 ```
 
 ## 생성 결과
