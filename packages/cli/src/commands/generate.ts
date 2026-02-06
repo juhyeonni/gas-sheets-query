@@ -1,12 +1,13 @@
 /**
  * Generate command - generates types and client from schema
  * 
- * Issue #22
+ * Issue #22, #23 (watch mode)
  */
 
 import { Command } from 'commander'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
-import { resolve, dirname } from 'path'
+import { resolve, dirname, basename } from 'path'
+import { watch } from 'chokidar'
 import { parseSchema } from '../parser/schema-parser.js'
 import { generateTypes } from '../generator/types-generator.js'
 import { generateClient } from '../generator/client-generator.js'
@@ -175,6 +176,110 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
 }
 
 // =============================================================================
+// Utilities
+// =============================================================================
+
+/**
+ * Format current time as [HH:MM:SS]
+ */
+function formatTimestamp(): string {
+  const now = new Date()
+  const hours = String(now.getHours()).padStart(2, '0')
+  const minutes = String(now.getMinutes()).padStart(2, '0')
+  const seconds = String(now.getSeconds()).padStart(2, '0')
+  return `[${hours}:${minutes}:${seconds}]`
+}
+
+/**
+ * Run generate and print results (used by both initial run and watch)
+ */
+async function runAndPrint(options: GenerateOptions): Promise<boolean> {
+  const result = await runGenerate(options)
+  
+  if (!result.success) {
+    console.error('❌ Generation failed:')
+    for (const error of result.errors) {
+      console.error(`   ${error}`)
+    }
+    return false
+  }
+  
+  // Show warnings if any
+  const warnings = result.errors.filter(e => e.startsWith('Warning:'))
+  if (warnings.length > 0) {
+    console.log('⚠️  Warnings:')
+    for (const warning of warnings) {
+      console.log(`   ${warning}`)
+    }
+  }
+  
+  console.log(`✅ Generated ${result.files.join(', ')}`)
+  return true
+}
+
+/**
+ * Start watching schema file for changes
+ */
+async function startWatch(options: GenerateOptions): Promise<void> {
+  const schemaPath = resolve(process.cwd(), options.schema)
+  const schemaName = basename(schemaPath)
+  
+  console.log('👀 Watching for changes...')
+  console.log('')
+  
+  const watcher = watch(schemaPath, {
+    persistent: true,
+    ignoreInitial: true,
+  })
+  
+  // Debounce to avoid multiple rapid triggers
+  let debounceTimer: NodeJS.Timeout | null = null
+  
+  watcher.on('change', () => {
+    if (debounceTimer) {
+      clearTimeout(debounceTimer)
+    }
+    
+    debounceTimer = setTimeout(async () => {
+      const startTime = performance.now()
+      console.log(`${formatTimestamp()} ${schemaName} changed`)
+      
+      try {
+        const success = await runAndPrint(options)
+        const elapsed = Math.round(performance.now() - startTime)
+        
+        if (success) {
+          console.log(`   Regenerated in ${elapsed}ms`)
+        }
+      } catch (err) {
+        const error = err as Error
+        console.error(`❌ Error: ${error.message}`)
+      }
+      console.log('')
+    }, 100) // 100ms debounce
+  })
+  
+  watcher.on('error', (err: unknown) => {
+    const error = err instanceof Error ? err : new Error(String(err))
+    console.error(`❌ Watcher error: ${error.message}`)
+  })
+  
+  // Handle Ctrl+C gracefully
+  const cleanup = () => {
+    console.log('')
+    console.log('👋 Stopping watch mode...')
+    watcher.close()
+    process.exit(0)
+  }
+  
+  process.on('SIGINT', cleanup)
+  process.on('SIGTERM', cleanup)
+  
+  // Keep process alive
+  await new Promise(() => {})
+}
+
+// =============================================================================
 // CLI Command
 // =============================================================================
 
@@ -182,43 +287,26 @@ export const generateCommand = new Command('generate')
   .description('Generate types and client from schema')
   .option('-s, --schema <path>', 'Schema file path', 'schema.gsq.yaml')
   .option('-o, --output <path>', 'Output directory', 'generated')
-  .option('-w, --watch', 'Watch for changes (not implemented yet)')
+  .option('-w, --watch', 'Watch schema file for changes and regenerate')
   .action(async (options: GenerateOptions) => {
-    // Watch mode reminder
-    if (options.watch) {
-      console.log('⚠️  Watch mode will be implemented in #23')
-      console.log('')
-    }
-    
     console.log('🔧 Generating from schema...')
     console.log(`   Schema: ${options.schema}`)
     console.log(`   Output: ${options.output}`)
     console.log('')
     
-    const result = await runGenerate(options)
+    // Initial generation
+    const success = await runAndPrint(options)
     
-    if (!result.success) {
-      console.error('❌ Generation failed:')
-      for (const error of result.errors) {
-        console.error(`   ${error}`)
-      }
+    if (!success && !options.watch) {
       process.exit(1)
     }
     
-    // Show warnings if any
-    const warnings = result.errors.filter(e => e.startsWith('Warning:'))
-    if (warnings.length > 0) {
-      console.log('⚠️  Warnings:')
-      for (const warning of warnings) {
-        console.log(`   ${warning}`)
-      }
+    // Watch mode
+    if (options.watch) {
       console.log('')
+      await startWatch(options)
+    } else {
+      console.log('')
+      console.log('🎉 Done!')
     }
-    
-    console.log('✅ Generated files:')
-    for (const file of result.files) {
-      console.log(`   ${options.output}/${file}`)
-    }
-    console.log('')
-    console.log('🎉 Done!')
   })
