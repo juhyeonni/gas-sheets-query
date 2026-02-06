@@ -2,6 +2,7 @@
  * Mock adapter for testing - in-memory data storage
  */
 import type { Row, DataStore, QueryOptions, WhereCondition, OrderByCondition, BatchUpdateItem } from '../core/types'
+import { IndexStore, IndexDefinition } from '../core/index-store'
 
 /**
  * Evaluate a single where condition against a row
@@ -53,6 +54,14 @@ function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition<T>[]):
   return 0
 }
 
+/** MockAdapter 설정 옵션 */
+export interface MockAdapterOptions<T extends Row = Row> {
+  /** 초기 데이터 */
+  initialData?: T[]
+  /** 인덱스 정의 (스키마 기반) */
+  indexes?: IndexDefinition[]
+}
+
 /**
  * In-memory DataStore implementation for testing
  * Uses an index (Map) for O(1) ID lookups instead of O(N) array scan
@@ -62,25 +71,42 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
   private nextId = 1
   /** Index for O(1) lookups by ID - maps id to array index */
   private idIndex: Map<string | number, number> = new Map()
+  /** Column indexes for query optimization */
+  private indexStore: IndexStore<T>
 
-  constructor(initialData: T[] = []) {
-    this.data = [...initialData]
+  constructor(initialData?: T[] | MockAdapterOptions<T>) {
+    // 호환성: 배열 또는 옵션 객체 모두 지원
+    let data: T[] = []
+    let indexes: IndexDefinition[] = []
+    
+    if (Array.isArray(initialData)) {
+      data = initialData
+    } else if (initialData) {
+      data = initialData.initialData || []
+      indexes = initialData.indexes || []
+    }
+    
+    this.indexStore = new IndexStore<T>(indexes)
+    this.data = [...data]
     this.rebuildIndex()
+    
     // Update nextId based on existing data
-    if (initialData.length > 0) {
-      const maxId = Math.max(...initialData.map(r => 
+    if (data.length > 0) {
+      const maxId = Math.max(...data.map(r => 
         typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
       ))
       this.nextId = maxId + 1
     }
   }
 
-  /** Rebuild the ID index from scratch */
+  /** Rebuild the ID index and column indexes from scratch */
   private rebuildIndex(): void {
     this.idIndex.clear()
     for (let i = 0; i < this.data.length; i++) {
       this.idIndex.set(this.data[i].id, i)
     }
+    // Rebuild column indexes
+    this.indexStore.rebuild(this.data)
   }
 
   findAll(): T[] {
@@ -88,12 +114,37 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
   }
 
   find(options: QueryOptions<T>): T[] {
-    let result = [...this.data]
-
-    // Apply where conditions (AND logic)
+    let candidateIndices: Set<number> | undefined
+    let remainingConditions = options.where
+    
+    // Try to use column indexes for equality conditions
     if (options.where.length > 0) {
+      const { usedIndices, unusedConditions } = this.tryUseIndexes(options.where)
+      if (usedIndices !== undefined) {
+        candidateIndices = usedIndices
+        remainingConditions = unusedConditions
+      }
+    }
+    
+    // Get candidate rows (from index or full scan)
+    let result: T[]
+    if (candidateIndices !== undefined) {
+      // Index-based: only check rows in candidate set
+      result = []
+      for (const idx of candidateIndices) {
+        if (idx < this.data.length) {
+          result.push(this.data[idx])
+        }
+      }
+    } else {
+      // Full scan
+      result = [...this.data]
+    }
+
+    // Apply remaining where conditions (non-indexed or non-equality)
+    if (remainingConditions.length > 0) {
       result = result.filter(row => 
-        options.where.every(condition => evaluateCondition(row, condition))
+        remainingConditions.every(condition => evaluateCondition(row, condition))
       )
     }
 
@@ -114,6 +165,85 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
 
     return result
   }
+  
+  /**
+   * Try to use indexes for the given where conditions
+   * Returns candidate row indices and unused conditions
+   */
+  private tryUseIndexes(conditions: WhereCondition<T>[]): {
+    usedIndices: Set<number> | undefined
+    unusedConditions: WhereCondition<T>[]
+  } {
+    // Extract equality conditions that might use indexes
+    const eqConditions: Array<{ field: string; value: unknown; index: number }> = []
+    const nonEqConditions: WhereCondition<T>[] = []
+    
+    conditions.forEach((cond, i) => {
+      if (cond.operator === '=') {
+        eqConditions.push({ field: cond.field, value: cond.value, index: i })
+      } else {
+        nonEqConditions.push(cond)
+      }
+    })
+    
+    if (eqConditions.length === 0) {
+      return { usedIndices: undefined, unusedConditions: conditions }
+    }
+    
+    // Try to find an index for the equality conditions
+    // Strategy: try single-field indexes first, then compound
+    let usedIndices: Set<number> | undefined
+    const usedConditionIndices = new Set<number>()
+    
+    // Try each equality condition individually first
+    for (const eq of eqConditions) {
+      const indices = this.indexStore.lookup([eq.field], [eq.value])
+      if (indices !== undefined) {
+        if (usedIndices === undefined) {
+          usedIndices = new Set(indices)
+        } else {
+          // Intersect with existing candidates (AND logic)
+          const intersection = new Set<number>()
+          for (const idx of usedIndices) {
+            if (indices.has(idx)) {
+              intersection.add(idx)
+            }
+          }
+          usedIndices = intersection
+        }
+        usedConditionIndices.add(eq.index)
+      }
+    }
+    
+    // If we have 2+ equality conditions, try compound indexes
+    if (eqConditions.length >= 2) {
+      const fields = eqConditions.map(eq => eq.field)
+      const values = eqConditions.map(eq => eq.value)
+      const compoundIndices = this.indexStore.lookup(fields, values)
+      
+      if (compoundIndices !== undefined) {
+        if (usedIndices === undefined) {
+          usedIndices = new Set(compoundIndices)
+        } else {
+          // Intersect
+          const intersection = new Set<number>()
+          for (const idx of usedIndices) {
+            if (compoundIndices.has(idx)) {
+              intersection.add(idx)
+            }
+          }
+          usedIndices = intersection
+        }
+        // All equality conditions are covered by compound index
+        eqConditions.forEach(eq => usedConditionIndices.add(eq.index))
+      }
+    }
+    
+    // Build unused conditions list
+    const unusedConditions = conditions.filter((_, i) => !usedConditionIndices.has(i))
+    
+    return { usedIndices, unusedConditions }
+  }
 
   /**
    * Find a single row by ID - O(1) using index
@@ -131,6 +261,8 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
     const index = this.data.length
     this.data.push(newRow)
     this.idIndex.set(id, index)
+    // Update column indexes
+    this.indexStore.addToIndex(index, newRow)
     return newRow
   }
 
@@ -141,18 +273,36 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
     
-    this.data[index] = { ...this.data[index], ...data }
-    return this.data[index]
+    const oldRow = this.data[index]
+    const newRow = { ...oldRow, ...data }
+    this.data[index] = newRow
+    
+    // Update column indexes
+    this.indexStore.updateIndex(index, oldRow, newRow)
+    
+    return newRow
   }
 
   delete(id: string | number): boolean {
     const index = this.idIndex.get(id)
     if (index === undefined) return false
     
+    const deletedRow = this.data[index]
+    
+    // Remove from column indexes before splice
+    this.indexStore.removeFromIndex(index, deletedRow)
+    
     this.data.splice(index, 1)
     this.idIndex.delete(id)
-    // Rebuild index since splice shifts all subsequent elements
-    this.rebuildIndex()
+    
+    // Rebuild ID index since splice shifts all subsequent elements
+    for (let i = index; i < this.data.length; i++) {
+      this.idIndex.set(this.data[i].id, i)
+    }
+    
+    // Reindex column indexes after delete (shift row indices)
+    this.indexStore.reindexAfterDelete(index)
+    
     return true
   }
 
@@ -167,8 +317,11 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
     for (let i = 0; i < data.length; i++) {
       const id = this.nextId++
       const newRow = { ...data[i], id } as T
+      const rowIndex = startIndex + i
       this.data.push(newRow)
-      this.idIndex.set(id, startIndex + i)
+      this.idIndex.set(id, rowIndex)
+      // Update column indexes
+      this.indexStore.addToIndex(rowIndex, newRow)
       results.push(newRow)
     }
     
@@ -186,8 +339,14 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
       const index = this.idIndex.get(id)
       if (index === undefined) continue
       
-      this.data[index] = { ...this.data[index], ...data }
-      results.push(this.data[index])
+      const oldRow = this.data[index]
+      const newRow = { ...oldRow, ...data }
+      this.data[index] = newRow
+      
+      // Update column indexes
+      this.indexStore.updateIndex(index, oldRow, newRow)
+      
+      results.push(newRow)
     }
     
     return results

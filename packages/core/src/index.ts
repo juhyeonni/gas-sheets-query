@@ -33,7 +33,10 @@ export { createSheetsDB, defineSheetsDB } from './core/sheets-db'
 export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOptions } from './core/sheets-db'
 
 // Adapters
-export { MockAdapter } from './adapters/mock-adapter'
+export { MockAdapter, MockAdapterOptions } from './adapters/mock-adapter'
+
+// Index Store
+export { IndexStore, IndexDefinition, createIndexKey, serializeValues } from './core/index-store'
 
 // Errors
 export {
