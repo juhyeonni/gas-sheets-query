@@ -66,4 +66,25 @@ export {
   InvalidOperatorError
 } from './core/errors'
 
+// Migration System
+export {
+  MigrationRunner,
+  createMigrationRunner,
+  MigrationVersionError,
+  MigrationExecutionError,
+  NoMigrationsToRollbackError
+} from './core/migration'
+export type {
+  Migration,
+  MigrationRecord,
+  MigrationResult,
+  RollbackResult,
+  MigrationRunnerConfig,
+  SchemaBuilder,
+  SchemaOperation,
+  SchemaOperationType,
+  ColumnOptions,
+  StoreResolver as MigrationStoreResolver
+} from './core/migration'
+
 export const VERSION = '0.1.0'
