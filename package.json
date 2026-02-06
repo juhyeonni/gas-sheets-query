@@ -1,29 +1,15 @@
 {
-  "name": "gas-sheets-query",
+  "name": "gas-sheets-query-monorepo",
   "version": "0.1.0",
-  "description": "TypeScript library for using Google Sheets as a database in GAS projects",
-  "type": "module",
-  "main": "dist/index.cjs",
-  "module": "dist/index.mjs",
-  "types": "dist/types/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/types/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
-    }
-  },
-  "files": [
-    "dist"
-  ],
+  "private": true,
+  "description": "Monorepo for gas-sheets-query",
   "scripts": {
-    "build": "node build.mjs && tsc --emitDeclarationOnly",
-    "build:gas": "node build.mjs",
-    "dev": "vitest",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:watch": "pnpm -r test:watch",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r clean",
+    "dev": "pnpm --filter @gsq/cli dev"
   },
   "keywords": [
     "google-apps-script",
@@ -37,13 +23,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/juhyeonni/gas-sheets-query.git"
-  },
-  "devDependencies": {
-    "@types/google-apps-script": "^2.0.8",
-    "@types/node": "^25.2.1",
-    "esbuild": "^0.27.3",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
   },
   "packageManager": "pnpm@10.28.2",
   "engines": {

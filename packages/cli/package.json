@@ -1,0 +1,54 @@
+{
+  "name": "@gsq/cli",
+  "version": "0.1.0",
+  "description": "CLI for gas-sheets-query schema generation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "gsq": "./bin/gsq.js"
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "gas-sheets-query",
+    "cli",
+    "schema",
+    "generator",
+    "codegen"
+  ],
+  "author": "juhyeonni",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/juhyeonni/gas-sheets-query.git",
+    "directory": "packages/cli"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "js-yaml": "^4.1.0",
+    "chokidar": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.2.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "peerDependencies": {
+    "gas-sheets-query": "workspace:*"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
