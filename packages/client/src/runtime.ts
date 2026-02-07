@@ -98,8 +98,9 @@ export function createStore<T extends RowWithId>(
     return new MockAdapter<T>({ idMode })
   }
 
-  // GAS environment with SheetsAdapter
-  if (isGASEnvironment()) {
+  // If spreadsheetId is provided, use SheetsAdapter
+  // This works even if isGASEnvironment() returns false in bundled code
+  if (options.spreadsheetId || isGASEnvironment()) {
     const sheetName = tableSchema.sheetName || tableName
     // Use type assertion since SheetsAdapter requires { id: number }
     // but runtime will handle both number and string IDs
@@ -111,7 +112,7 @@ export function createStore<T extends RowWithId>(
     }) as unknown as DataStore<T>
   }
 
-  // Fallback to MockAdapter for Node.js
+  // Fallback to MockAdapter for Node.js (dev/test)
   return new MockAdapter<T>({ idMode })
 }
 
