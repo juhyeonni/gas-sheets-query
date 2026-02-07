@@ -9,7 +9,8 @@
     "test:watch": "pnpm -r test:watch",
     "typecheck": "pnpm -r typecheck",
     "clean": "pnpm -r clean",
-    "dev": "pnpm --filter gsquery dev"
+    "dev": "pnpm --filter gsquery dev",
+    "release": "pnpm build && pnpm -r publish --access public"
   },
   "keywords": [
     "google-apps-script",

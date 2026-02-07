@@ -185,8 +185,12 @@ export function parseTable(name: string, raw: RawTableDefinition): TableAST {
     blockAttributes.push(...parseBlockAttributeArrays('unique', raw.unique))
   }
   
+  // Parse @@map (sheet name mapping)
+  const mapTo = raw.map ? raw.map : undefined
+  
   return {
     name,
+    mapTo,
     fields,
     blockAttributes,
   }

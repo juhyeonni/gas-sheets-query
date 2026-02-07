@@ -62,11 +62,18 @@ function generateTablesType(tableNames: string[]): string {
 // =============================================================================
 
 /**
- * Generate column names array for a table
+ * Generate table config object
  */
-function generateColumns(table: TableAST): string {
+function generateTableConfig(table: TableAST): string {
   const columns = table.fields.map(f => `'${f.name}'`).join(', ')
-  return `{ columns: [${columns}] as const }`
+  const parts = [`columns: [${columns}] as const`]
+  
+  // Add sheetName if mapped
+  if (table.mapTo) {
+    parts.push(`sheetName: '${table.mapTo}'`)
+  }
+  
+  return `{ ${parts.join(', ')} }`
 }
 
 /**
@@ -84,7 +91,7 @@ function generateSchema(tables: Record<string, TableAST>): string {
   for (let i = 0; i < tableNames.length; i++) {
     const name = tableNames[i]
     const comma = i < tableNames.length - 1 ? ',' : ''
-    lines.push(`    ${name}: ${generateColumns(tables[name])}${comma}`)
+    lines.push(`    ${name}: ${generateTableConfig(tables[name])}${comma}`)
   }
   
   lines.push('  }')

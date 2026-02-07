@@ -42,13 +42,15 @@ export interface FieldAttribute {
 }
 
 /**
- * Block attribute (e.g., @@index, @@unique)
+ * Block attribute (e.g., @@index, @@unique, @@map)
  */
 export interface BlockAttribute {
   /** Attribute name without @@ */
-  name: 'index' | 'unique'
-  /** Field names */
+  name: 'index' | 'unique' | 'map'
+  /** Field names (for index/unique) */
   fields: string[]
+  /** Map target name (for @@map) */
+  mapTo?: string
 }
 
 // ============================================================================
@@ -75,6 +77,8 @@ export interface FieldAST {
 export interface TableAST {
   /** Table name */
   name: string
+  /** Mapped sheet name (from @@map) */
+  mapTo?: string
   /** Fields in order */
   fields: FieldAST[]
   /** Block attributes (@@index, @@unique) */
@@ -120,6 +124,8 @@ export interface RawTableDefinition {
   fields: Record<string, string>
   indexes?: Array<string[]>
   unique?: Array<string[]>
+  /** Sheet name mapping (@@map equivalent) */
+  map?: string
 }
 
 /**
