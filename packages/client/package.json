@@ -1,16 +1,23 @@
 {
-  "name": "@gsquery/cli",
+  "name": "@gsquery/client",
   "version": "0.2.0",
-  "description": "CLI for gas-sheets-query schema generation",
+  "description": "Typed client for gas-sheets-query",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "bin": {
-    "gsquery": "./bin/gsquery.js"
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./generated": {
+      "types": "./generated/index.d.ts",
+      "import": "./generated/index.js"
+    }
   },
   "files": [
     "dist",
-    "bin"
+    "generated"
   ],
   "scripts": {
     "build": "tsc",
@@ -18,35 +25,30 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist generated"
   },
   "keywords": [
     "gas-sheets-query",
-    "cli",
-    "schema",
-    "generator",
-    "codegen"
+    "typed-client",
+    "client",
+    "database",
+    "google-sheets"
   ],
   "author": "juhyeonni",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/juhyeonni/gas-sheets-query.git",
-    "directory": "packages/cli"
+    "directory": "packages/client"
   },
   "dependencies": {
-    "commander": "^13.1.0",
-    "js-yaml": "^4.1.0",
-    "chokidar": "^4.0.3"
+    "@gsquery/core": "workspace:*"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4.0.9",
+    "@types/google-apps-script": "^2.0.8",
     "@types/node": "^25.2.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
-  },
-  "peerDependencies": {
-    "@gsquery/core": "workspace:*"
   },
   "engines": {
     "node": ">=18"

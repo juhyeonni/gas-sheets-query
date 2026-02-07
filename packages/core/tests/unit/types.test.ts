@@ -4,7 +4,7 @@ import type { Row, Operator, DataStore, QueryOptions } from '../../src'
 
 describe('Core Types', () => {
   it('exports VERSION', () => {
-    expect(VERSION).toBe('0.1.0')
+    expect(VERSION).toBe('0.2.0')
   })
 
   it('Row type allows any string keys', () => {

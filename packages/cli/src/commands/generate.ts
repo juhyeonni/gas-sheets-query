@@ -1,7 +1,7 @@
 /**
  * Generate command - generates types and client from schema
  * 
- * Issue #22, #23 (watch mode)
+ * Issue #22, #23 (watch mode), #24 (Typed client)
  */
 
 import { Command } from 'commander'
@@ -11,6 +11,7 @@ import { watch } from 'chokidar'
 import { parseSchema } from '../parser/schema-parser.js'
 import { generateTypes } from '../generator/types-generator.js'
 import { generateClient } from '../generator/client-generator.js'
+import { generateClientPackage } from '../generator/client-package-generator.js'
 
 // =============================================================================
 // Types
@@ -20,6 +21,7 @@ export interface GenerateOptions {
   schema: string
   output: string
   watch?: boolean
+  client?: boolean
 }
 
 export interface GenerateResult {
@@ -168,11 +170,52 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
     }
   }
   
+  // Generate Typed client (--client option)
+  if (options.client) {
+    try {
+      const clientDir = findClientPackage()
+      if (!clientDir) {
+        errors.push('Warning: @gsquery/client not found in node_modules. Install it first: pnpm add @gsquery/client')
+      } else {
+        const generatedDir = resolve(clientDir, 'generated')
+        const clientFiles = generateClientPackage(schema)
+        
+        for (const [filename, content] of Object.entries(clientFiles)) {
+          writeFile(resolve(generatedDir, filename), content)
+        }
+        files.push('@gsquery/client/generated')
+      }
+    } catch (err) {
+      const error = err as Error
+      errors.push(`Warning: Failed to generate client package: ${error.message}`)
+    }
+  }
+  
   return {
     success: true,
     files,
     errors,
   }
+}
+
+/**
+ * Find @gsquery/client package in node_modules
+ */
+function findClientPackage(): string | null {
+  // Check common locations
+  const locations = [
+    resolve(process.cwd(), 'node_modules/@gsquery/client'),
+    resolve(process.cwd(), '../node_modules/@gsquery/client'),
+    resolve(process.cwd(), '../../node_modules/@gsquery/client'),
+  ]
+  
+  for (const loc of locations) {
+    if (existsSync(resolve(loc, 'package.json'))) {
+      return loc
+    }
+  }
+  
+  return null
 }
 
 // =============================================================================
@@ -288,10 +331,14 @@ export const generateCommand = new Command('generate')
   .option('-s, --schema <path>', 'Schema file path', 'schema.gsq.yaml')
   .option('-o, --output <path>', 'Output directory', 'generated')
   .option('-w, --watch', 'Watch schema file for changes and regenerate')
+  .option('-c, --client', 'Also generate Typed client in @gsquery/client/generated')
   .action(async (options: GenerateOptions) => {
     console.log('🔧 Generating from schema...')
     console.log(`   Schema: ${options.schema}`)
     console.log(`   Output: ${options.output}`)
+    if (options.client) {
+      console.log('   Client: @gsquery/client/generated')
+    }
     console.log('')
     
     // Initial generation
