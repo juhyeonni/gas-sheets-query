@@ -24,10 +24,10 @@ A project setup guide using gas-sheets-query.
 
 ```bash
 # pnpm (recommended)
-pnpm add gas-sheets-query
+pnpm add @gsquery/core
 
 # npm
-npm install gas-sheets-query
+npm install @gsquery/core
 
 # yarn
 yarn add gas-sheets-query
@@ -209,7 +209,7 @@ export interface Post {
 Use `MockAdapter` for testing and local development:
 
 ```typescript
-import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
+import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 import type { User, Post } from './generated/types'
 
 const db = defineSheetsDB({
@@ -236,7 +236,7 @@ Use SheetsAdapter when connecting to actual Google Sheets:
 
 ```typescript
 // Running in GAS environment
-import { createSheetsDB, SheetsAdapter } from 'gas-sheets-query'
+import { createSheetsDB, SheetsAdapter } from '@gsquery/core'
 
 const spreadsheet = SpreadsheetApp.openById('YOUR_SPREADSHEET_ID')
 

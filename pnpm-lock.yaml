@@ -10,15 +10,15 @@ importers:
 
   packages/cli:
     dependencies:
+      '@gsquery/core':
+        specifier: workspace:*
+        version: link:../core
       chokidar:
         specifier: ^4.0.3
         version: 4.0.3
       commander:
         specifier: ^13.1.0
         version: 13.1.0
-      gas-sheets-query:
-        specifier: workspace:*
-        version: link:../core
       js-yaml:
         specifier: ^4.1.0
         version: 4.1.1

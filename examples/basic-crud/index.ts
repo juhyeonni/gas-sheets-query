@@ -3,7 +3,7 @@
  * 
  * gas-sheets-query를 사용한 기본 CRUD 작업 예제
  */
-import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
+import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 // =============================================================================
 // 1. 타입 정의

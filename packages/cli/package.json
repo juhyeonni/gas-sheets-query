@@ -1,5 +1,5 @@
 {
-  "name": "gsquery",
+  "name": "@gsquery/cli",
   "version": "0.1.0",
   "description": "CLI for gas-sheets-query schema generation",
   "type": "module",
@@ -46,7 +46,7 @@
     "vitest": "^4.0.18"
   },
   "peerDependencies": {
-    "gas-sheets-query": "workspace:*"
+    "@gsquery/core": "workspace:*"
   },
   "engines": {
     "node": ">=18"

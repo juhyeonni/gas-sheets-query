@@ -69,7 +69,7 @@ function generateMigrationContent(version: number, name: string): string {
  * Created: ${new Date().toISOString()}
  */
 
-import type { Migration, SchemaBuilder } from 'gas-sheets-query'
+import type { Migration, SchemaBuilder } from '@gsquery/core'
 
 export const migration: Migration = {
   version: ${version},

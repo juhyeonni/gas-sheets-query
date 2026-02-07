@@ -18,7 +18,7 @@ A collection of practical examples for gas-sheets-query.
 ### Initial Setup
 
 ```typescript
-import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
+import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 // Type definition
 interface User {
@@ -402,7 +402,7 @@ const popularCategories = db.from('products')
 
 ```typescript
 // migrations/001_initial.ts
-import type { Migration } from 'gas-sheets-query'
+import type { Migration } from '@gsquery/core'
 
 export const migration: Migration = {
   version: 1,
@@ -443,7 +443,7 @@ export const migration: Migration = {
 ### Running Migrations
 
 ```typescript
-import { createMigrationRunner, MockAdapter } from 'gas-sheets-query'
+import { createMigrationRunner, MockAdapter } from '@gsquery/core'
 import { migration as m1 } from './migrations/001_initial'
 import { migration as m2 } from './migrations/002_rename_column'
 

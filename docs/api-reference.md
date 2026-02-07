@@ -22,7 +22,7 @@ Complete API documentation for gas-sheets-query.
 Factory function using schema-based automatic type inference. (Recommended)
 
 ```typescript
-import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
+import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 const db = defineSheetsDB({
   spreadsheetId: 'optional-id',
@@ -56,7 +56,7 @@ const db = defineSheetsDB({
 Legacy factory function using explicit types.
 
 ```typescript
-import { createSheetsDB, MockAdapter } from 'gas-sheets-query'
+import { createSheetsDB, MockAdapter } from '@gsquery/core'
 
 interface User {
   id: number
@@ -378,7 +378,7 @@ const bigCategories = db.from('orders')
 ### MigrationRunner
 
 ```typescript
-import { createMigrationRunner, MockAdapter } from 'gas-sheets-query'
+import { createMigrationRunner, MockAdapter } from '@gsquery/core'
 
 const runner = createMigrationRunner({
   migrationsStore: new MockAdapter(),  // Store migration records
@@ -543,7 +543,7 @@ gsquery rollback
 ### Example
 
 ```typescript
-import { TableNotFoundError, NoResultsError } from 'gas-sheets-query'
+import { TableNotFoundError, NoResultsError } from '@gsquery/core'
 
 try {
   const user = db.from('users')

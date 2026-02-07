@@ -3,7 +3,7 @@
  * 
  * gas-sheets-query QueryBuilder를 활용한 다양한 쿼리 예제
  */
-import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
+import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 // =============================================================================
 // 1. 타입 및 DB 설정

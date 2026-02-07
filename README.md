@@ -27,10 +27,10 @@ gas-sheets-query/
 
 ```bash
 # npm
-npm install gas-sheets-query
+npm install @gsquery/core
 
 # pnpm (recommended)
-pnpm add gas-sheets-query
+pnpm add @gsquery/core
 ```
 
 ### 2. Define Schema
@@ -56,7 +56,7 @@ npx gsqueryuery generate
 ### 4. Usage
 
 ```typescript
-import { defineSheetsDB, MockAdapter } from 'gas-sheets-query'
+import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 // Create DB instance
 const db = defineSheetsDB({
