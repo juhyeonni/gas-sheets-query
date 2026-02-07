@@ -34,7 +34,7 @@ const DEFAULT_CONFIG: Omit<GSQConfig, 'spreadsheetId'> = {
   schemaFile: 'schema.gsq.yaml',
 }
 
-const CONFIG_FILENAME = 'gsq.config.json'
+const CONFIG_FILENAME = 'gsquery.config.json'
 
 // =============================================================================
 // Init Logic

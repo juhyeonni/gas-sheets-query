@@ -13,7 +13,7 @@ describe('migration:create command', () => {
   let originalCwd: string
   
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'gsq-migration-test-'))
+    tempDir = mkdtempSync(join(tmpdir(), 'gsquery-migration-test-'))
     originalCwd = process.cwd()
     process.chdir(tempDir)
   })
@@ -55,7 +55,7 @@ describe('migration:create command', () => {
   })
   
   it('should read directory from config', () => {
-    writeFileSync('gsq.config.json', JSON.stringify({
+    writeFileSync('gsquery.config.json', JSON.stringify({
       migrationsDir: 'custom_migrations',
     }))
     

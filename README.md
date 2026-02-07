@@ -18,7 +18,7 @@ Abstracts the repetitive Sheets CRUD + query logic when developing GAS (Google A
 gas-sheets-query/
 ├── packages/
 │   ├── core/       # Core library (SheetsDB, QueryBuilder)
-│   └── cli/        # CLI tools (gsq)
+│   └── cli/        # CLI tools (gsquery)
 ```
 
 ## 🚀 Quick Start

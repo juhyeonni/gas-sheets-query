@@ -460,7 +460,7 @@ Options:
   -f, --force                 Overwrite existing config
 ```
 
-Generated `gsq.config.json`:
+Generated `gsquery.config.json`:
 
 ```json
 {

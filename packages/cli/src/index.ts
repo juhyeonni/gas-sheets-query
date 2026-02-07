@@ -1,5 +1,5 @@
 /**
- * @gsq/cli - CLI for gas-sheets-query schema generation
+ * gsquery - CLI for gas-sheets-query schema generation
  */
 
 // Generate command

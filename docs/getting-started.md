@@ -43,7 +43,7 @@ yarn add gas-sheets-query
 npx gsqueryuery init --spreadsheet-id YOUR_SPREADSHEET_ID
 ```
 
-This command creates a `gsq.config.json` file:
+This command creates a `gsquery.config.json` file:
 
 ```json
 {

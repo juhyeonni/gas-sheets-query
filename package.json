@@ -9,7 +9,7 @@
     "test:watch": "pnpm -r test:watch",
     "typecheck": "pnpm -r typecheck",
     "clean": "pnpm -r clean",
-    "dev": "pnpm --filter @gsq/cli dev"
+    "dev": "pnpm --filter gsquery dev"
   },
   "keywords": [
     "google-apps-script",

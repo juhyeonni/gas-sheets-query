@@ -13,7 +13,7 @@ describe('init command', () => {
   let originalCwd: string
   
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'gsq-init-test-'))
+    tempDir = mkdtempSync(join(tmpdir(), 'gsquery-init-test-'))
     originalCwd = process.cwd()
     process.chdir(tempDir)
   })
@@ -27,9 +27,9 @@ describe('init command', () => {
     const result = runInit({})
     
     expect(result.success).toBe(true)
-    expect(existsSync('gsq.config.json')).toBe(true)
+    expect(existsSync('gsquery.config.json')).toBe(true)
     
-    const config = JSON.parse(readFileSync('gsq.config.json', 'utf-8'))
+    const config = JSON.parse(readFileSync('gsquery.config.json', 'utf-8'))
     expect(config.spreadsheetId).toBe('')
     expect(config.migrationsDir).toBe('migrations')
     expect(config.generatedDir).toBe('generated')
@@ -41,7 +41,7 @@ describe('init command', () => {
     
     expect(result.success).toBe(true)
     
-    const config = JSON.parse(readFileSync('gsq.config.json', 'utf-8'))
+    const config = JSON.parse(readFileSync('gsquery.config.json', 'utf-8'))
     expect(config.spreadsheetId).toBe('abc123')
   })
   
@@ -59,7 +59,7 @@ describe('init command', () => {
     
     expect(result.success).toBe(true)
     
-    const config = JSON.parse(readFileSync('gsq.config.json', 'utf-8'))
+    const config = JSON.parse(readFileSync('gsquery.config.json', 'utf-8'))
     expect(config.spreadsheetId).toBe('new')
   })
 })

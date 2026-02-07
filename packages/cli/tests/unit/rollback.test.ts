@@ -13,7 +13,7 @@ describe('rollback command', () => {
   let originalCwd: string
   
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'gsq-rollback-test-'))
+    tempDir = mkdtempSync(join(tmpdir(), 'gsquery-rollback-test-'))
     originalCwd = process.cwd()
     process.chdir(tempDir)
   })

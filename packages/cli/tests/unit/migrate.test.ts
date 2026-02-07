@@ -13,7 +13,7 @@ describe('migrate command', () => {
   let originalCwd: string
   
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'gsq-migrate-test-'))
+    tempDir = mkdtempSync(join(tmpdir(), 'gsquery-migrate-test-'))
     originalCwd = process.cwd()
     process.chdir(tempDir)
   })
