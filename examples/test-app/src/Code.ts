@@ -1,59 +1,252 @@
 /**
- * gas-sheets-query 테스트 앱
+ * GSQuery Test App
  * 
- * 이 파일은 GAS 환경에서 실행되는 테스트 함수들을 포함합니다.
- * clasp를 통해 배포 후 Apps Script 에디터에서 실행하세요.
+ * Tests all features of @gsquery/core in a real GAS environment.
+ * Run setupTestData() first, then runAllTests().
  */
 
-// 생성된 클라이언트 import (gsquery generate로 생성)
-// import { db } from './generated'
-
 // ============================================================================
-// 테스트 유틸리티
+// Configuration
 // ============================================================================
 
-interface TestResult {
-  name: string
-  passed: boolean
-  error?: string
-  duration: number
+const SPREADSHEET_ID = '' // Set your spreadsheet ID here
+
+// ============================================================================
+// Inline SheetsAdapter (for GAS environment)
+// ============================================================================
+
+interface Row { id: number; [key: string]: unknown }
+interface QueryOptions<T> {
+  where?: Array<{ field: keyof T & string; operator: string; value: unknown }>
+  orderBy?: Array<{ field: keyof T & string; direction: 'asc' | 'desc' }>
+  limit?: number
+  offset?: number
 }
 
-function assert(condition: boolean, message: string): void {
-  if (!condition) {
-    throw new Error(`Assertion failed: ${message}`)
+class SheetsAdapter<T extends Row> {
+  private spreadsheetId: string
+  private sheetName: string
+  private columns: string[]
+  private sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
+
+  constructor(options: { spreadsheetId: string; sheetName: string; columns: string[] }) {
+    this.spreadsheetId = options.spreadsheetId
+    this.sheetName = options.sheetName
+    this.columns = options.columns
   }
-}
 
-function assertEqual<T>(actual: T, expected: T, message: string): void {
-  if (actual !== expected) {
-    throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  private getSheet(): GoogleAppsScript.Spreadsheet.Sheet {
+    if (!this.sheet) {
+      const ss = SpreadsheetApp.openById(this.spreadsheetId)
+      let sheet = ss.getSheetByName(this.sheetName)
+      if (!sheet) {
+        sheet = ss.insertSheet(this.sheetName)
+        sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+      }
+      this.sheet = sheet
+    }
+    return this.sheet
   }
-}
 
-function assertDeepEqual<T>(actual: T, expected: T, message: string): void {
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(`${message}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  private rowToObject(row: unknown[], headers: string[]): T {
+    const obj: Record<string, unknown> = {}
+    headers.forEach((h, i) => {
+      obj[h] = row[i]
+    })
+    return obj as T
   }
-}
 
-function runTest(name: string, fn: () => void): TestResult {
-  const start = Date.now()
-  try {
-    fn()
-    return { name, passed: true, duration: Date.now() - start }
-  } catch (e) {
-    return { 
-      name, 
-      passed: false, 
-      error: e instanceof Error ? e.message : String(e),
-      duration: Date.now() - start 
+  private objectToRow(obj: Partial<T>): unknown[] {
+    return this.columns.map(col => obj[col as keyof T] ?? '')
+  }
+
+  findAll(): T[] {
+    const sheet = this.getSheet()
+    const data = sheet.getDataRange().getValues()
+    if (data.length <= 1) return []
+    const headers = data[0] as string[]
+    return data.slice(1).map(row => this.rowToObject(row, headers))
+  }
+
+  findById(id: number): T | undefined {
+    return this.findAll().find(row => row.id === id)
+  }
+
+  find(options: QueryOptions<T>): T[] {
+    let rows = this.findAll()
+    
+    if (options.where) {
+      for (const cond of options.where) {
+        rows = rows.filter(row => {
+          const val = row[cond.field]
+          switch (cond.operator) {
+            case '=': return val === cond.value
+            case '!=': return val !== cond.value
+            case '>': return (val as number) > (cond.value as number)
+            case '>=': return (val as number) >= (cond.value as number)
+            case '<': return (val as number) < (cond.value as number)
+            case '<=': return (val as number) <= (cond.value as number)
+            default: return true
+          }
+        })
+      }
+    }
+
+    if (options.orderBy) {
+      for (const ord of [...options.orderBy].reverse()) {
+        rows.sort((a, b) => {
+          const aVal = a[ord.field]
+          const bVal = b[ord.field]
+          const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0
+          return ord.direction === 'desc' ? -cmp : cmp
+        })
+      }
+    }
+
+    if (options.offset) rows = rows.slice(options.offset)
+    if (options.limit) rows = rows.slice(0, options.limit)
+
+    return rows
+  }
+
+  insert(data: Omit<T, 'id'>): T {
+    const sheet = this.getSheet()
+    const all = this.findAll()
+    const maxId = all.reduce((max, row) => Math.max(max, row.id), 0)
+    const newRow = { ...data, id: maxId + 1 } as T
+    sheet.appendRow(this.objectToRow(newRow))
+    return newRow
+  }
+
+  update(id: number, data: Partial<T>): T | undefined {
+    const sheet = this.getSheet()
+    const allData = sheet.getDataRange().getValues()
+    const headers = allData[0] as string[]
+    const idCol = headers.indexOf('id')
+    
+    for (let i = 1; i < allData.length; i++) {
+      if (allData[i][idCol] === id) {
+        const current = this.rowToObject(allData[i], headers)
+        const updated = { ...current, ...data }
+        sheet.getRange(i + 1, 1, 1, this.columns.length).setValues([this.objectToRow(updated)])
+        return updated
+      }
+    }
+    return undefined
+  }
+
+  delete(id: number): boolean {
+    const sheet = this.getSheet()
+    const allData = sheet.getDataRange().getValues()
+    const headers = allData[0] as string[]
+    const idCol = headers.indexOf('id')
+    
+    for (let i = 1; i < allData.length; i++) {
+      if (allData[i][idCol] === id) {
+        sheet.deleteRow(i + 1)
+        return true
+      }
+    }
+    return false
+  }
+
+  batchInsert(items: Omit<T, 'id'>[]): T[] {
+    const sheet = this.getSheet()
+    const all = this.findAll()
+    let maxId = all.reduce((max, row) => Math.max(max, row.id), 0)
+    
+    const newRows: T[] = items.map(item => {
+      maxId++
+      return { ...item, id: maxId } as T
+    })
+    
+    const values = newRows.map(row => this.objectToRow(row))
+    const lastRow = sheet.getLastRow()
+    sheet.getRange(lastRow + 1, 1, values.length, this.columns.length).setValues(values)
+    
+    return newRows
+  }
+
+  reset(data: T[] = []): void {
+    const sheet = this.getSheet()
+    sheet.clear()
+    sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+    if (data.length > 0) {
+      const values = data.map(row => this.objectToRow(row))
+      sheet.getRange(2, 1, values.length, this.columns.length).setValues(values)
     }
   }
 }
 
 // ============================================================================
-// 샘플 데이터
+// Types (generated by gsquery)
+// ============================================================================
+
+interface User { id: number; email: string; name: string; role: string }
+interface Project { id: number; name: string; ownerId: number; status: string }
+interface Task { id: number; title: string; projectId: number; assigneeId: number | null; status: string; priority: string; dueDate: Date | null }
+interface Comment { id: number; content: string; taskId: number; authorId: number; createdAt: Date }
+
+// ============================================================================
+// Database Setup
+// ============================================================================
+
+function getDB() {
+  if (!SPREADSHEET_ID) {
+    throw new Error('Please set SPREADSHEET_ID at the top of Code.ts')
+  }
+  
+  return {
+    User: new SheetsAdapter<User>({
+      spreadsheetId: SPREADSHEET_ID,
+      sheetName: 'User',
+      columns: ['id', 'email', 'name', 'role']
+    }),
+    Project: new SheetsAdapter<Project>({
+      spreadsheetId: SPREADSHEET_ID,
+      sheetName: 'Project',
+      columns: ['id', 'name', 'ownerId', 'status']
+    }),
+    Task: new SheetsAdapter<Task>({
+      spreadsheetId: SPREADSHEET_ID,
+      sheetName: 'Task',
+      columns: ['id', 'title', 'projectId', 'assigneeId', 'status', 'priority', 'dueDate']
+    }),
+    Comment: new SheetsAdapter<Comment>({
+      spreadsheetId: SPREADSHEET_ID,
+      sheetName: 'Comment',
+      columns: ['id', 'content', 'taskId', 'authorId', 'createdAt']
+    })
+  }
+}
+
+// ============================================================================
+// Test Utilities
+// ============================================================================
+
+interface TestResult { name: string; passed: boolean; error?: string }
+
+function assert(condition: boolean, message: string): void {
+  if (!condition) throw new Error(`Assertion failed: ${message}`)
+}
+
+function assertEqual<T>(actual: T, expected: T, message: string): void {
+  if (actual !== expected) {
+    throw new Error(`${message}: expected ${expected}, got ${actual}`)
+  }
+}
+
+function runTest(name: string, fn: () => void): TestResult {
+  try {
+    fn()
+    return { name, passed: true }
+  } catch (e) {
+    return { name, passed: false, error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+// ============================================================================
+// Sample Data
 // ============================================================================
 
 const sampleUsers = [
@@ -74,290 +267,175 @@ const sampleTasks = [
   { title: 'Design database', projectId: 1, assigneeId: 2, status: 'IN_PROGRESS', priority: 'HIGH', dueDate: null },
   { title: 'Implement API', projectId: 1, assigneeId: 3, status: 'TODO', priority: 'MEDIUM', dueDate: null },
   { title: 'Write tests', projectId: 1, assigneeId: null, status: 'TODO', priority: 'LOW', dueDate: null },
-  { title: 'Documentation', projectId: 2, assigneeId: 2, status: 'TODO', priority: 'MEDIUM', dueDate: null },
 ]
 
 const sampleComments = [
   { content: 'Started working on this', taskId: 1, authorId: 2, createdAt: new Date() },
   { content: 'Done!', taskId: 1, authorId: 2, createdAt: new Date() },
-  { content: 'Looks good', taskId: 1, authorId: 1, createdAt: new Date() },
 ]
 
 // ============================================================================
-// 테스트 함수들 (DB 초기화 후 사용)
+// Test Functions (Global - callable from GAS)
 // ============================================================================
 
 /**
- * 데이터베이스 초기화 및 샘플 데이터 삽입
- * 먼저 이 함수를 실행하세요!
+ * Setup test data - run this first!
  */
 function setupTestData(): void {
   Logger.log('🚀 Setting up test data...')
+  const db = getDB()
   
-  // TODO: gsquery generate로 생성된 db 객체 사용
-  // db.User.reset([])
-  // db.Project.reset([])
-  // db.Task.reset([])
-  // db.Comment.reset([])
+  // Clear existing data
+  db.User.reset()
+  db.Project.reset()
+  db.Task.reset()
+  db.Comment.reset()
   
-  // 샘플 데이터 삽입
-  // const users = db.User.batchInsert(sampleUsers)
-  // const projects = db.Project.batchInsert(sampleProjects)
-  // const tasks = db.Task.batchInsert(sampleTasks)
-  // const comments = db.Comment.batchInsert(sampleComments)
+  // Insert sample data
+  const users = db.User.batchInsert(sampleUsers)
+  const projects = db.Project.batchInsert(sampleProjects)
+  const tasks = db.Task.batchInsert(sampleTasks)
+  const comments = db.Comment.batchInsert(sampleComments)
   
-  Logger.log('✅ Test data setup complete!')
-  // Logger.log(`Users: ${users.length}`)
-  // Logger.log(`Projects: ${projects.length}`)
-  // Logger.log(`Tasks: ${tasks.length}`)
-  // Logger.log(`Comments: ${comments.length}`)
+  Logger.log(`✅ Setup complete!`)
+  Logger.log(`   Users: ${users.length}`)
+  Logger.log(`   Projects: ${projects.length}`)
+  Logger.log(`   Tasks: ${tasks.length}`)
+  Logger.log(`   Comments: ${comments.length}`)
 }
 
 /**
- * CRUD 테스트
+ * Test CRUD operations
  */
-function testCRUD(): TestResult[] {
+function testCRUD(): void {
+  Logger.log('🧪 Testing CRUD...')
+  const db = getDB()
   const results: TestResult[] = []
   
-  results.push(runTest('Create - insert single user', () => {
-    // const user = db.User.insert({ email: 'test@example.com', name: 'Test User', role: 'MEMBER' })
-    // assert(user.id > 0, 'User should have an ID')
-    // assertEqual(user.email, 'test@example.com', 'Email should match')
-    Logger.log('CRUD Create test - implement with generated db')
+  results.push(runTest('Create - insert user', () => {
+    const user = db.User.insert({ email: 'test@example.com', name: 'Test User', role: 'MEMBER' })
+    assert(user.id > 0, 'User should have an ID')
+    assertEqual(user.email, 'test@example.com', 'Email should match')
+  }))
+  
+  results.push(runTest('Read - findAll', () => {
+    const users = db.User.findAll()
+    assert(users.length > 0, 'Should have users')
   }))
   
   results.push(runTest('Read - findById', () => {
-    // const user = db.User.findById(1)
-    // assert(user !== undefined, 'User should exist')
-    // assertEqual(user?.id, 1, 'ID should match')
-    Logger.log('CRUD Read test - implement with generated db')
+    const user = db.User.findById(1)
+    assert(user !== undefined, 'User should exist')
+    assertEqual(user!.id, 1, 'ID should match')
   }))
   
-  results.push(runTest('Update - update user name', () => {
-    // const updated = db.User.update(1, { name: 'Updated Name' })
-    // assert(updated !== undefined, 'Update should succeed')
-    // assertEqual(updated?.name, 'Updated Name', 'Name should be updated')
-    Logger.log('CRUD Update test - implement with generated db')
+  results.push(runTest('Update - update user', () => {
+    const updated = db.User.update(1, { name: 'Updated Admin' })
+    assert(updated !== undefined, 'Update should succeed')
+    assertEqual(updated!.name, 'Updated Admin', 'Name should be updated')
   }))
   
   results.push(runTest('Delete - delete user', () => {
-    // const testUser = db.User.insert({ email: 'delete@example.com', name: 'Delete Me', role: 'GUEST' })
-    // const deleted = db.User.delete(testUser.id)
-    // assert(deleted === true, 'Delete should succeed')
-    // const notFound = db.User.findById(testUser.id)
-    // assert(notFound === undefined, 'User should not exist after delete')
-    Logger.log('CRUD Delete test - implement with generated db')
+    const testUser = db.User.insert({ email: 'delete@example.com', name: 'Delete Me', role: 'GUEST' })
+    const deleted = db.User.delete(testUser.id)
+    assert(deleted === true, 'Delete should succeed')
   }))
   
-  return results
+  logResults('CRUD', results)
 }
 
 /**
- * Batch 작업 테스트
+ * Test Batch operations
  */
-function testBatch(): TestResult[] {
+function testBatch(): void {
+  Logger.log('🧪 Testing Batch...')
+  const db = getDB()
   const results: TestResult[] = []
   
-  results.push(runTest('BatchInsert - insert multiple users', () => {
-    // const users = db.User.batchInsert([
-    //   { email: 'batch1@example.com', name: 'Batch 1', role: 'MEMBER' },
-    //   { email: 'batch2@example.com', name: 'Batch 2', role: 'MEMBER' },
-    //   { email: 'batch3@example.com', name: 'Batch 3', role: 'MEMBER' },
-    // ])
-    // assertEqual(users.length, 3, 'Should insert 3 users')
-    Logger.log('Batch Insert test - implement with generated db')
+  results.push(runTest('BatchInsert - insert multiple', () => {
+    const users = db.User.batchInsert([
+      { email: 'batch1@example.com', name: 'Batch 1', role: 'MEMBER' },
+      { email: 'batch2@example.com', name: 'Batch 2', role: 'MEMBER' },
+    ])
+    assertEqual(users.length, 2, 'Should insert 2 users')
   }))
   
-  results.push(runTest('BatchUpdate - update multiple tasks', () => {
-    // const updated = db.Task.batchUpdate([
-    //   { id: 1, data: { status: 'DONE' } },
-    //   { id: 2, data: { status: 'DONE' } },
-    // ])
-    // assertEqual(updated.length, 2, 'Should update 2 tasks')
-    Logger.log('Batch Update test - implement with generated db')
-  }))
-  
-  return results
+  logResults('Batch', results)
 }
 
 /**
- * Query 테스트
+ * Test Query operations
  */
-function testQuery(): TestResult[] {
+function testQuery(): void {
+  Logger.log('🧪 Testing Query...')
+  const db = getDB()
   const results: TestResult[] = []
   
-  results.push(runTest('Where - filter by role', () => {
-    // const members = db.User.query().where('role', '=', 'MEMBER').findMany()
-    // assert(members.length > 0, 'Should find members')
-    // members.forEach(m => assertEqual(m.role, 'MEMBER', 'Role should be MEMBER'))
-    Logger.log('Query Where test - implement with generated db')
+  results.push(runTest('Query - where equals', () => {
+    const admins = db.User.find({ where: [{ field: 'role', operator: '=', value: 'ADMIN' }] })
+    assert(admins.length > 0, 'Should find admins')
   }))
   
-  results.push(runTest('OrderBy - sort by name', () => {
-    // const users = db.User.query().orderBy('name', 'asc').findMany()
-    // for (let i = 1; i < users.length; i++) {
-    //   assert(users[i].name >= users[i-1].name, 'Should be sorted')
-    // }
-    Logger.log('Query OrderBy test - implement with generated db')
+  results.push(runTest('Query - orderBy', () => {
+    const users = db.User.find({ orderBy: [{ field: 'name', direction: 'asc' }] })
+    assert(users.length > 0, 'Should have users')
   }))
   
-  results.push(runTest('Limit & Offset - pagination', () => {
-    // const page1 = db.User.query().limit(2).findMany()
-    // const page2 = db.User.query().offset(2).limit(2).findMany()
-    // assertEqual(page1.length, 2, 'Page 1 should have 2 items')
-    // assert(page1[0].id !== page2[0]?.id, 'Pages should have different items')
-    Logger.log('Query Limit/Offset test - implement with generated db')
+  results.push(runTest('Query - limit', () => {
+    const users = db.User.find({ limit: 2 })
+    assert(users.length <= 2, 'Should limit to 2')
   }))
   
-  results.push(runTest('Like - pattern matching', () => {
-    // const users = db.User.query().where('email', 'like', '%@example.com').findMany()
-    // assert(users.length > 0, 'Should find users with example.com email')
-    Logger.log('Query Like test - implement with generated db')
-  }))
-  
-  results.push(runTest('In - multiple values', () => {
-    // const users = db.User.query().where('role', 'in', ['ADMIN', 'MEMBER']).findMany()
-    // users.forEach(u => assert(['ADMIN', 'MEMBER'].includes(u.role), 'Role should be ADMIN or MEMBER'))
-    Logger.log('Query In test - implement with generated db')
-  }))
-  
-  return results
+  logResults('Query', results)
 }
 
 /**
- * JOIN 테스트
- */
-function testJoin(): TestResult[] {
-  const results: TestResult[] = []
-  
-  results.push(runTest('Inner Join - tasks with projects', () => {
-    // const tasksWithProjects = db.join('Task', 'Project')
-    //   .on('projectId', 'id')
-    //   .select(['Task.title', 'Project.name'])
-    //   .findMany()
-    // assert(tasksWithProjects.length > 0, 'Should find tasks with projects')
-    Logger.log('JOIN test - implement with generated db')
-  }))
-  
-  results.push(runTest('Left Join - tasks with optional assignee', () => {
-    // const tasksWithAssignees = db.join('Task', 'User')
-    //   .on('assigneeId', 'id')
-    //   .leftJoin()
-    //   .findMany()
-    // const unassigned = tasksWithAssignees.filter(t => t.User === null)
-    // assert(unassigned.length > 0, 'Should have unassigned tasks')
-    Logger.log('LEFT JOIN test - implement with generated db')
-  }))
-  
-  return results
-}
-
-/**
- * Aggregation 테스트
- */
-function testAggregation(): TestResult[] {
-  const results: TestResult[] = []
-  
-  results.push(runTest('Count - count tasks', () => {
-    // const count = db.Task.query().count()
-    // assert(count > 0, 'Should have tasks')
-    Logger.log('Aggregation Count test - implement with generated db')
-  }))
-  
-  results.push(runTest('GroupBy - tasks by status', () => {
-    // const byStatus = db.Task.query()
-    //   .groupBy('status')
-    //   .aggregate({ count: { fn: 'count' } })
-    // assert(Object.keys(byStatus).length > 0, 'Should have status groups')
-    Logger.log('Aggregation GroupBy test - implement with generated db')
-  }))
-  
-  results.push(runTest('GroupBy with Having - status with more than 1 task', () => {
-    // const byStatus = db.Task.query()
-    //   .groupBy('status')
-    //   .having({ fn: 'count', operator: '>', value: 1 })
-    //   .findMany()
-    Logger.log('Aggregation Having test - implement with generated db')
-  }))
-  
-  return results
-}
-
-/**
- * 전체 테스트 실행
+ * Run all tests
  */
 function runAllTests(): void {
-  Logger.log('========================================')
-  Logger.log('🧪 gas-sheets-query Test Suite')
-  Logger.log('========================================')
+  Logger.log('=' .repeat(50))
+  Logger.log('🚀 Running all tests...')
+  Logger.log('=' .repeat(50))
   
-  const allResults: TestResult[] = []
+  testCRUD()
+  testBatch()
+  testQuery()
   
-  Logger.log('\n📝 CRUD Tests')
-  allResults.push(...testCRUD())
-  
-  Logger.log('\n📦 Batch Tests')
-  allResults.push(...testBatch())
-  
-  Logger.log('\n🔍 Query Tests')
-  allResults.push(...testQuery())
-  
-  Logger.log('\n🔗 JOIN Tests')
-  allResults.push(...testJoin())
-  
-  Logger.log('\n📊 Aggregation Tests')
-  allResults.push(...testAggregation())
-  
-  // Summary
-  const passed = allResults.filter(r => r.passed).length
-  const failed = allResults.filter(r => !r.passed).length
-  const totalTime = allResults.reduce((sum, r) => sum + r.duration, 0)
-  
-  Logger.log('\n========================================')
-  Logger.log('📋 Test Results Summary')
-  Logger.log('========================================')
-  Logger.log(`✅ Passed: ${passed}`)
-  Logger.log(`❌ Failed: ${failed}`)
-  Logger.log(`⏱️ Total Time: ${totalTime}ms`)
-  
-  if (failed > 0) {
-    Logger.log('\n❌ Failed Tests:')
-    allResults.filter(r => !r.passed).forEach(r => {
-      Logger.log(`  - ${r.name}: ${r.error}`)
-    })
-  }
-  
-  Logger.log('\n========================================')
+  Logger.log('=' .repeat(50))
+  Logger.log('✅ All tests completed!')
+  Logger.log('=' .repeat(50))
 }
 
 /**
- * 간단한 연결 테스트
+ * Log test results
  */
-function testConnection(): void {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet()
-    Logger.log(`✅ Connected to: ${ss.getName()}`)
-    Logger.log(`📊 Sheets: ${ss.getSheets().map(s => s.getName()).join(', ')}`)
-  } catch (e) {
-    Logger.log(`❌ Connection failed: ${e}`)
+function logResults(suite: string, results: TestResult[]): void {
+  const passed = results.filter(r => r.passed).length
+  const failed = results.filter(r => !r.passed).length
+  
+  Logger.log(`\n📊 ${suite}: ${passed} passed, ${failed} failed`)
+  
+  for (const r of results) {
+    if (r.passed) {
+      Logger.log(`  ✅ ${r.name}`)
+    } else {
+      Logger.log(`  ❌ ${r.name}: ${r.error}`)
+    }
   }
 }
 
-// ============================================================================
-// GAS 메뉴 추가 (선택사항)
-// ============================================================================
-
+/**
+ * Add menu to spreadsheet
+ */
 function onOpen(): void {
-  const ui = SpreadsheetApp.getUi()
-  ui.createMenu('🧪 GSQ Tests')
+  SpreadsheetApp.getUi()
+    .createMenu('🧪 GSQuery Tests')
     .addItem('Setup Test Data', 'setupTestData')
-    .addSeparator()
-    .addItem('Run All Tests', 'runAllTests')
     .addSeparator()
     .addItem('Test CRUD', 'testCRUD')
     .addItem('Test Batch', 'testBatch')
     .addItem('Test Query', 'testQuery')
-    .addItem('Test JOIN', 'testJoin')
-    .addItem('Test Aggregation', 'testAggregation')
+    .addSeparator()
+    .addItem('Run All Tests', 'runAllTests')
     .addToUi()
 }

@@ -1,0 +1,17 @@
+{
+  "name": "gsquery-test-app",
+  "private": true,
+  "scripts": {
+    "generate": "gsquery generate --schema schema.gsq.yaml --output src/generated",
+    "build": "esbuild src/Code.ts --bundle --outfile=dist/Code.js --format=iife --global-name=GSQueryTest",
+    "push": "npm run build && clasp push",
+    "open": "clasp open"
+  },
+  "devDependencies": {
+    "@gsquery/cli": "workspace:*",
+    "esbuild": "^0.20.0"
+  },
+  "dependencies": {
+    "@gsquery/core": "workspace:*"
+  }
+}
