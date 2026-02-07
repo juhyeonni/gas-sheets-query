@@ -54,12 +54,21 @@ function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition<T>[]):
   return 0
 }
 
+/** ID generation mode */
+export type IdMode = 'auto' | 'client'
+
 /** MockAdapter 설정 옵션 */
 export interface MockAdapterOptions<T extends Row = Row> {
   /** 초기 데이터 */
   initialData?: T[]
   /** 인덱스 정의 (스키마 기반) */
   indexes?: IndexDefinition[]
+  /** 
+   * ID generation mode (default: 'auto')
+   * - 'auto': server generates numeric IDs (default, backward compatible)
+   * - 'client': client provides IDs (UUID, string, etc.)
+   */
+  idMode?: IdMode
 }
 
 /**
@@ -73,24 +82,29 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
   private idIndex: Map<string | number, number> = new Map()
   /** Column indexes for query optimization */
   private indexStore: IndexStore<T>
+  /** ID generation mode */
+  private idMode: IdMode
 
   constructor(initialData?: T[] | MockAdapterOptions<T>) {
     // 호환성: 배열 또는 옵션 객체 모두 지원
     let data: T[] = []
     let indexes: IndexDefinition[] = []
+    let idMode: IdMode = 'auto'
     
     if (Array.isArray(initialData)) {
       data = initialData
     } else if (initialData) {
       data = initialData.initialData || []
       indexes = initialData.indexes || []
+      idMode = initialData.idMode ?? 'auto'
     }
     
+    this.idMode = idMode
     this.indexStore = new IndexStore<T>(indexes)
     this.data = [...data]
     this.rebuildIndex()
     
-    // Update nextId based on existing data
+    // Update nextId based on existing data (for auto mode)
     if (data.length > 0) {
       const maxId = Math.max(...data.map(r => 
         typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
@@ -255,12 +269,24 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
     return this.data[index]
   }
 
-  insert(data: Omit<T, 'id'>): T {
-    const id = this.nextId++
-    const newRow = { ...data, id } as T
+  insert(data: Omit<T, 'id'> | T): T {
+    let newRow: T
+    
+    if (this.idMode === 'client') {
+      // Client mode: use client-provided ID
+      if (!('id' in data)) {
+        throw new Error(`ID is required in client mode (idMode: 'client')`)
+      }
+      newRow = data as T
+    } else {
+      // Auto mode: server generates numeric ID (default, backward compatible)
+      const id = this.nextId++
+      newRow = { ...data, id } as T
+    }
+    
     const index = this.data.length
     this.data.push(newRow)
-    this.idIndex.set(id, index)
+    this.idIndex.set(newRow.id, index)
     // Update column indexes
     this.indexStore.addToIndex(index, newRow)
     return newRow
@@ -310,16 +336,28 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
    * Batch insert multiple rows at once
    * More efficient than calling insert() in a loop
    */
-  batchInsert(data: Omit<T, 'id'>[]): T[] {
+  batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
     const results: T[] = []
     const startIndex = this.data.length
     
-    for (let i = 0; i < data.length; i++) {
-      const id = this.nextId++
-      const newRow = { ...data[i], id } as T
+    for (let i = 0; i < items.length; i++) {
+      let newRow: T
+      
+      if (this.idMode === 'client') {
+        // Client mode: use client-provided ID
+        if (!('id' in items[i])) {
+          throw new Error(`ID is required in client mode (idMode: 'client')`)
+        }
+        newRow = items[i] as T
+      } else {
+        // Auto mode: server generates numeric ID
+        const id = this.nextId++
+        newRow = { ...items[i], id } as T
+      }
+      
       const rowIndex = startIndex + i
       this.data.push(newRow)
-      this.idIndex.set(id, rowIndex)
+      this.idIndex.set(newRow.id, rowIndex)
       // Update column indexes
       this.indexStore.addToIndex(rowIndex, newRow)
       results.push(newRow)

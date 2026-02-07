@@ -56,6 +56,9 @@ function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition<T>[]):
   return 0
 }
 
+/** ID generation mode */
+export type IdMode = 'auto' | 'client'
+
 /** SheetsAdapter 설정 옵션 */
 export interface SheetsAdapterOptions {
   /** Spreadsheet ID (optional - uses active spreadsheet if not provided) */
@@ -68,6 +71,12 @@ export interface SheetsAdapterOptions {
   createIfNotExists?: boolean
   /** ID column name (default: 'id') */
   idColumn?: string
+  /** 
+   * ID generation mode (default: 'auto')
+   * - 'auto': server generates numeric IDs (default, backward compatible)
+   * - 'client': client provides IDs (UUID, string, etc.)
+   */
+  idMode?: IdMode
 }
 
 // GAS type declarations (for TypeScript in GAS environment)
@@ -102,12 +111,13 @@ declare namespace GoogleAppsScript.Spreadsheet {
  * Google Sheets DataStore implementation
  * Provides CRUD operations on a single sheet
  */
-export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<T> {
+export class SheetsAdapter<T extends Row & { id: string | number }> implements DataStore<T> {
   private spreadsheetId?: string
   private sheetName: string
   private columns: string[]
   private idColumn: string
   private createIfNotExists: boolean
+  private idMode: IdMode
   
   // Cache for performance
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
@@ -119,6 +129,7 @@ export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<
     this.columns = options.columns
     this.idColumn = options.idColumn || 'id'
     this.createIfNotExists = options.createIfNotExists ?? true
+    this.idMode = options.idMode ?? 'auto'
     
     // Validate that id column is in columns
     if (!this.columns.includes(this.idColumn)) {
@@ -209,7 +220,7 @@ export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<
   }
 
   /** Find row index by ID (1-indexed, returns -1 if not found) */
-  private findRowIndexById(id: number): number {
+  private findRowIndexById(id: string | number): number {
     const sheet = this.getSheet()
     const lastRow = sheet.getLastRow()
     
@@ -219,7 +230,8 @@ export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<
     const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
     const ids = idRange.getValues().flat()
     
-    const rowOffset = ids.findIndex(rowId => rowId === id)
+    // Support both string and number comparison
+    const rowOffset = ids.findIndex(rowId => rowId === id || String(rowId) === String(id))
     return rowOffset === -1 ? -1 : rowOffset + 2 // +2 for header row and 1-indexing
   }
 
@@ -239,7 +251,7 @@ export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<
       .map(row => this.rowToObject(row))
   }
 
-  findById(id: number): T | undefined {
+  findById(id: string | number): T | undefined {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
     
@@ -277,19 +289,29 @@ export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<
     return result
   }
 
-  insert(data: Omit<T, 'id'>): T {
+  insert(data: Omit<T, 'id'> | T): T {
     const sheet = this.getSheet()
-    const id = this.getNextId()
     
-    const newRow = { ...data, [this.idColumn]: id } as T
-    const rowValues = this.objectToRow(newRow)
-    
-    sheet.appendRow(rowValues)
-    
-    return newRow
+    if (this.idMode === 'client') {
+      // Client mode: use client-provided ID
+      if (!(this.idColumn in (data as Record<string, unknown>))) {
+        throw new Error(`ID is required in client mode (idMode: 'client')`)
+      }
+      const newRow = data as T
+      const rowValues = this.objectToRow(newRow)
+      sheet.appendRow(rowValues)
+      return newRow
+    } else {
+      // Auto mode: server generates numeric ID (default, backward compatible)
+      const id = this.getNextId()
+      const newRow = { ...data, [this.idColumn]: id } as T
+      const rowValues = this.objectToRow(newRow)
+      sheet.appendRow(rowValues)
+      return newRow
+    }
   }
 
-  update(id: number, data: Partial<Omit<T, 'id'>>): T | undefined {
+  update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
     
@@ -305,7 +327,7 @@ export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<
     return updatedRow
   }
 
-  delete(id: number): boolean {
+  delete(id: string | number): boolean {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return false
     
@@ -315,20 +337,32 @@ export class SheetsAdapter<T extends Row & { id: number }> implements DataStore<
     return true
   }
 
-  batchInsert(items: Omit<T, 'id'>[]): T[] {
+  batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
     if (items.length === 0) return []
     
     const sheet = this.getSheet()
-    let nextId = this.getNextId()
-    
     const results: T[] = []
     const rowsToInsert: unknown[][] = []
     
-    for (const data of items) {
-      const newRow = { ...data, [this.idColumn]: nextId } as T
-      results.push(newRow)
-      rowsToInsert.push(this.objectToRow(newRow))
-      nextId++
+    if (this.idMode === 'client') {
+      // Client mode: use client-provided IDs
+      for (const data of items) {
+        if (!(this.idColumn in (data as Record<string, unknown>))) {
+          throw new Error(`ID is required in client mode (idMode: 'client')`)
+        }
+        const newRow = data as T
+        results.push(newRow)
+        rowsToInsert.push(this.objectToRow(newRow))
+      }
+    } else {
+      // Auto mode: server generates numeric IDs
+      let nextId = this.getNextId()
+      for (const data of items) {
+        const newRow = { ...data, [this.idColumn]: nextId } as T
+        results.push(newRow)
+        rowsToInsert.push(this.objectToRow(newRow))
+        nextId++
+      }
     }
     
     // Batch write all rows at once

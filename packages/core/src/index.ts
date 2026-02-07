@@ -35,8 +35,8 @@ export { createSheetsDB, defineSheetsDB } from './core/sheets-db'
 export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOptions } from './core/sheets-db'
 
 // Adapters
-export { MockAdapter, MockAdapterOptions } from './adapters/mock-adapter'
-export { SheetsAdapter, SheetsAdapterOptions } from './adapters/sheets-adapter'
+export { MockAdapter, MockAdapterOptions, IdMode as MockIdMode } from './adapters/mock-adapter'
+export { SheetsAdapter, SheetsAdapterOptions, IdMode } from './adapters/sheets-adapter'
 
 // Index Store
 export { IndexStore, IndexDefinition, createIndexKey, serializeValues } from './core/index-store'
@@ -88,4 +88,4 @@ export type {
   StoreResolver as MigrationStoreResolver
 } from './core/migration'
 
-export const VERSION = '0.2.0'
+export const VERSION = '0.2.1'
