@@ -10,7 +10,7 @@ test-app/
 ├── appsscript.json       # GAS 매니페스트
 ├── src/
 │   └── Code.ts           # GAS 진입점 + 테스트 함수들
-├── generated/            # gsq generate로 생성되는 파일들
+├── generated/            # gsquery generate로 생성되는 파일들
 │   ├── types.ts
 │   ├── client.ts
 │   └── index.ts
@@ -48,7 +48,7 @@ clasp clone {SCRIPT_ID}
 ```bash
 # 스키마에서 타입 및 클라이언트 생성
 cd ../..
-npx gsq generate examples/test-app/schema.gsq.yaml -o examples/test-app/generated
+npx gsqueryuery generate examples/test-app/schema.gsq.yaml -o examples/test-app/generated
 
 # GAS에 푸시
 cd examples/test-app
@@ -129,4 +129,4 @@ clasp push
 - 스프레드시트에 대한 편집 권한이 있는지 확인하세요.
 
 ### 타입 에러
-- `generated/` 폴더가 비어있다면 `gsq generate`를 실행하세요.
+- `generated/` 폴더가 비어있다면 `gsquery generate`를 실행하세요.

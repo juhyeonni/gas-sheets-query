@@ -50,7 +50,7 @@ tables:
 ### 3. Generate Types
 
 ```bash
-npx gsq generate
+npx gsqueryuery generate
 ```
 
 ### 4. Usage
@@ -90,23 +90,23 @@ const admins = db.from('users')
 
 | Command | Description |
 |---------|-------------|
-| `gsq init` | Initialize project (creates gsq.config.json) |
-| `gsq generate` | Generate types/client code from schema |
-| `gsq migration:create <name>` | Create new migration file |
-| `gsq migrate` | Run migrations |
-| `gsq rollback` | Rollback last migration |
+| `gsquery init` | Initialize project (creates gsq.config.json) |
+| `gsquery generate` | Generate types/client code from schema |
+| `gsquery migration:create <name>` | Create new migration file |
+| `gsquery migrate` | Run migrations |
+| `gsquery rollback` | Rollback last migration |
 
 ```bash
 # Initialize
-npx gsq init --spreadsheet-id YOUR_SPREADSHEET_ID
+npx gsqueryuery init --spreadsheet-id YOUR_SPREADSHEET_ID
 
 # Generate types
-npx gsq generate
+npx gsqueryuery generate
 
 # Migration
-npx gsq migration:create add_users_table
-npx gsq migrate
-npx gsq rollback
+npx gsqueryuery migration:create add_users_table
+npx gsqueryuery migrate
+npx gsqueryuery rollback
 ```
 
 ## 📚 Documentation
@@ -186,7 +186,7 @@ export const migration = {
 ## 🗺 Roadmap
 
 - [x] v0.1 - Core (MVP): Basic CRUD + Query Builder
-- [x] v0.5 - Schema Generator: CLI (`gsq generate`), type/client code generation
+- [x] v0.5 - Schema Generator: CLI (`gsquery generate`), type/client code generation
 - [ ] v0.6 - Performance: Optimization, Batch, Indexing
 - [ ] v0.7 - Advanced Query: Visualization API, JOIN, Aggregation
 - [ ] v0.8 - DX: Migration, Documentation

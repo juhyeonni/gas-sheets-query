@@ -5,7 +5,7 @@
  * clasp를 통해 배포 후 Apps Script 에디터에서 실행하세요.
  */
 
-// 생성된 클라이언트 import (gsq generate로 생성)
+// 생성된 클라이언트 import (gsquery generate로 생성)
 // import { db } from './generated'
 
 // ============================================================================
@@ -94,7 +94,7 @@ const sampleComments = [
 function setupTestData(): void {
   Logger.log('🚀 Setting up test data...')
   
-  // TODO: gsq generate로 생성된 db 객체 사용
+  // TODO: gsquery generate로 생성된 db 객체 사용
   // db.User.reset([])
   // db.Project.reset([])
   // db.Task.reset([])

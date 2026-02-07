@@ -1,5 +1,5 @@
 /**
- * Init command - initialize gsq configuration
+ * Init command - initialize gsquery configuration
  * 
  * Issue #12
  */
@@ -107,11 +107,11 @@ export function loadConfig(): GSQConfig | null {
 // =============================================================================
 
 export const initCommand = new Command('init')
-  .description('Initialize gsq configuration file')
+  .description('Initialize gsquery configuration file')
   .option('-s, --spreadsheet-id <id>', 'Google Spreadsheet ID')
   .option('-f, --force', 'Overwrite existing config file')
   .action((options: InitOptions) => {
-    console.log('🔧 Initializing gsq configuration...')
+    console.log('🔧 Initializing gsquery configuration...')
     console.log('')
     
     const result = runInit(options)
@@ -132,8 +132,8 @@ export const initCommand = new Command('init')
     
     console.log('📝 Next steps:')
     console.log('   1. Create your schema file: schema.gsq.yaml')
-    console.log('   2. Generate types: gsq generate')
-    console.log('   3. Create migrations: gsq migration:create <name>')
+    console.log('   2. Generate types: gsquery generate')
+    console.log('   3. Create migrations: gsquery migration:create <name>')
     console.log('')
     console.log('🎉 Done!')
   })

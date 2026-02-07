@@ -40,7 +40,7 @@ yarn add gas-sheets-query
 ### 1. Generate Config File with CLI
 
 ```bash
-npx gsq init --spreadsheet-id YOUR_SPREADSHEET_ID
+npx gsqueryuery init --spreadsheet-id YOUR_SPREADSHEET_ID
 ```
 
 This command creates a `gsq.config.json` file:
@@ -160,7 +160,7 @@ For detailed syntax, see [Schema Syntax](./schema-syntax.md).
 ### 1. Generate Types Command
 
 ```bash
-npx gsq generate
+npx gsqueryuery generate
 ```
 
 ### 2. Generated Output

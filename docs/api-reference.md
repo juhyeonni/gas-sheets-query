@@ -448,12 +448,12 @@ interface SchemaBuilder {
 
 ## CLI Commands
 
-### gsq init
+### gsquery init
 
 Initialize project.
 
 ```bash
-gsq init [options]
+gsquery init [options]
 
 Options:
   -s, --spreadsheet-id <id>   Google Spreadsheet ID
@@ -471,12 +471,12 @@ Generated `gsq.config.json`:
 }
 ```
 
-### gsq generate
+### gsquery generate
 
 Generate types and client from schema.
 
 ```bash
-gsq generate [options]
+gsquery generate [options]
 
 Options:
   -s, --schema <path>     Schema file path (default: schema.gsq.yaml)
@@ -487,38 +487,38 @@ Generated files:
 - `generated/types.ts` - Type definitions
 - `generated/client.ts` - DB client
 
-### gsq migration:create
+### gsquery migration:create
 
 Create new migration file.
 
 ```bash
-gsq migration:create <name>
+gsquery migration:create <name>
 
 Examples:
-  gsq migration:create add_users_table
-  gsq migration:create add_nickname_to_users
+  gsquery migration:create add_users_table
+  gsquery migration:create add_nickname_to_users
 ```
 
 Generated file:
 - `migrations/NNNN_name.ts`
 
-### gsq migrate
+### gsquery migrate
 
 Run pending migrations.
 
 ```bash
-gsq migrate [options]
+gsquery migrate [options]
 
 Options:
   --to <version>    Migrate to specific version only
 ```
 
-### gsq rollback
+### gsquery rollback
 
 Rollback last migration.
 
 ```bash
-gsq rollback
+gsquery rollback
 ```
 
 ---

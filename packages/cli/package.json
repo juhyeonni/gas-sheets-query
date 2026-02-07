@@ -1,12 +1,12 @@
 {
-  "name": "@gsq/cli",
+  "name": "gsquery",
   "version": "0.1.0",
   "description": "CLI for gas-sheets-query schema generation",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "gsq": "./bin/gsq.js"
+    "gsquery": "./bin/gsquery.js"
   },
   "files": [
     "dist",
