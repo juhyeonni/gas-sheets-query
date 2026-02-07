@@ -32,6 +32,8 @@ export interface ClientOptions {
   spreadsheetId?: string
   /** Use mock adapter for testing */
   mock?: boolean
+  /** Custom stores (for TSV adapters, etc.) - takes precedence over mock/spreadsheetId */
+  stores?: Record<string, DataStore<RowWithId>>
 }
 
 /**
@@ -128,10 +130,24 @@ export function createClientFactory<Tables extends Record<string, RowWithId>>(
 ): (options?: ClientOptions) => Client<Tables> {
   return (options: ClientOptions = {}) => {
     // Build stores for each table
+    // If custom stores provided, use them; otherwise create based on options
     const stores: Record<string, DataStore<RowWithId>> = {}
     
-    for (const [tableName, tableSchema] of Object.entries(schema.tables)) {
-      stores[tableName] = createStore(tableName, tableSchema, options)
+    if (options.stores) {
+      // Use custom stores (e.g., TSV adapters)
+      for (const tableName of Object.keys(schema.tables)) {
+        if (options.stores[tableName]) {
+          stores[tableName] = options.stores[tableName]
+        } else {
+          // Fallback to mock if store not provided for a table
+          stores[tableName] = new MockAdapter()
+        }
+      }
+    } else {
+      // Create stores based on environment/options
+      for (const [tableName, tableSchema] of Object.entries(schema.tables)) {
+        stores[tableName] = createStore(tableName, tableSchema, options)
+      }
     }
 
     // Build config
