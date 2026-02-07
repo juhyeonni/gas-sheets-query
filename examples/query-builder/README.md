@@ -1,22 +1,22 @@
 # Query Builder Example
 
-gas-sheets-query QueryBuilder를 활용한 다양한 쿼리 예제입니다.
+Various query examples using gas-sheets-query QueryBuilder.
 
-## 실행
+## Run
 
 ```bash
 npx tsx examples/query-builder/index.ts
 ```
 
-## 주요 내용
+## Key Concepts
 
-### 1. WHERE 조건
+### 1. WHERE Conditions
 
 ```typescript
-// 같음
+// Equals
 products.query().where('category', '=', 'Electronics')
 
-// 비교
+// Comparison
 products.query().where('price', '>=', 100)
 
 // IN
@@ -26,7 +26,7 @@ products.query().where('category', 'in', ['Clothing', 'Footwear'])
 products.query().where('name', 'like', 'S%')
 ```
 
-### 2. 다중 조건 (AND)
+### 2. Multiple Conditions (AND)
 
 ```typescript
 products.query()
@@ -35,47 +35,47 @@ products.query()
   .exec()
 ```
 
-### 3. 정렬
+### 3. Sorting
 
 ```typescript
-// 단일 정렬
+// Single sort
 products.query().orderBy('price', 'desc')
 
-// 다중 정렬
+// Multiple sort
 products.query()
   .orderBy('category', 'asc')
   .orderBy('price', 'desc')
 ```
 
-### 4. 페이지네이션
+### 4. Pagination
 
 ```typescript
 // limit/offset
 products.query().limit(10).offset(20)
 
-// page 메서드
-products.query().page(2, 10)  // 2페이지, 10개씩
+// page method
+products.query().page(2, 10)  // Page 2, 10 items per page
 ```
 
-### 5. 결과 메서드
+### 5. Result Methods
 
 ```typescript
-query.exec()      // 전체 결과
-query.first()     // 첫 번째 결과
-query.count()     // 개수
-query.exists()    // 존재 여부
+query.exec()      // All results
+query.first()     // First result
+query.count()     // Count
+query.exists()    // Check existence
 ```
 
-### 6. 집계
+### 6. Aggregation
 
 ```typescript
-// 단일 집계
+// Single aggregation
 query.sum('amount')
 query.avg('price')
 query.min('price')
 query.max('price')
 
-// 그룹별 집계
+// Group by aggregation
 products.query()
   .groupBy('category')
   .agg({
@@ -85,7 +85,7 @@ products.query()
   })
 ```
 
-## 출력 예시
+## Example Output
 
 ```
 === WHERE Conditions ===

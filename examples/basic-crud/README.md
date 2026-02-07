@@ -1,16 +1,16 @@
 # Basic CRUD Example
 
-gas-sheets-query를 사용한 기본 CRUD (Create, Read, Update, Delete) 작업 예제입니다.
+Basic CRUD (Create, Read, Update, Delete) operations example using gas-sheets-query.
 
-## 실행
+## Run
 
 ```bash
 npx tsx examples/basic-crud/index.ts
 ```
 
-## 주요 내용
+## Key Concepts
 
-### 1. DB 초기화
+### 1. DB Initialization
 
 ```typescript
 const db = defineSheetsDB({
@@ -29,44 +29,44 @@ const db = defineSheetsDB({
 ### 2. CREATE
 
 ```typescript
-// 단일 생성
+// Single create
 const user = users.create({ name: 'John', email: 'john@example.com', ... })
 
-// 배치 생성
+// Batch create
 const newUsers = users.batchInsert([...])
 ```
 
 ### 3. READ
 
 ```typescript
-// ID로 조회
+// Find by ID
 const user = users.findById(1)
 
-// 전체 조회
+// Find all
 const all = users.findAll()
 
-// 조건 조회
+// Query with conditions
 const active = users.query().where('active', '=', true).exec()
 ```
 
 ### 4. UPDATE
 
 ```typescript
-// 단일 업데이트
+// Single update
 users.update(1, { name: 'New Name' })
 
-// 배치 업데이트
+// Batch update
 users.batchUpdate([{ id: 1, data: { ... } }, ...])
 ```
 
 ### 5. DELETE
 
 ```typescript
-// 단일 삭제
+// Single delete
 users.delete(1)
 ```
 
-## 출력 예시
+## Example Output
 
 ```
 === CREATE ===
