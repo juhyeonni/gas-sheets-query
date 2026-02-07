@@ -25,6 +25,13 @@ import type { SheetsDB, TableHandle } from '@gsquery/core'
 // =============================================================================
 
 /**
+ * ID mode for insert operations
+ * - 'auto': Server generates numeric IDs (1, 2, 3...) - Online-first
+ * - 'client': Client provides IDs (UUIDs, etc.) - Offline-first
+ */
+export type IdMode = 'auto' | 'client'
+
+/**
  * Client options
  */
 export interface ClientOptions {
@@ -34,6 +41,8 @@ export interface ClientOptions {
   mock?: boolean
   /** Custom stores (for TSV adapters, etc.) - takes precedence over mock/spreadsheetId */
   stores?: Record<string, DataStore<RowWithId>>
+  /** ID mode: 'auto' (server generates) or 'client' (client provides UUID) */
+  idMode?: IdMode
 }
 
 /**
@@ -82,9 +91,11 @@ export function createStore<T extends RowWithId>(
   tableSchema: { columns: readonly string[]; sheetName?: string },
   options: ClientOptions
 ): DataStore<T> {
+  const idMode = options.idMode || 'auto'
+
   // Mock mode always uses MockAdapter
   if (options.mock) {
-    return new MockAdapter<T>()
+    return new MockAdapter<T>({ idMode })
   }
 
   // GAS environment with SheetsAdapter
@@ -95,12 +106,13 @@ export function createStore<T extends RowWithId>(
     return new SheetsAdapter({
       spreadsheetId: options.spreadsheetId,
       sheetName,
-      columns: [...tableSchema.columns]
+      columns: [...tableSchema.columns],
+      idMode
     }) as unknown as DataStore<T>
   }
 
   // Fallback to MockAdapter for Node.js
-  return new MockAdapter<T>()
+  return new MockAdapter<T>({ idMode })
 }
 
 // =============================================================================
