@@ -36,6 +36,7 @@ export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOption
 
 // Adapters
 export { MockAdapter, MockAdapterOptions } from './adapters/mock-adapter'
+export { SheetsAdapter, SheetsAdapterOptions } from './adapters/sheets-adapter'
 
 // Index Store
 export { IndexStore, IndexDefinition, createIndexKey, serializeValues } from './core/index-store'

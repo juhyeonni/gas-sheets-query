@@ -1,0 +1,48 @@
+# gas-sheets-query 테스트 앱 스키마
+# 프로젝트 관리 앱 모델
+
+tables:
+  User:
+    fields:
+      id: number @id @default(autoincrement)
+      email: string @unique
+      name: string
+      role: string @default("MEMBER")
+    indexes:
+      - [email]
+      - [role]
+
+  Project:
+    fields:
+      id: number @id @default(autoincrement)
+      name: string
+      ownerId: number
+      status: string @default("ACTIVE")
+    indexes:
+      - [ownerId]
+      - [status]
+
+  Task:
+    fields:
+      id: number @id @default(autoincrement)
+      title: string
+      projectId: number
+      assigneeId: number?
+      status: string @default("TODO")
+      priority: string @default("MEDIUM")
+      dueDate: datetime?
+    indexes:
+      - [projectId]
+      - [assigneeId]
+      - [status]
+
+  Comment:
+    fields:
+      id: number @id @default(autoincrement)
+      content: string
+      taskId: number
+      authorId: number
+      createdAt: datetime @default(now)
+    indexes:
+      - [taskId]
+      - [authorId]
