@@ -59,6 +59,17 @@ function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition<T>[]):
 /** ID generation mode */
 export type IdMode = 'auto' | 'client'
 
+/** Column type definition for schema-based serialization */
+export type ColumnType = 
+  | 'string' 
+  | 'number' 
+  | 'boolean' 
+  | 'date' 
+  | 'string[]' 
+  | 'number[]' 
+  | 'object' 
+  | 'json'
+
 /** SheetsAdapter 설정 옵션 */
 export interface SheetsAdapterOptions {
   /** Spreadsheet ID (optional - uses active spreadsheet if not provided) */
@@ -77,6 +88,12 @@ export interface SheetsAdapterOptions {
    * - 'client': client provides IDs (UUID, string, etc.)
    */
   idMode?: IdMode
+  /**
+   * Column type definitions for schema-based serialization (optional)
+   * If provided, enables type-aware serialization/deserialization
+   * Example: { labels: 'string[]', metadata: 'object' }
+   */
+  columnTypes?: Record<string, ColumnType>
 }
 
 // GAS type declarations (for TypeScript in GAS environment)
@@ -118,6 +135,7 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
   private idColumn: string
   private createIfNotExists: boolean
   private idMode: IdMode
+  private columnTypes: Record<string, ColumnType>
   
   // Cache for performance
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
@@ -130,6 +148,7 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
     this.idColumn = options.idColumn || 'id'
     this.createIfNotExists = options.createIfNotExists ?? true
     this.idMode = options.idMode ?? 'auto'
+    this.columnTypes = options.columnTypes ?? {}
     
     // Validate that id column is in columns
     if (!this.columns.includes(this.idColumn)) {
@@ -174,16 +193,38 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
     this._spreadsheet = null
   }
 
-  /** Convert sheet row (array) to object */
+  /** 
+   * Convert sheet row (array) to object
+   * Uses schema-based types if available, falls back to auto-detection
+   */
   private rowToObject(values: unknown[]): T {
     const obj: Record<string, unknown> = {}
     for (let i = 0; i < this.columns.length; i++) {
       const col = this.columns[i]
       let value = values[i]
+      const colType = this.columnTypes[col]
       
       // Convert Date objects to ISO strings for consistency
       if (value instanceof Date) {
         value = value.toISOString()
+      }
+      
+      // Schema-based deserialization
+      if (colType) {
+        value = this.deserializeByType(value, colType)
+      } else {
+        // Auto-detect: try to parse JSON strings (arrays and objects)
+        if (typeof value === 'string' && value.length > 0) {
+          const trimmed = value.trim()
+          if ((trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+              (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+            try {
+              value = JSON.parse(trimmed)
+            } catch {
+              // Keep as string if parsing fails
+            }
+          }
+        }
       }
       
       obj[col] = value
@@ -191,14 +232,92 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
     return obj as T
   }
 
-  /** Convert object to sheet row (array) */
+  /** Deserialize value based on column type */
+  private deserializeByType(value: unknown, colType: ColumnType): unknown {
+    if (value === '' || value === null || value === undefined) {
+      // Return appropriate empty value for type
+      if (colType === 'string[]' || colType === 'number[]') return []
+      if (colType === 'object' || colType === 'json') return null
+      if (colType === 'boolean') return false
+      if (colType === 'number') return 0
+      return value
+    }
+
+    switch (colType) {
+      case 'string[]':
+      case 'number[]':
+      case 'object':
+      case 'json':
+        if (typeof value === 'string') {
+          try {
+            return JSON.parse(value)
+          } catch {
+            return colType.endsWith('[]') ? [] : null
+          }
+        }
+        return value
+      case 'boolean':
+        if (typeof value === 'string') {
+          return value.toLowerCase() === 'true'
+        }
+        return Boolean(value)
+      case 'number':
+        return Number(value)
+      case 'date':
+        if (value instanceof Date) return value.toISOString()
+        return value
+      default:
+        return value
+    }
+  }
+
+  /** 
+   * Convert object to sheet row (array)
+   * Uses schema-based types if available, falls back to auto-detection
+   */
   private objectToRow(obj: Partial<T>): unknown[] {
     return this.columns.map(col => {
       const value = obj[col as keyof T]
+      const colType = this.columnTypes[col]
+      
       // Convert undefined/null to empty string for Sheets
       if (value === undefined || value === null) return ''
+      
+      // Schema-based serialization
+      if (colType) {
+        return this.serializeByType(value, colType)
+      }
+      
+      // Auto-detect: serialize arrays and objects to JSON
+      if (Array.isArray(value)) return JSON.stringify(value)
+      if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
+        return JSON.stringify(value)
+      }
       return value
     })
+  }
+
+  /** Serialize value based on column type */
+  private serializeByType(value: unknown, colType: ColumnType): unknown {
+    switch (colType) {
+      case 'string[]':
+      case 'number[]':
+        if (Array.isArray(value)) return JSON.stringify(value)
+        return '[]'
+      case 'object':
+      case 'json':
+        if (typeof value === 'object' && value !== null) {
+          return JSON.stringify(value)
+        }
+        return ''
+      case 'boolean':
+        return value ? 'TRUE' : 'FALSE'
+      case 'date':
+        if (value instanceof Date) return value.toISOString()
+        return value
+      default:
+        return value
+    }
   }
 
   /** Get the next available ID */
