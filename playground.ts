@@ -1,14 +1,14 @@
 /**
- * Playground - 직접 테스트해보는 공간
- * 
- * 실행: npx tsx playground.ts
+ * Playground - Interactive testing space
+ *
+ * Run: npx tsx playground.ts
  */
 import { defineSheetsDB, MockAdapter } from './src'
 
-console.log('🚀 gas-sheets-query Playground\n')
+console.log('gas-sheets-query Playground\n')
 
 // ============================================================================
-// 1. DB 정의
+// 1. DB Definition
 // ============================================================================
 const db = defineSheetsDB({
   tables: {
@@ -28,9 +28,9 @@ const db = defineSheetsDB({
 })
 
 // ============================================================================
-// 2. CRUD 테스트
+// 2. CRUD Test
 // ============================================================================
-console.log('=== 📝 Create ===')
+console.log('=== Create ===')
 const alice = db.from('users').create({ name: 'Alice', email: 'alice@test.com', age: 25, active: true })
 const bob = db.from('users').create({ name: 'Bob', email: 'bob@test.com', age: 30, active: false })
 const charlie = db.from('users').create({ name: 'Charlie', email: 'charlie@test.com', age: 22, active: true })
@@ -44,9 +44,9 @@ db.from('posts').create({ title: "Bob's Post", userId: bob.id as number, views: 
 console.log(`Created ${db.from('posts').findAll().length} posts`)
 
 // ============================================================================
-// 3. Query 테스트
+// 3. Query Test
 // ============================================================================
-console.log('\n=== 🔍 Query ===')
+console.log('\n=== Query ===')
 
 // Active users sorted by age
 const activeUsers = db.from('users')
@@ -74,9 +74,9 @@ const popularPosts = db.from('posts')
 console.log('Popular posts:', popularPosts.map(p => `${p.title}(${p.views})`).join(', '))
 
 // ============================================================================
-// 4. 헬퍼 메서드 테스트
+// 4. Helper Methods Test
 // ============================================================================
-console.log('\n=== 🛠️ Helpers ===')
+console.log('\n=== Helpers ===')
 
 // first / firstOrFail
 const firstActive = db.from('users').query().where('active', '=', true).first()
@@ -91,9 +91,9 @@ const activeCount = db.from('users').query().where('active', '=', true).count()
 console.log('Active count:', activeCount)
 
 // ============================================================================
-// 5. 페이지네이션
+// 5. Pagination
 // ============================================================================
-console.log('\n=== 📄 Pagination ===')
+console.log('\n=== Pagination ===')
 
 const page1 = db.from('users').query().orderBy('name').page(1, 2).exec()
 const page2 = db.from('users').query().orderBy('name').page(2, 2).exec()
@@ -103,7 +103,7 @@ console.log('Page 2:', page2.map(u => u.name).join(', '))
 // ============================================================================
 // 6. Update & Delete
 // ============================================================================
-console.log('\n=== ✏️ Update & Delete ===')
+console.log('\n=== Update & Delete ===')
 
 // Update
 const updated = db.from('users').update(alice.id, { age: 26 })
@@ -114,9 +114,9 @@ db.from('users').delete(david.id)
 console.log('After delete:', db.from('users').findAll().map(u => u.name).join(', '))
 
 // ============================================================================
-// 7. Like 검색
+// 7. Like Search
 // ============================================================================
-console.log('\n=== 🔎 Like Search ===')
+console.log('\n=== Like Search ===')
 
 const emailSearch = db.from('users')
   .query()
@@ -131,4 +131,4 @@ const nameSearch = db.from('users')
 console.log('Names starting with A:', nameSearch.map(u => u.name).join(', '))
 
 // ============================================================================
-console.log('\n✅ Playground complete!')
+console.log('\nPlayground complete!')

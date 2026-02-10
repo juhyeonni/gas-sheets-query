@@ -1,12 +1,12 @@
 /**
  * Query Builder Example
- * 
- * gas-sheets-query QueryBuilder를 활용한 다양한 쿼리 예제
+ *
+ * Various query examples using gas-sheets-query QueryBuilder
  */
 import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 // =============================================================================
-// 1. 타입 및 DB 설정
+// 1. Types and DB Setup
 // =============================================================================
 
 interface Product {
@@ -47,13 +47,13 @@ const db = defineSheetsDB({
 })
 
 // =============================================================================
-// 2. 테스트 데이터 생성
+// 2. Test Data Creation
 // =============================================================================
 
 const products = db.from('products')
 const orders = db.from('orders')
 
-// 상품 데이터
+// Product data
 products.batchInsert([
   { name: 'Laptop', category: 'Electronics', price: 1200, stock: 50, active: true, createdAt: new Date() },
   { name: 'Keyboard', category: 'Electronics', price: 100, stock: 200, active: true, createdAt: new Date() },
@@ -64,7 +64,7 @@ products.batchInsert([
   { name: 'Sandals', category: 'Footwear', price: 40, stock: 100, active: false, createdAt: new Date() },
 ])
 
-// 주문 데이터
+// Order data
 orders.batchInsert([
   { productId: 1, customerId: 1, quantity: 2, amount: 2400, status: 'PAID', createdAt: new Date() },
   { productId: 2, customerId: 1, quantity: 1, amount: 100, status: 'PAID', createdAt: new Date() },
@@ -79,24 +79,24 @@ orders.batchInsert([
 console.log('Test data created:', products.findAll().length, 'products,', orders.findAll().length, 'orders')
 
 // =============================================================================
-// 3. 기본 조건 쿼리
+// 3. Basic WHERE Conditions
 // =============================================================================
 
 console.log('\n=== WHERE Conditions ===')
 
-// 같음 (=)
+// Equal (=)
 const electronics = products.query()
   .where('category', '=', 'Electronics')
   .exec()
 console.log('Electronics:', electronics.map(p => p.name).join(', '))
 
-// 다름 (!=)
+// Not equal (!=)
 const notCancelled = orders.query()
   .where('status', '!=', 'CANCELLED')
   .exec()
 console.log('Not cancelled orders:', notCancelled.length)
 
-// 비교 (>, <, >=, <=)
+// Comparison (>, <, >=, <=)
 const expensive = products.query()
   .where('price', '>=', 100)
   .exec()
@@ -115,7 +115,7 @@ const withS = products.query()
 console.log('Name starts with S:', withS.map(p => p.name).join(', '))
 
 // =============================================================================
-// 4. 다중 조건 (AND)
+// 4. Multiple Conditions (AND)
 // =============================================================================
 
 console.log('\n=== Multiple Conditions (AND) ===')
@@ -133,18 +133,18 @@ const paidLargeOrders = orders.query()
 console.log('Paid orders > $200:', paidLargeOrders.length)
 
 // =============================================================================
-// 5. 정렬 (ORDER BY)
+// 5. ORDER BY
 // =============================================================================
 
 console.log('\n=== ORDER BY ===')
 
-// 단일 정렬
+// Single sort
 const byPrice = products.query()
   .orderBy('price', 'desc')
   .exec()
 console.log('By price (desc):', byPrice.map(p => `${p.name}($${p.price})`).join(' > '))
 
-// 다중 정렬
+// Multiple sort
 const byCategoryAndPrice = products.query()
   .orderBy('category', 'asc')
   .orderBy('price', 'desc')
@@ -153,7 +153,7 @@ console.log('\nBy category, then price:')
 byCategoryAndPrice.forEach(p => console.log(`  ${p.category}: ${p.name} ($${p.price})`))
 
 // =============================================================================
-// 6. 페이지네이션
+// 6. Pagination
 // =============================================================================
 
 console.log('\n=== Pagination ===')
@@ -172,14 +172,14 @@ const next3 = products.query()
   .exec()
 console.log('Next 3:', next3.map(p => p.name).join(', '))
 
-// page 메서드
+// page method
 const page1 = products.query().orderBy('name').page(1, 3).exec()
 const page2 = products.query().orderBy('name').page(2, 3).exec()
 console.log('Page 1:', page1.map(p => p.name).join(', '))
 console.log('Page 2:', page2.map(p => p.name).join(', '))
 
 // =============================================================================
-// 7. 결과 메서드
+// 7. Result Methods
 // =============================================================================
 
 console.log('\n=== Result Methods ===')
@@ -203,12 +203,12 @@ const activeCount = products.query()
 console.log('Active products count:', activeCount)
 
 // =============================================================================
-// 8. 집계 함수
+// 8. Aggregation
 // =============================================================================
 
 console.log('\n=== Aggregation ===')
 
-// 단일 집계
+// Single aggregation
 const totalRevenue = orders.query()
   .where('status', '=', 'PAID')
   .sum('amount')
@@ -222,7 +222,7 @@ const minPrice = products.query().min('price')
 const maxPrice = products.query().max('price')
 console.log('Price range:', minPrice, '~', maxPrice)
 
-// 그룹별 집계
+// Group aggregation
 console.log('\n=== GROUP BY ===')
 
 const categoryStats = products.query()
@@ -244,7 +244,7 @@ categoryStats.forEach(stat => {
   console.log(`    - Price Range: $${stat.minPrice} ~ $${stat.maxPrice}`)
 })
 
-// 주문 상태별 통계
+// Order stats by status
 const orderStats = orders.query()
   .groupBy('status')
   .agg({
@@ -258,7 +258,7 @@ orderStats.forEach(stat => {
 })
 
 // =============================================================================
-// 9. 편의 메서드
+// 9. Shorthand Methods
 // =============================================================================
 
 console.log('\n=== Shorthand Methods ===')
@@ -280,12 +280,12 @@ const sProducts = products.query()
 console.log('whereLike (S%):', sProducts.map(p => p.name).join(', '))
 
 // =============================================================================
-// 10. 복합 쿼리 예제
+// 10. Complex Query Examples
 // =============================================================================
 
 console.log('\n=== Complex Queries ===')
 
-// 활성 상품 중 재고 100개 이상, 가격순 상위 3개
+// Top 3 active products with stock >= 100, sorted by price
 const topProducts = products.query()
   .where('active', '=', true)
   .where('stock', '>=', 100)
@@ -298,7 +298,7 @@ topProducts.forEach((p, i) => {
   console.log(`  ${i + 1}. ${p.name} - $${p.price} (${p.stock} in stock)`)
 })
 
-// 고객별 총 주문 금액 (PAID 주문만)
+// Total spending per customer (PAID orders only)
 const customerSpending = orders.query()
   .where('status', '=', 'PAID')
   .groupBy('customerId')

@@ -1,12 +1,12 @@
 /**
- * Benchmark - 성능 측정
- * 
- * 실행: npx tsx benchmark.ts
+ * Benchmark - Performance measurement
+ *
+ * Run: npx tsx benchmark.ts
  */
 import { defineSheetsDB, MockAdapter } from './src'
 
 // ============================================================================
-// 유틸리티
+// Utilities
 // ============================================================================
 
 function formatNumber(n: number): string {
@@ -22,17 +22,17 @@ function formatTime(ms: number): string {
 function benchmark(name: string, fn: () => void, iterations: number = 1000): void {
   // Warmup
   for (let i = 0; i < 10; i++) fn()
-  
+
   const start = performance.now()
   for (let i = 0; i < iterations; i++) {
     fn()
   }
   const end = performance.now()
-  
+
   const total = end - start
   const perOp = total / iterations
   const opsPerSec = 1000 / perOp
-  
+
   console.log(`  ${name}`)
   console.log(`    Total: ${formatTime(total)} (${formatNumber(iterations)} iterations)`)
   console.log(`    Per op: ${formatTime(perOp)}`)
@@ -44,7 +44,7 @@ function benchmark(name: string, fn: () => void, iterations: number = 1000): voi
 // Setup
 // ============================================================================
 
-console.log('🏁 gas-sheets-query Benchmark\n')
+console.log('gas-sheets-query Benchmark\n')
 console.log('=' .repeat(60))
 
 // Create DB
@@ -64,7 +64,7 @@ const db = defineSheetsDB({
 // Insert Benchmark
 // ============================================================================
 
-console.log('\n📝 INSERT BENCHMARK')
+console.log('\nINSERT BENCHMARK')
 console.log('-'.repeat(60))
 
 benchmark('Single insert', () => {
@@ -85,14 +85,14 @@ store.reset()
 // Bulk Insert
 // ============================================================================
 
-console.log('📝 BULK INSERT BENCHMARK')
+console.log('BULK INSERT BENCHMARK')
 console.log('-'.repeat(60))
 
 const sizes = [100, 1000, 10000]
 
 for (const size of sizes) {
   store.reset()
-  
+
   const start = performance.now()
   for (let i = 0; i < size; i++) {
     db.from('users').create({
@@ -104,7 +104,7 @@ for (const size of sizes) {
     })
   }
   const end = performance.now()
-  
+
   console.log(`  Insert ${formatNumber(size)} rows: ${formatTime(end - start)}`)
   console.log(`    Per row: ${formatTime((end - start) / size)}`)
   console.log()
@@ -114,7 +114,7 @@ for (const size of sizes) {
 // Read Benchmark (with 10,000 rows)
 // ============================================================================
 
-console.log('📖 READ BENCHMARK (10,000 rows)')
+console.log('READ BENCHMARK (10,000 rows)')
 console.log('-'.repeat(60))
 
 // Setup 10k rows
@@ -141,7 +141,7 @@ benchmark('findById()', () => {
 // Query Benchmark
 // ============================================================================
 
-console.log('🔍 QUERY BENCHMARK (10,000 rows)')
+console.log('QUERY BENCHMARK (10,000 rows)')
 console.log('-'.repeat(60))
 
 benchmark('Simple where (=)', () => {
@@ -201,7 +201,7 @@ benchmark('In operator', () => {
 // Update Benchmark
 // ============================================================================
 
-console.log('✏️ UPDATE BENCHMARK')
+console.log('UPDATE BENCHMARK')
 console.log('-'.repeat(60))
 
 benchmark('Single update', () => {
@@ -212,7 +212,7 @@ benchmark('Single update', () => {
 // Delete Benchmark
 // ============================================================================
 
-console.log('🗑️ DELETE BENCHMARK')
+console.log('DELETE BENCHMARK')
 console.log('-'.repeat(60))
 
 // Setup fresh data
@@ -237,19 +237,19 @@ benchmark('Single delete', () => {
 // ============================================================================
 
 console.log('=' .repeat(60))
-console.log('\n📊 SUMMARY')
+console.log('\nSUMMARY')
 console.log('-'.repeat(60))
 console.log(`
-MockAdapter 성능 (메모리 기반):
-- Insert: ~수십μs/row
-- findById: ~수μs (선형 검색)
-- Query: 데이터 크기에 비례
-- 10k rows 기준 쿼리: ~수ms
+MockAdapter Performance (in-memory):
+- Insert: ~tens of μs/row
+- findById: ~few μs (linear search)
+- Query: proportional to data size
+- Query with 10k rows: ~few ms
 
-⚠️ 참고:
-- 이 벤치마크는 MockAdapter (메모리) 기준
-- 실제 GAS + Google Sheets는 훨씬 느림 (네트워크 + API 호출)
-- GasAdapter 구현 후 별도 벤치마크 필요
+Note:
+- This benchmark uses MockAdapter (in-memory)
+- Actual GAS + Google Sheets is much slower (network + API calls)
+- Separate benchmark needed after GasAdapter implementation
 `)
 
-console.log('\n✅ Benchmark complete!')
+console.log('\nBenchmark complete!')

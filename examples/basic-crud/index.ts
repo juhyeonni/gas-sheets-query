@@ -1,12 +1,12 @@
 /**
  * Basic CRUD Example
- * 
- * gas-sheets-query를 사용한 기본 CRUD 작업 예제
+ *
+ * Basic CRUD operations using gas-sheets-query
  */
 import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 // =============================================================================
-// 1. 타입 정의
+// 1. Type Definitions
 // =============================================================================
 
 interface User {
@@ -19,7 +19,7 @@ interface User {
 }
 
 // =============================================================================
-// 2. DB 초기화
+// 2. DB Initialization
 // =============================================================================
 
 const db = defineSheetsDB({
@@ -41,16 +41,16 @@ const db = defineSheetsDB({
   }
 })
 
-// 테이블 핸들 가져오기
+// Get table handle
 const users = db.from('users')
 
 // =============================================================================
-// 3. CREATE - 데이터 생성
+// 3. CREATE
 // =============================================================================
 
 console.log('=== CREATE ===')
 
-// 단일 생성
+// Single create
 const john = users.create({
   name: 'John Doe',
   email: 'john@example.com',
@@ -60,7 +60,7 @@ const john = users.create({
 })
 console.log('Created user:', john)
 
-// 배치 생성
+// Batch create
 const newUsers = users.batchInsert([
   { name: 'Alice Smith', email: 'alice@example.com', role: 'USER', active: true, createdAt: new Date() },
   { name: 'Bob Wilson', email: 'bob@example.com', role: 'ADMIN', active: true, createdAt: new Date() },
@@ -69,48 +69,48 @@ const newUsers = users.batchInsert([
 console.log('Batch created:', newUsers.length, 'users')
 
 // =============================================================================
-// 4. READ - 데이터 조회
+// 4. READ
 // =============================================================================
 
 console.log('\n=== READ ===')
 
-// ID로 조회
+// Find by ID
 const foundUser = users.findById(john.id)
 console.log('Found by ID:', foundUser?.name)
 
-// 전체 조회
+// Find all
 const allUsers = users.findAll()
 console.log('Total users:', allUsers.length)
 
-// 조건 조회
+// Conditional query
 const activeUsers = users.query()
   .where('active', '=', true)
   .exec()
 console.log('Active users:', activeUsers.length)
 
-// 첫 번째 결과
+// First result
 const firstAdmin = users.query()
   .where('role', '=', 'ADMIN')
   .first()
 console.log('First admin:', firstAdmin?.name)
 
 // =============================================================================
-// 5. UPDATE - 데이터 수정
+// 5. UPDATE
 // =============================================================================
 
 console.log('\n=== UPDATE ===')
 
-// 단일 업데이트
+// Single update
 users.update(john.id, { name: 'John Smith' })
 const updatedJohn = users.findById(john.id)
 console.log('Updated name:', updatedJohn?.name)
 
-// 역할 변경
+// Role change
 users.update(john.id, { role: 'ADMIN' })
 const adminJohn = users.findById(john.id)
 console.log('Updated role:', adminJohn?.role)
 
-// 배치 업데이트
+// Batch update
 users.batchUpdate([
   { id: newUsers[0].id, data: { active: false } },
   { id: newUsers[1].id, data: { name: 'Robert Wilson' } }
@@ -118,18 +118,18 @@ users.batchUpdate([
 console.log('Batch updated 2 users')
 
 // =============================================================================
-// 6. DELETE - 데이터 삭제
+// 6. DELETE
 // =============================================================================
 
 console.log('\n=== DELETE ===')
 
-// 단일 삭제
+// Single delete
 const beforeDelete = users.findAll().length
 users.delete(john.id)
 const afterDelete = users.findAll().length
 console.log('Deleted 1 user:', beforeDelete, '->', afterDelete)
 
-// 조건부 삭제 (비활성 사용자 삭제)
+// Conditional delete (inactive users)
 const inactiveUsers = users.query().where('active', '=', false).exec()
 for (const user of inactiveUsers) {
   users.delete(user.id)
@@ -137,7 +137,7 @@ for (const user of inactiveUsers) {
 console.log('Deleted', inactiveUsers.length, 'inactive users')
 
 // =============================================================================
-// 7. 최종 상태 확인
+// 7. Final State
 // =============================================================================
 
 console.log('\n=== FINAL STATE ===')

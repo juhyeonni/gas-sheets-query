@@ -1,5 +1,5 @@
 /**
- * Schema Parser - YAML 스키마를 AST로 변환
+ * Schema Parser - Convert YAML schema to AST
  * 
  * Issue #19
  */
