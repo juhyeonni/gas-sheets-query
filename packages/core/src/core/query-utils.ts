@@ -45,8 +45,9 @@ export function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition
     const bVal = b[field]
 
     let comparison = 0
-    if (aVal === null || aVal === undefined) comparison = 1
-    else if (bVal === null || bVal === undefined) comparison = -1
+    if ((aVal == null) && (bVal == null)) comparison = 0
+    else if (aVal == null) comparison = 1
+    else if (bVal == null) comparison = -1
     else if (aVal < bVal) comparison = -1
     else if (aVal > bVal) comparison = 1
 

@@ -327,9 +327,9 @@ export class MigrationRunner {
           if (operation.oldColumn! in row && !(operation.newColumn! in row)) {
             const value = row[operation.oldColumn!]
             const updates: Record<string, unknown> = {
+              [operation.oldColumn!]: undefined,
               [operation.newColumn!]: value
             }
-            // Set old column to undefined (can't delete in partial update)
             store.update(row.id as string | number, updates)
           }
         }

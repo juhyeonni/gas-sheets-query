@@ -50,7 +50,7 @@ tables:
 ### 3. Generate Types
 
 ```bash
-npx gsqueryuery generate
+npx gsquery generate
 ```
 
 ### 4. Usage
@@ -98,15 +98,15 @@ const admins = db.from('users')
 
 ```bash
 # Initialize
-npx gsqueryuery init --spreadsheet-id YOUR_SPREADSHEET_ID
+npx gsquery init --spreadsheet-id YOUR_SPREADSHEET_ID
 
 # Generate types
-npx gsqueryuery generate
+npx gsquery generate
 
 # Migration
-npx gsqueryuery migration:create add_users_table
-npx gsqueryuery migrate
-npx gsqueryuery rollback
+npx gsquery migration:create add_users_table
+npx gsquery migrate
+npx gsquery rollback
 ```
 
 ## 📚 Documentation
