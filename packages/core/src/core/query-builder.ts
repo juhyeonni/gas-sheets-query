@@ -1,7 +1,7 @@
 /**
  * Query Builder - fluent API for building queries
  */
-import type { Row, DataStore, QueryOptions, Operator, SortDirection, WhereCondition, OrderByCondition } from './types'
+import type { Row, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types'
 import { NoResultsError } from './errors'
 
 /**
@@ -62,7 +62,12 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
   /**
    * Add a where condition
    * Multiple where calls are combined with AND
+   *
+   * When operator is 'in', value must be an array.
+   * For all other operators, value must be a single value.
    */
+  where<K extends keyof T & string>(field: K, operator: 'in', value: T[K][]): this
+  where<K extends keyof T & string>(field: K, operator: SingleValueOperator, value: T[K]): this
   where<K extends keyof T & string>(
     field: K,
     operator: Operator,

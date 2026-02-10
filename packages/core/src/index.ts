@@ -8,6 +8,8 @@ export type {
   Row,
   RowWithId,
   Operator,
+  SingleValueOperator,
+  ArrayValueOperator,
   SortDirection,
   WhereCondition,
   OrderByCondition,

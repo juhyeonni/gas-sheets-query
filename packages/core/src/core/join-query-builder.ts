@@ -2,7 +2,7 @@
  * JoinQueryBuilder - Query builder with JOIN support
  * Simulates relational joins using batch fetching to prevent N+1 queries
  */
-import type { Row, DataStore, QueryOptions, Operator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types'
+import type { Row, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types'
 import { NoResultsError } from './errors'
 
 /**
@@ -114,7 +114,12 @@ export class JoinQueryBuilder<T extends RowWithId> {
   /**
    * Add a where condition
    * Supports prefixed fields for joined tables (e.g., 'posts.status')
+   *
+   * When operator is 'in', value must be an array.
+   * For all other operators, value must be a single value.
    */
+  where<K extends keyof T & string>(field: K | string, operator: 'in', value: T[K][]): this
+  where<K extends keyof T & string>(field: K | string, operator: SingleValueOperator, value: T[K]): this
   where<K extends keyof T & string>(
     field: K | string,
     operator: Operator,
@@ -123,7 +128,7 @@ export class JoinQueryBuilder<T extends RowWithId> {
     // For now, we only support filtering on the main table
     // Prefixed fields like 'posts.status' are stripped to 'status'
     const cleanField = this.stripTablePrefix(field as string) as K
-    
+
     this.whereConditions.push({
       field: cleanField,
       operator,

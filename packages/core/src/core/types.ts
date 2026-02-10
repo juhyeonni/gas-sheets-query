@@ -11,6 +11,12 @@ export type RowWithId = Row & { id: string | number }
 /** Comparison operators for where clauses */
 export type Operator = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'like' | 'in'
 
+/** Operators that require a single (non-array) value */
+export type SingleValueOperator = Exclude<Operator, 'in'>
+
+/** Operators that require an array value */
+export type ArrayValueOperator = Extract<Operator, 'in'>
+
 /** Sort direction */
 export type SortDirection = 'asc' | 'desc'
 
