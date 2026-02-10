@@ -1,12 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { VERSION } from '../../src'
 import type { Row, Operator, DataStore, QueryOptions } from '../../src'
 
 describe('Core Types', () => {
-  it('exports VERSION', () => {
-    expect(VERSION).toBe('0.2.1')
-  })
-
   it('Row type allows any string keys', () => {
     const row: Row = { id: 1, name: 'test', active: true }
     expect(row.id).toBe(1)

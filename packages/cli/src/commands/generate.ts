@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
 import { resolve, dirname, basename } from 'path'
 import { watch } from 'chokidar'
 import { parseSchema } from '../parser/schema-parser.js'
+import { toError } from '../utils/errors.js'
 import { generateTypes } from '../generator/types-generator.js'
 import { generateClient } from '../generator/client-generator.js'
 import { generateClientPackage } from '../generator/client-package-generator.js'
@@ -97,7 +98,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
   try {
     schemaContent = readFileSync(schemaPath, 'utf-8')
   } catch (err) {
-    const error = err as Error
+    const error = toError(err)
     return {
       success: false,
       files: [],
@@ -132,7 +133,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
     writeFile(typesPath, typesContent)
     files.push('types.ts')
   } catch (err) {
-    const error = err as Error
+    const error = toError(err)
     return {
       success: false,
       files,
@@ -147,7 +148,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
     writeFile(clientPath, clientContent)
     files.push('client.ts')
   } catch (err) {
-    const error = err as Error
+    const error = toError(err)
     return {
       success: false,
       files,
@@ -162,7 +163,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
     writeFile(indexPath, indexContent)
     files.push('index.ts')
   } catch (err) {
-    const error = err as Error
+    const error = toError(err)
     return {
       success: false,
       files,
@@ -186,7 +187,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
         files.push('@gsquery/client/generated')
       }
     } catch (err) {
-      const error = err as Error
+      const error = toError(err)
       errors.push(`Warning: Failed to generate client package: ${error.message}`)
     }
   }
@@ -295,7 +296,7 @@ async function startWatch(options: GenerateOptions): Promise<void> {
           console.log(`   Regenerated in ${elapsed}ms`)
         }
       } catch (err) {
-        const error = err as Error
+        const error = toError(err)
         console.error(`❌ Error: ${error.message}`)
       }
       console.log('')

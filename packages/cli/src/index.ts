@@ -24,5 +24,3 @@ export type { RollbackOptions, RollbackResult } from './commands/rollback.js'
 export { parseSchema, parseSchemaFile } from './parser/schema-parser.js'
 export { generateTypes } from './generator/types-generator.js'
 export { generateClient } from './generator/client-generator.js'
-
-export const VERSION = '0.1.0'

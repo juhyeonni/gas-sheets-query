@@ -38,6 +38,9 @@ export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOption
 export { MockAdapter, MockAdapterOptions, IdMode as MockIdMode } from './adapters/mock-adapter'
 export { SheetsAdapter, SheetsAdapterOptions, IdMode } from './adapters/sheets-adapter'
 
+// Query utilities
+export { evaluateCondition, compareRows } from './core/query-utils'
+
 // Index Store
 export { IndexStore, IndexDefinition, createIndexKey, serializeValues } from './core/index-store'
 
@@ -87,5 +90,3 @@ export type {
   ColumnOptions,
   StoreResolver as MigrationStoreResolver
 } from './core/migration'
-
-export const VERSION = '0.2.1'

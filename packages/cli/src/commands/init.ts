@@ -5,8 +5,9 @@
  */
 
 import { Command } from 'commander'
-import { writeFileSync, existsSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync } from 'fs'
 import { resolve } from 'path'
+import { toError } from '../utils/errors.js'
 
 // =============================================================================
 // Types
@@ -75,11 +76,10 @@ export function runInit(options: InitOptions): InitResult {
       configPath,
     }
   } catch (err) {
-    const error = err as Error
     return {
       success: false,
       configPath,
-      error: `Failed to write config: ${error.message}`,
+      error: `Failed to write config: ${toError(err).message}`,
     }
   }
 }
@@ -95,7 +95,7 @@ export function loadConfig(): GSQConfig | null {
   }
   
   try {
-    const content = require(configPath)
+    const content = JSON.parse(readFileSync(configPath, 'utf-8'))
     return content as GSQConfig
   } catch {
     return null

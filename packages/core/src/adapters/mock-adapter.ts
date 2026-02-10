@@ -1,67 +1,18 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { Row, DataStore, QueryOptions, WhereCondition, OrderByCondition, BatchUpdateItem } from '../core/types'
+import type { Row, DataStore, QueryOptions, WhereCondition, BatchUpdateItem } from '../core/types'
 import { IndexStore, IndexDefinition } from '../core/index-store'
-
-/**
- * Evaluate a single where condition against a row
- */
-function evaluateCondition<T extends Row>(row: T, condition: WhereCondition<T>): boolean {
-  const { field, operator, value } = condition
-  const fieldValue = row[field]
-
-  switch (operator) {
-    case '=':
-      return fieldValue === value
-    case '!=':
-      return fieldValue !== value
-    case '>':
-      return (fieldValue as number) > (value as number)
-    case '>=':
-      return (fieldValue as number) >= (value as number)
-    case '<':
-      return (fieldValue as number) < (value as number)
-    case '<=':
-      return (fieldValue as number) <= (value as number)
-    case 'like':
-      if (typeof fieldValue !== 'string' || typeof value !== 'string') return false
-      const pattern = value.replace(/%/g, '.*').replace(/_/g, '.')
-      return new RegExp(`^${pattern}$`, 'i').test(fieldValue)
-    case 'in':
-      return Array.isArray(value) && value.includes(fieldValue)
-    default:
-      return false
-  }
-}
-
-/**
- * Compare function for sorting
- */
-function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition<T>[]): number {
-  for (const { field, direction } of orderBy) {
-    const aVal = a[field]
-    const bVal = b[field]
-    
-    let comparison = 0
-    if (aVal < bVal) comparison = -1
-    else if (aVal > bVal) comparison = 1
-    
-    if (comparison !== 0) {
-      return direction === 'asc' ? comparison : -comparison
-    }
-  }
-  return 0
-}
+import { evaluateCondition, compareRows } from '../core/query-utils'
 
 /** ID generation mode */
 export type IdMode = 'auto' | 'client'
 
-/** MockAdapter 설정 옵션 */
+/** MockAdapter configuration options */
 export interface MockAdapterOptions<T extends Row = Row> {
-  /** 초기 데이터 */
+  /** Initial data */
   initialData?: T[]
-  /** 인덱스 정의 (스키마 기반) */
+  /** Index definitions (schema-based) */
   indexes?: IndexDefinition[]
   /** 
    * ID generation mode (default: 'auto')
@@ -86,7 +37,7 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
   private idMode: IdMode
 
   constructor(initialData?: T[] | MockAdapterOptions<T>) {
-    // 호환성: 배열 또는 옵션 객체 모두 지원
+    // Support both array and options object for backward compatibility
     let data: T[] = []
     let indexes: IndexDefinition[] = []
     let idMode: IdMode = 'auto'

@@ -8,6 +8,7 @@ import { Command } from 'commander'
 import { writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { resolve, join } from 'path'
 import { loadConfig } from './init.js'
+import { toError } from '../utils/errors.js'
 
 // =============================================================================
 // Types
@@ -137,10 +138,9 @@ export function runMigrationCreate(name: string, options: MigrationCreateOptions
       version,
     }
   } catch (err) {
-    const error = err as Error
     return {
       success: false,
-      error: `Failed to write migration file: ${error.message}`,
+      error: `Failed to write migration file: ${toError(err).message}`,
     }
   }
 }

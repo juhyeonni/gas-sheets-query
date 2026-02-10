@@ -9,6 +9,7 @@ import { existsSync, readdirSync } from 'fs'
 import { resolve, join } from 'path'
 import { pathToFileURL } from 'url'
 import { loadConfig } from './init.js'
+import { toError } from '../utils/errors.js'
 
 // =============================================================================
 // Types
@@ -17,7 +18,6 @@ import { loadConfig } from './init.js'
 export interface MigrateOptions {
   dir?: string
   to?: number
-  dryRun?: boolean
 }
 
 export interface MigrateResult {
@@ -82,7 +82,7 @@ async function loadMigrations(migrationsDir: string): Promise<MigrationDef[]> {
         })
       }
     } catch (err) {
-      console.warn(`Warning: Could not load migration ${file}: ${(err as Error).message}`)
+      console.warn(`Warning: Could not load migration ${file}: ${toError(err).message}`)
     }
   }
   
@@ -137,28 +137,25 @@ export async function runMigrate(options: MigrateOptions): Promise<MigrateResult
     }
   }
   
-  // In CLI context, we don't have access to actual DataStore
-  // This is meant to be used with GAS runtime or for dry-run/preview
+  // CLI can only preview migrations (no access to actual Google Sheets).
+  // Actual migration execution happens in GAS runtime (see #26).
   const applied: { version: number; name: string }[] = []
   let currentVersion = 0
-  
+
   for (const migration of migrations) {
     // Stop if we've reached the target version
     if (options.to !== undefined && migration.version > options.to) {
       break
     }
-    
-    if (options.dryRun) {
-      // Dry run - just show what would happen
-      const { builder, operations } = createMockSchemaBuilder()
-      await migration.up(builder)
-      
-      console.log(`   [${migration.version}] ${migration.name}`)
-      for (const op of operations) {
-        console.log(`       - ${op}`)
-      }
+
+    const { builder, operations } = createMockSchemaBuilder()
+    await migration.up(builder)
+
+    console.log(`   [${migration.version}] ${migration.name}`)
+    for (const op of operations) {
+      console.log(`       - ${op}`)
     }
-    
+
     applied.push({ version: migration.version, name: migration.name })
     currentVersion = migration.version
   }
@@ -175,45 +172,28 @@ export async function runMigrate(options: MigrateOptions): Promise<MigrateResult
 // =============================================================================
 
 export const migrateCommand = new Command('migrate')
-  .description('Run pending migrations')
+  .description('Preview pending migrations (actual execution happens in GAS runtime)')
   .option('-d, --dir <path>', 'Migrations directory (default: from config or "migrations")')
   .option('-t, --to <version>', 'Migrate to specific version', (val) => parseInt(val, 10))
-  .option('--dry-run', 'Show what would be migrated without executing')
   .action(async (options: MigrateOptions) => {
-    console.log('🚀 Running migrations...')
+    console.log('[PREVIEW] Scanning migrations...')
     console.log('')
-    
-    if (options.dryRun) {
-      console.log('📋 Dry run - showing pending migrations:')
-      console.log('')
-    }
-    
+
     const result = await runMigrate(options)
-    
+
     if (!result.success) {
-      console.error(`❌ ${result.error}`)
+      console.error(`Error: ${result.error}`)
       process.exit(1)
     }
-    
+
     if (result.applied.length === 0) {
-      console.log('✅ No pending migrations.')
+      console.log('No pending migrations.')
       return
     }
-    
-    if (!options.dryRun) {
-      console.log('✅ Applied migrations:')
-      for (const m of result.applied) {
-        console.log(`   [${m.version}] ${m.name}`)
-      }
-    }
-    
+
     console.log('')
-    console.log(`📊 Current version: ${result.currentVersion}`)
+    console.log(`Current version: ${result.currentVersion}`)
+    console.log(`Total: ${result.applied.length} migration(s)`)
     console.log('')
-    
-    if (options.dryRun) {
-      console.log('💡 Run without --dry-run to apply migrations.')
-    } else {
-      console.log('🎉 Done!')
-    }
+    console.log('Note: CLI only previews migrations. Actual execution happens in GAS runtime.')
   })

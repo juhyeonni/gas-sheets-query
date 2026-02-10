@@ -2,59 +2,8 @@
  * SheetsAdapter - Real Google Sheets DataStore implementation
  * Uses Google Apps Script SpreadsheetApp API
  */
-import type { Row, DataStore, QueryOptions, WhereCondition, OrderByCondition, BatchUpdateItem } from '../core/types'
-
-/**
- * Evaluate a single where condition against a row
- */
-function evaluateCondition<T extends Row>(row: T, condition: WhereCondition<T>): boolean {
-  const { field, operator, value } = condition
-  const fieldValue = row[field]
-
-  switch (operator) {
-    case '=':
-      return fieldValue === value
-    case '!=':
-      return fieldValue !== value
-    case '>':
-      return (fieldValue as number) > (value as number)
-    case '>=':
-      return (fieldValue as number) >= (value as number)
-    case '<':
-      return (fieldValue as number) < (value as number)
-    case '<=':
-      return (fieldValue as number) <= (value as number)
-    case 'like':
-      if (typeof fieldValue !== 'string' || typeof value !== 'string') return false
-      const pattern = value.replace(/%/g, '.*').replace(/_/g, '.')
-      return new RegExp(`^${pattern}$`, 'i').test(fieldValue)
-    case 'in':
-      return Array.isArray(value) && value.includes(fieldValue)
-    default:
-      return false
-  }
-}
-
-/**
- * Compare function for sorting
- */
-function compareRows<T extends Row>(a: T, b: T, orderBy: OrderByCondition<T>[]): number {
-  for (const { field, direction } of orderBy) {
-    const aVal = a[field]
-    const bVal = b[field]
-    
-    let comparison = 0
-    if (aVal === null || aVal === undefined) comparison = 1
-    else if (bVal === null || bVal === undefined) comparison = -1
-    else if (aVal < bVal) comparison = -1
-    else if (aVal > bVal) comparison = 1
-    
-    if (comparison !== 0) {
-      return direction === 'asc' ? comparison : -comparison
-    }
-  }
-  return 0
-}
+import type { Row, DataStore, QueryOptions, BatchUpdateItem } from '../core/types'
+import { evaluateCondition, compareRows } from '../core/query-utils'
 
 /** ID generation mode */
 export type IdMode = 'auto' | 'client'
@@ -70,7 +19,7 @@ export type ColumnType =
   | 'object' 
   | 'json'
 
-/** SheetsAdapter 설정 옵션 */
+/** SheetsAdapter configuration options */
 export interface SheetsAdapterOptions {
   /** Spreadsheet ID (optional - uses active spreadsheet if not provided) */
   spreadsheetId?: string
