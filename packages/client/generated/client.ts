@@ -27,7 +27,7 @@ export const schema: GeneratedSchema = {
  * 
  * const db = createClient({ spreadsheetId: 'your-spreadsheet-id' })
  * 
- * // Type-safe API with full type safety
+ * // Type-safe API
  * const items = db.from('Comment').findAll()
  * const item = db.from('Comment').query().where('id', '=', 1).first()
  * ```

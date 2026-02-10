@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { MockAdapter, Repository, defineSheetsDB } from '../../src'
+import type { RowWithId } from '../../src/core/types'
 
-interface User {
+interface User extends RowWithId {
   id: number
   name: string
   email: string

@@ -8,9 +8,9 @@ import {
 } from '../../src/core/migration'
 import type { Migration, MigrationRecord, StoreResolver } from '../../src/core/migration'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
-import type { DataStore, Row } from '../../src/core/types'
+import type { DataStore, Row, RowWithId } from '../../src/core/types'
 
-interface User {
+interface User extends RowWithId {
   id: number
   name: string
   email: string
@@ -19,7 +19,7 @@ interface User {
   newName?: string
 }
 
-interface Post {
+interface Post extends RowWithId {
   id: number
   title: string
   userId: number

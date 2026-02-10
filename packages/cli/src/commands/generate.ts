@@ -1,7 +1,7 @@
 /**
  * Generate command - generates types and client from schema
  * 
- * Issue #22, #23 (watch mode), #24 (Typed client)
+ * Issue #22, #23 (watch mode), #24 (client package)
  */
 
 import { Command } from 'commander'
@@ -171,7 +171,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
     }
   }
   
-  // Generate Typed client (--client option)
+  // Generate client package (--client option)
   if (options.client) {
     try {
       const clientDir = findClientPackage()
@@ -332,7 +332,7 @@ export const generateCommand = new Command('generate')
   .option('-s, --schema <path>', 'Schema file path', 'schema.gsq.yaml')
   .option('-o, --output <path>', 'Output directory', 'generated')
   .option('-w, --watch', 'Watch schema file for changes and regenerate')
-  .option('-c, --client', 'Also generate Typed client in @gsquery/client/generated')
+  .option('-c, --client', 'Also generate typed client in @gsquery/client/generated')
   .action(async (options: GenerateOptions) => {
     console.log('🔧 Generating from schema...')
     console.log(`   Schema: ${options.schema}`)

@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { defineSheetsDB, SheetsDB, MockAdapter } from '../../src'
+import type { RowWithId } from '../../src/core/types'
 
 // Test types
-interface User {
+interface User extends RowWithId {
   id: number
   name: string
   email: string
 }
 
-interface Post {
+interface Post extends RowWithId {
   id: number
   title: string
   content: string
@@ -16,19 +17,19 @@ interface Post {
   status: string
 }
 
-interface Comment {
+interface Comment extends RowWithId {
   id: number
   postId: number
   authorId: number
   text: string
 }
 
-interface Category {
+interface Category extends RowWithId {
   id: number
   name: string
 }
 
-interface PostCategory {
+interface PostCategory extends RowWithId {
   id: number
   postId: number
   categoryId: number

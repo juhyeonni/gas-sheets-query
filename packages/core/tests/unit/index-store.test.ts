@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { IndexStore, createIndexKey, serializeValues } from '../../src/core/index-store'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
+import type { RowWithId } from '../../src/core/types'
 
-interface User {
+interface User extends RowWithId {
   id: number
   name: string
   email: string
@@ -186,7 +187,7 @@ describe('IndexStore', () => {
 })
 
 describe('MockAdapter with indexes', () => {
-  interface TestUser {
+  interface TestUser extends RowWithId {
     id: number
     name: string
     status: string
@@ -400,7 +401,7 @@ describe('MockAdapter with indexes', () => {
 })
 
 describe('Index performance benchmark', () => {
-  interface BenchUser {
+  interface BenchUser extends RowWithId {
     id: number
     status: string
     category: string

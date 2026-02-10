@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createSheetsDB, SheetsDB } from '../../src/core/sheets-db'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
+import type { RowWithId } from '../../src/core/types'
 
-interface User {
+interface User extends RowWithId {
   id: number
   name: string
   email: string
@@ -10,7 +11,7 @@ interface User {
   active: boolean
 }
 
-interface Post {
+interface Post extends RowWithId {
   id: number
   title: string
   content: string

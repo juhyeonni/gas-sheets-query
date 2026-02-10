@@ -1,6 +1,6 @@
 /**
  * Client Package Generator
- * 
+ *
  * Generates files for @gsquery/client package.
  * Issue #24
  */
@@ -45,14 +45,14 @@ function mapType(schemaType: string): string {
  */
 export function generateClientTypes(ast: SchemaAST): string {
   const lines: string[] = []
-  
+
   lines.push(HEADER)
   lines.push('')
-  
+
   // Import RowWithId
   lines.push("import type { RowWithId } from '@gsquery/core'")
   lines.push('')
-  
+
   // Enums
   const enumNames = Object.keys(ast.enums).sort()
   for (const name of enumNames) {
@@ -60,28 +60,28 @@ export function generateClientTypes(ast: SchemaAST): string {
     const values = enumAst.values.map(v => `'${v}'`).join(' | ')
     lines.push(`export type ${name} = ${values}`)
   }
-  
+
   if (enumNames.length > 0) {
     lines.push('')
   }
-  
+
   // Interfaces
   const tableNames = Object.keys(ast.tables).sort()
   for (let i = 0; i < tableNames.length; i++) {
     if (i > 0) lines.push('')
-    
+
     const table = ast.tables[tableNames[i]]
     lines.push(`export interface ${table.name} extends RowWithId {`)
-    
+
     for (const field of table.fields) {
       const optionalMark = field.optional ? '?' : ''
       const tsType = mapType(field.type)
       lines.push(`  ${field.name}${optionalMark}: ${tsType}`)
     }
-    
+
     lines.push('}')
   }
-  
+
   // Tables type
   if (tableNames.length > 0) {
     lines.push('')
@@ -91,7 +91,7 @@ export function generateClientTypes(ast: SchemaAST): string {
     }
     lines.push('}')
   }
-  
+
   return lines.join('\n')
 }
 
@@ -105,11 +105,11 @@ export function generateClientTypes(ast: SchemaAST): string {
 function generateTableSchema(table: TableAST): string {
   const columns = table.fields.map(f => `'${f.name}'`).join(', ')
   const parts = [`columns: [${columns}] as const`]
-  
+
   if (table.mapTo) {
     parts.push(`sheetName: '${table.mapTo}'`)
   }
-  
+
   return `{ ${parts.join(', ')} }`
 }
 
@@ -119,29 +119,29 @@ function generateTableSchema(table: TableAST): string {
 export function generateClientCode(ast: SchemaAST): string {
   const lines: string[] = []
   const tableNames = Object.keys(ast.tables).sort()
-  
+
   lines.push(HEADER)
   lines.push('')
-  
+
   // Imports
   lines.push("import { createClientFactory, type GeneratedSchema } from '@gsquery/client'")
   lines.push("import type { Tables } from './types.js'")
   lines.push('')
-  
+
   // Schema constant
   lines.push('export const schema: GeneratedSchema = {')
   lines.push('  tables: {')
-  
+
   for (let i = 0; i < tableNames.length; i++) {
     const name = tableNames[i]
     const comma = i < tableNames.length - 1 ? ',' : ''
     lines.push(`    ${name}: ${generateTableSchema(ast.tables[name])}${comma}`)
   }
-  
+
   lines.push('  }')
   lines.push('}')
   lines.push('')
-  
+
   // createClient function
   lines.push('/**')
   lines.push(' * Create a typed database client')
@@ -152,7 +152,7 @@ export function generateClientCode(ast: SchemaAST): string {
   lines.push(' * ')
   lines.push(" * const db = createClient({ spreadsheetId: 'your-spreadsheet-id' })")
   lines.push(' * ')
-  lines.push(" * // Type-safe API with full type safety")
+  lines.push(' * // Type-safe API')
   if (tableNames.length > 0) {
     const exampleTable = tableNames[0]
     lines.push(` * const items = db.from('${exampleTable}').findAll()`)
@@ -162,7 +162,7 @@ export function generateClientCode(ast: SchemaAST): string {
   lines.push(' */')
   lines.push('export const createClient = createClientFactory<Tables>(schema)')
   lines.push('')
-  
+
   // createTestClient for testing
   lines.push('/**')
   lines.push(' * Create a mock client for testing')
@@ -170,7 +170,7 @@ export function generateClientCode(ast: SchemaAST): string {
   lines.push('export function createTestClient() {')
   lines.push('  return createClient({ mock: true })')
   lines.push('}')
-  
+
   return lines.join('\n')
 }
 
@@ -183,7 +183,7 @@ export function generateClientCode(ast: SchemaAST): string {
  */
 export function generateClientIndex(): string {
   const lines: string[] = []
-  
+
   lines.push(HEADER)
   lines.push('')
   lines.push("export * from './types.js'")
@@ -191,7 +191,7 @@ export function generateClientIndex(): string {
   lines.push('')
   lines.push('// Re-export useful types from @gsquery/core')
   lines.push("export type { SheetsDB, TableHandle, RowWithId, DataStore } from '@gsquery/core'")
-  
+
   return lines.join('\n')
 }
 

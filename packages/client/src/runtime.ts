@@ -1,7 +1,7 @@
 /**
  * @gsquery/client Runtime
  * 
- * Provides createClient API for Type-safe database access.
+ * Provides createClient API for type-safe database access.
  * This module is environment-aware and works in both GAS and Node.js.
  */
 
@@ -121,7 +121,7 @@ export function createStore<T extends RowWithId>(
 // =============================================================================
 
 /**
- * Create a Typed client from generated schema
+ * Create a typed client from generated schema
  * 
  * This is the base function that generated code will use.
  * 

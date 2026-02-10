@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
 import { Repository } from '../../src/core/repository'
+import type { RowWithId } from '../../src/core/types'
 
-interface User {
+interface User extends RowWithId {
   id: number
   name: string
   email: string

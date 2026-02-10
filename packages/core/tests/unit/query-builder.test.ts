@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { QueryBuilder, createQueryBuilder } from '../../src/core/query-builder'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
+import type { RowWithId } from '../../src/core/types'
 
-interface User {
+interface User extends RowWithId {
   id: number
   name: string
   email: string
