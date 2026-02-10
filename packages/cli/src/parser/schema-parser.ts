@@ -5,6 +5,10 @@
  */
 
 import yaml from 'js-yaml'
+import {
+  isBuiltInType,
+  isDefaultFunction,
+} from './types.js'
 import type {
   SchemaAST,
   TableAST,
@@ -271,11 +275,134 @@ export function parseSchema(yamlContent: string): ParseResult {
     }
   }
   
+  // Run semantic validation
+  const validationErrors = validateSchema(schema)
+  errors.push(...validationErrors)
+
   return {
-    success: true,
+    success: errors.length === 0,
     schema,
     errors,
   }
+}
+
+// =============================================================================
+// Semantic Validation
+// =============================================================================
+
+/**
+ * Validate a parsed schema AST for semantic correctness
+ *
+ * Checks:
+ * 1. Field types must be built-in or a defined enum
+ * 2. Each table must have exactly one @id field
+ * 3. @default arguments must be valid (function or literal)
+ * 4. Enums must have at least one value
+ * 5. Enum values must not contain duplicates
+ * 6. Index/unique columns must reference existing fields
+ */
+export function validateSchema(schema: SchemaAST): ParseError[] {
+  const errors: ParseError[] = []
+  const enumNames = new Set(Object.keys(schema.enums))
+
+  // Validate enums
+  for (const [name, enumDef] of Object.entries(schema.enums)) {
+    // Rule 4: Enums must have at least one value
+    if (enumDef.values.length === 0) {
+      errors.push({ message: `Enum '${name}' must have at least one value` })
+    }
+
+    // Rule 5: No duplicate enum values
+    const seen = new Set<string>()
+    for (const value of enumDef.values) {
+      if (seen.has(value)) {
+        errors.push({ message: `Enum '${name}' has duplicate value '${value}'` })
+      }
+      seen.add(value)
+    }
+  }
+
+  // Validate tables
+  for (const [tableName, table] of Object.entries(schema.tables)) {
+    const fieldNames = new Set(table.fields.map(f => f.name))
+
+    // Rule 2: Exactly one @id field
+    const idFields = table.fields.filter(f =>
+      f.attributes.some(a => a.name === 'id')
+    )
+    if (idFields.length === 0) {
+      errors.push({ message: `Table '${tableName}' must have an @id field`, table: tableName })
+    } else if (idFields.length > 1) {
+      errors.push({
+        message: `Table '${tableName}' has ${idFields.length} @id fields, expected exactly one`,
+        table: tableName,
+      })
+    }
+
+    for (const field of table.fields) {
+      // Rule 1: Field type must be built-in or a defined enum
+      if (!isBuiltInType(field.type) && !enumNames.has(field.type)) {
+        errors.push({
+          message: `Unknown type '${field.type}' in field '${tableName}.${field.name}'`,
+          table: tableName,
+          field: field.name,
+        })
+      }
+
+      // Rule 3: @default arguments must be valid
+      for (const attr of field.attributes) {
+        if (attr.name === 'default' && attr.args.length > 0) {
+          const arg = attr.args[0]
+          if (typeof arg === 'string' && isIdentifierLike(arg)) {
+            // Identifier-like strings must be a known function or valid enum value
+            // Non-identifier strings (e.g., '#888888') are treated as quoted literals
+            const isFunction = isDefaultFunction(arg)
+            const isEnumValue = isEnumDefaultValue(arg, field.type, schema)
+            if (!isFunction && !isEnumValue) {
+              errors.push({
+                message: `Invalid @default value '${arg}' in field '${tableName}.${field.name}'`,
+                table: tableName,
+                field: field.name,
+              })
+            }
+          }
+        }
+      }
+    }
+
+    // Rule 6: Index/unique columns must reference existing fields
+    for (const blockAttr of table.blockAttributes) {
+      if (blockAttr.name === 'index' || blockAttr.name === 'unique') {
+        for (const col of blockAttr.fields) {
+          if (!fieldNames.has(col)) {
+            errors.push({
+              message: `${blockAttr.name === 'index' ? 'Index' : 'Unique constraint'} references unknown field '${col}' in table '${tableName}'`,
+              table: tableName,
+            })
+          }
+        }
+      }
+    }
+  }
+
+  return errors
+}
+
+/**
+ * Check if a string looks like an identifier (function name or enum value)
+ * vs a quoted string literal that had quotes stripped by parseAttributeValue
+ */
+function isIdentifierLike(value: string): boolean {
+  return /^[a-zA-Z_]\w*$/.test(value)
+}
+
+/**
+ * Check if a @default string value is a valid enum value for the field's type
+ */
+function isEnumDefaultValue(value: string, fieldType: string, schema: SchemaAST): boolean {
+  const enumDef = schema.enums[fieldType]
+  if (!enumDef) return false
+  return enumDef.values.includes(value)
 }
 
 // =============================================================================
@@ -301,7 +428,7 @@ export async function parseSchemaFile(filePath: string): Promise<ParseResult> {
 }
 
 // Re-export types for convenience
-export type { 
+export type {
   ParseError,
   SchemaAST,
   TableAST,
@@ -312,3 +439,6 @@ export type {
   DefaultValue,
   ParseResult,
 }
+
+export { isBuiltInType, isDefaultFunction } from './types.js'
+export type { FieldType, DefaultFunction } from './types.js'

@@ -21,6 +21,6 @@ export { rollbackCommand, runRollback } from './commands/rollback.js'
 export type { RollbackOptions, RollbackResult } from './commands/rollback.js'
 
 // Parser and generators
-export { parseSchema, parseSchemaFile } from './parser/schema-parser.js'
+export { parseSchema, parseSchemaFile, validateSchema } from './parser/schema-parser.js'
 export { generateTypes } from './generator/types-generator.js'
 export { generateClient } from './generator/client-generator.js'

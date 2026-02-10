@@ -12,6 +12,7 @@ import {
   parseTable,
   parseBlockAttributeArrays,
   parseSchema,
+  validateSchema,
   ParseError,
 } from '../../src/parser/schema-parser'
 
@@ -467,7 +468,7 @@ tables:
 // =============================================================================
 
 describe('Error Handling', () => {
-  it('should collect errors with table context', () => {
+  it('should detect missing @id in malformed table definition', () => {
     const yaml = `
 tables:
   User:
@@ -475,8 +476,329 @@ tables:
     email: string @unknown_attribute
 `
     const result = parseSchema(yaml)
-    // Should still succeed but might have warnings about unknown attributes
-    expect(result.success).toBe(true)
+    // Table has no 'fields' key, so fields array is empty → no @id → validation fails
+    expect(result.success).toBe(false)
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("must have an @id field") })
+    )
+  })
+})
+
+// =============================================================================
+// Semantic Validation (Issue #29)
+// =============================================================================
+
+describe('validateSchema', () => {
+  it('should return no errors for a valid schema', () => {
+    const errors = validateSchema({
+      enums: {
+        Role: { name: 'Role', values: ['USER', 'ADMIN'] },
+      },
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'name', type: 'string', optional: false, attributes: [] },
+            { name: 'role', type: 'Role', optional: false, attributes: [{ name: 'default', args: ['USER'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+
+  // Rule 1: Field type must be built-in or defined enum
+  it('should error on unknown field type', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'data', type: 'json', optional: false, attributes: [] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("Unknown type 'json'") })
+    )
+  })
+
+  it('should accept enum type as valid field type', () => {
+    const errors = validateSchema({
+      enums: {
+        Status: { name: 'Status', values: ['OPEN', 'DONE'] },
+      },
+      tables: {
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'status', type: 'Status', optional: false, attributes: [] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+
+  // Rule 2: Exactly one @id field
+  it('should error when table has no @id field', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'name', type: 'string', optional: false, attributes: [] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("must have an @id field") })
+    )
+  })
+
+  it('should error when table has multiple @id fields', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'uuid', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("2 @id fields") })
+    )
+  })
+
+  // Rule 3: @default arguments must be valid
+  it('should error on invalid @default function', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }, { name: 'default', args: ['invalidfunc'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("Invalid @default value 'invalidfunc'") })
+    )
+  })
+
+  it('should accept valid @default functions', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }, { name: 'default', args: ['autoincrement'] }] },
+            { name: 'createdAt', type: 'datetime', optional: false, attributes: [{ name: 'default', args: ['now'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+
+  it('should accept @default with literal values', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'active', type: 'boolean', optional: false, attributes: [{ name: 'default', args: [true] }] },
+            { name: 'score', type: 'number', optional: false, attributes: [{ name: 'default', args: [0] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+
+  it('should accept @default with valid enum value', () => {
+    const errors = validateSchema({
+      enums: {
+        Role: { name: 'Role', values: ['USER', 'ADMIN'] },
+      },
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'role', type: 'Role', optional: false, attributes: [{ name: 'default', args: ['USER'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+
+  it('should error on invalid enum default value', () => {
+    const errors = validateSchema({
+      enums: {
+        Role: { name: 'Role', values: ['USER', 'ADMIN'] },
+      },
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'role', type: 'Role', optional: false, attributes: [{ name: 'default', args: ['SUPERADMIN'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("Invalid @default value 'SUPERADMIN'") })
+    )
+  })
+
+  // Rule 4: Enums must have at least one value
+  it('should error on empty enum', () => {
+    const errors = validateSchema({
+      enums: {
+        Empty: { name: 'Empty', values: [] },
+      },
+      tables: {},
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("must have at least one value") })
+    )
+  })
+
+  // Rule 5: No duplicate enum values
+  it('should error on duplicate enum values', () => {
+    const errors = validateSchema({
+      enums: {
+        Status: { name: 'Status', values: ['OPEN', 'DONE', 'OPEN'] },
+      },
+      tables: {},
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("duplicate value 'OPEN'") })
+    )
+  })
+
+  // Rule 6: Index/unique columns must reference existing fields
+  it('should error when index references unknown field', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'name', type: 'string', optional: false, attributes: [] },
+          ],
+          blockAttributes: [
+            { name: 'index', fields: ['nonexistent'] },
+          ],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("unknown field 'nonexistent'") })
+    )
+  })
+
+  it('should error when unique constraint references unknown field', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [
+            { name: 'unique', fields: ['email'] },
+          ],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("unknown field 'email'") })
+    )
+  })
+
+  it('should accept valid index and unique references', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'email', type: 'string', optional: false, attributes: [] },
+            { name: 'name', type: 'string', optional: false, attributes: [] },
+          ],
+          blockAttributes: [
+            { name: 'index', fields: ['email'] },
+            { name: 'unique', fields: ['email', 'name'] },
+          ],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+})
+
+describe('parseSchema with validation', () => {
+  it('should include validation errors in parseSchema result', () => {
+    const yaml = `
+tables:
+  User:
+    fields:
+      name: string
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(false)
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("must have an @id field") })
+    )
+  })
+
+  it('should report success false when validation fails', () => {
+    const yaml = `
+enums:
+  Empty: []
+
+tables:
+  User:
+    fields:
+      id: number @id
+      data: json
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(false)
+    expect(result.errors.length).toBeGreaterThanOrEqual(2)
   })
 })
 

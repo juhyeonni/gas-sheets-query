@@ -16,7 +16,7 @@ export type FieldType = 'string' | 'number' | 'boolean' | 'datetime'
 /**
  * Built-in default value functions
  */
-export type DefaultFunction = 'autoincrement' | 'now'
+export type DefaultFunction = 'autoincrement' | 'now' | 'uuid' | 'cuid'
 
 /**
  * Default value - can be a literal or a function
@@ -170,5 +170,5 @@ export function isBuiltInType(type: string): type is FieldType {
  * Check if a default value is a function
  */
 export function isDefaultFunction(value: DefaultValue): value is DefaultFunction {
-  return value === 'autoincrement' || value === 'now'
+  return value === 'autoincrement' || value === 'now' || value === 'uuid' || value === 'cuid'
 }
