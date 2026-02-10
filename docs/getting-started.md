@@ -238,8 +238,6 @@ Use SheetsAdapter when connecting to actual Google Sheets:
 // Running in GAS environment
 import { createSheetsDB, SheetsAdapter } from '@gsquery/core'
 
-const spreadsheet = SpreadsheetApp.openById('YOUR_SPREADSHEET_ID')
-
 const db = createSheetsDB({
   config: {
     spreadsheetId: 'YOUR_SPREADSHEET_ID',
@@ -249,8 +247,16 @@ const db = createSheetsDB({
     }
   },
   stores: {
-    users: new SheetsAdapter(spreadsheet.getSheetByName('users')),
-    posts: new SheetsAdapter(spreadsheet.getSheetByName('posts'))
+    users: new SheetsAdapter({
+      spreadsheetId: 'YOUR_SPREADSHEET_ID',
+      sheetName: 'users',
+      columns: ['id', 'email', 'name', 'role']
+    }),
+    posts: new SheetsAdapter({
+      spreadsheetId: 'YOUR_SPREADSHEET_ID',
+      sheetName: 'posts',
+      columns: ['id', 'title', 'authorId']
+    })
   }
 })
 ```
