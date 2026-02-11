@@ -27,6 +27,11 @@ TypeScript library for using Google Sheets as a database in GAS projects.
 cat .claude/project.json
 ```
 
+## Documentation
+
+- **npm Publishing Strategy**: `.claude/npm-publish-strategy.md` - Versioning, release workflow, CI/CD
+- **Skills**: `.claude/skills/` - Domain-specific guides
+
 ## Branching Strategy
 
 **Two main branches:**
@@ -92,14 +97,16 @@ pnpm install        # Install dependencies
 pnpm dev            # Watch mode
 pnpm build          # Build for production
 pnpm test           # Run tests
+pnpm test:coverage  # Run tests with coverage
 
 # GAS deployment (see gas-environment skill)
 pnpm build:gas      # Bundle for GAS
 clasp push          # Push to GAS
 
-# Release (see library-dev skill)
+# Release (see .claude/npm-publish-strategy.md)
 pnpm version patch  # Bump version
-npm publish         # Publish to npm
+pnpm -r publish --access public  # Publish all packages
+git push --follow-tags  # Push with tags (triggers auto-publish)
 ```
 
 ## Tech Stack
