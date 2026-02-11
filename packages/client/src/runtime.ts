@@ -152,8 +152,11 @@ export function createClientFactory<Tables extends Record<string, RowWithId>>(
         if (options.stores[tableName]) {
           stores[tableName] = options.stores[tableName]
         } else {
-          // Fallback to mock if store not provided for a table
-          stores[tableName] = new MockAdapter()
+          // Throw error instead of silent fallback to prevent data loss
+          throw new Error(
+            `Store for table '${tableName}' not provided in options.stores. ` +
+            `Available tables: ${Object.keys(schema.tables).join(', ')}`
+          )
         }
       }
     } else {
