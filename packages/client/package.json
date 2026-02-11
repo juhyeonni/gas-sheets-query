@@ -9,15 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./generated": {
-      "types": "./generated/index.d.ts",
-      "import": "./generated/index.js"
     }
   },
   "files": [
-    "dist",
-    "generated"
+    "dist"
   ],
   "scripts": {
     "build": "tsc",

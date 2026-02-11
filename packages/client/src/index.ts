@@ -32,6 +32,8 @@ export {
   MockAdapter,
   SheetsAdapter,
   TableNotFoundError,
+  RowNotFoundError,
+  ValidationError,
 } from './runtime.js'
 
 export type {

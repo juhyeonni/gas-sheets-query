@@ -32,7 +32,7 @@ function generateLibraryImport(hasTables: boolean): string {
 function generateTypeImport(tableNames: string[]): string {
   if (tableNames.length === 0) return ''
   const sorted = [...tableNames].sort()
-  return `import type { ${sorted.join(', ')} } from './types'`
+  return `import type { ${sorted.join(', ')} } from './types.js'`
 }
 
 // =============================================================================

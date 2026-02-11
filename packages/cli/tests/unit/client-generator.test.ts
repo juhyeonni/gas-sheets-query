@@ -58,7 +58,7 @@ describe('generateClient', () => {
       
       const result = generateClient(ast)
       
-      expect(result).toContain("import type { User } from './types'")
+      expect(result).toContain("import type { User } from './types.js'")
     })
     
     it('should import multiple types sorted alphabetically', () => {
@@ -80,7 +80,7 @@ describe('generateClient', () => {
       
       const result = generateClient(ast)
       
-      expect(result).toContain("import type { Post, User } from './types'")
+      expect(result).toContain("import type { Post, User } from './types.js'")
     })
     
     it('should not import types for empty schema', () => {
@@ -360,7 +360,7 @@ describe('generateClient', () => {
       
       // Imports
       expect(result).toContain("import { createSheetsDB, MockAdapter, DataStore } from '@gsquery/core'")
-      expect(result).toContain("import type { Post, User } from './types'")
+      expect(result).toContain("import type { Post, User } from './types.js'")
       
       // Tables type
       expect(result).toContain('export type Tables = {')
