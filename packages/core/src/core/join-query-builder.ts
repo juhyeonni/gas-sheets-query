@@ -125,9 +125,21 @@ export class JoinQueryBuilder<T extends RowWithId> {
     operator: Operator,
     value: unknown
   ): this {
-    // For now, we only support filtering on the main table
-    // Prefixed fields like 'posts.status' are stripped to 'status'
-    const cleanField = this.stripTablePrefix(field as string) as K
+    const fieldStr = field as string
+
+    // Check for table-prefixed fields (e.g., 'users.name')
+    if (fieldStr.includes('.')) {
+      const [prefix] = fieldStr.split('.', 2)
+      if (prefix !== this.tableName) {
+        throw new Error(
+          `Cannot filter on joined table field "${fieldStr}". ` +
+          `Only fields from the main table "${this.tableName}" are supported in where(). ` +
+          `Filter joined data after exec() instead.`
+        )
+      }
+    }
+
+    const cleanField = this.stripTablePrefix(fieldStr) as K
 
     this.whereConditions.push({
       field: cleanField,
@@ -332,32 +344,28 @@ export class JoinQueryBuilder<T extends RowWithId> {
   count(): number {
     // For counting, we need to account for inner joins
     const hasInnerJoin = this.joinConfigs.some(c => c.type === 'inner')
-    
-    if (!hasInnerJoin) {
-      // No inner join - count main table results
-      const original = { limit: this.limitValue, offset: this.offsetValue }
-      this.limitValue = undefined
-      this.offsetValue = undefined
-      
-      const count = this.store.find(this.build()).length
-      
-      this.limitValue = original.limit
-      this.offsetValue = original.offset
-      
-      return count
+
+    const countOptions: QueryOptions<T> = {
+      where: [...this.whereConditions],
+      orderBy: [...this.orderByConditions]
     }
 
-    // With inner join, we need to execute the full query to get accurate count
-    const original = { limit: this.limitValue, offset: this.offsetValue }
+    if (!hasInnerJoin) {
+      // No inner join - count main table results
+      return this.store.find(countOptions).length
+    }
+
+    // With inner join, execute full query without pagination for accurate count
+    const savedLimit = this.limitValue
+    const savedOffset = this.offsetValue
     this.limitValue = undefined
     this.offsetValue = undefined
-    
-    const count = this.exec().length
-    
-    this.limitValue = original.limit
-    this.offsetValue = original.offset
-    
-    return count
+    try {
+      return this.exec().length
+    } finally {
+      this.limitValue = savedLimit
+      this.offsetValue = savedOffset
+    }
   }
 
   /**

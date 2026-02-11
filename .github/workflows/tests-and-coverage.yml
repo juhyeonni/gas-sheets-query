@@ -42,5 +42,6 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: davelosert/vitest-coverage-report-action@v2
         with:
-          json-summary-path: './packages/*/coverage/coverage-summary.json'
-          json-final-path: './packages/*/coverage/coverage-final.json'
+          json-summary-path: './packages/core/coverage/coverage-summary.json'
+          json-final-path: './packages/core/coverage/coverage-final.json'
+          name: '@gsquery/core'

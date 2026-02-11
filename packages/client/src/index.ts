@@ -64,12 +64,22 @@ export const schema = {
 
 /**
  * Placeholder createClient - replaced by generated version after `gsquery generate --client`
- * 
+ *
+ * This function returns a proxy that provides a clear error message when
+ * any table operation is attempted, guiding users to run code generation.
+ *
  * Run `gsquery generate --client` to generate proper types and client.
  */
-export function createClient(_options?: { spreadsheetId?: string; mock?: boolean }): never {
-  throw new Error(
-    '@gsquery/client: No schema generated yet.\n' +
+export function createClient(_options?: { spreadsheetId?: string; mock?: boolean }): {
+  from(tableName: string): never
+} {
+  const message =
+    '@gsquery/client: No schema generated yet. ' +
     'Run `gsquery generate --client` to generate types and client from your schema.'
-  )
+
+  return {
+    from(_tableName: string): never {
+      throw new Error(message)
+    }
+  }
 }

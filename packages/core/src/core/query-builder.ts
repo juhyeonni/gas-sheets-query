@@ -185,22 +185,12 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
    * Execute and return count of results
    */
   count(): number {
-    // Remove limit/offset for counting
-    const original = { limit: this.limitValue, offset: this.offsetValue }
-    this.limitValue = undefined
-    this.offsetValue = undefined
-    
-    const count = this.store.find(this.build()).length
-    
-    // Restore original values
-    this.limitValue = original.limit
-    this.offsetValue = original.offset
-    
-    return count
+    return this.store.find(this.buildWithoutPagination()).length
   }
 
   /**
    * Calculate sum of a numeric field
+   * Returns 0 for empty datasets (sum of nothing is 0)
    */
   sum<K extends keyof T & string>(field: K): number {
     const rows = this.getRowsForAggregation()
@@ -212,35 +202,42 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
 
   /**
    * Calculate average of a numeric field
+   * Returns null if no rows match
    */
-  avg<K extends keyof T & string>(field: K): number {
+  avg<K extends keyof T & string>(field: K): number | null {
     const rows = this.getRowsForAggregation()
-    if (rows.length === 0) return 0
-    return this.sum(field) / rows.length
+    if (rows.length === 0) return null
+    const values = rows
+      .map(row => row[field])
+      .filter(v => typeof v === 'number') as number[]
+    if (values.length === 0) return null
+    return values.reduce((a, b) => a + b, 0) / values.length
   }
 
   /**
    * Find minimum value of a field
+   * Returns null if no rows or no numeric values exist
    */
-  min<K extends keyof T & string>(field: K): number {
+  min<K extends keyof T & string>(field: K): number | null {
     const rows = this.getRowsForAggregation()
-    if (rows.length === 0) return 0
+    if (rows.length === 0) return null
     const values = rows
       .map(row => row[field])
       .filter(v => typeof v === 'number') as number[]
-    return values.length > 0 ? Math.min(...values) : 0
+    return values.length > 0 ? Math.min(...values) : null
   }
 
   /**
    * Find maximum value of a field
+   * Returns null if no rows or no numeric values exist
    */
-  max<K extends keyof T & string>(field: K): number {
+  max<K extends keyof T & string>(field: K): number | null {
     const rows = this.getRowsForAggregation()
-    if (rows.length === 0) return 0
+    if (rows.length === 0) return null
     const values = rows
       .map(row => row[field])
       .filter(v => typeof v === 'number') as number[]
-    return values.length > 0 ? Math.max(...values) : 0
+    return values.length > 0 ? Math.max(...values) : null
   }
 
   /**
@@ -333,19 +330,20 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
   // ============================================================================
 
   /**
+   * Build query options without limit/offset (for count and aggregations)
+   */
+  private buildWithoutPagination(): QueryOptions<T> {
+    return {
+      where: [...this.whereConditions],
+      orderBy: [...this.orderByConditions]
+    }
+  }
+
+  /**
    * Get rows for aggregation (ignores limit/offset)
    */
   private getRowsForAggregation(): T[] {
-    const original = { limit: this.limitValue, offset: this.offsetValue }
-    this.limitValue = undefined
-    this.offsetValue = undefined
-    
-    const rows = this.store.find(this.build())
-    
-    this.limitValue = original.limit
-    this.offsetValue = original.offset
-    
-    return rows
+    return this.store.find(this.buildWithoutPagination())
   }
 
   /**
