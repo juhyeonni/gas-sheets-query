@@ -10,6 +10,7 @@ import {
   isBuiltInType,
   isDefaultFunction,
 } from './types.js'
+import { isValidIdentifier, isValidStringValue } from '../utils/sanitize.js'
 import type {
   SchemaAST,
   TableAST,
@@ -340,6 +341,11 @@ export function validateSchema(schema: SchemaAST): ParseError[] {
 
   // Validate enums
   for (const [name, enumDef] of Object.entries(schema.enums)) {
+    // Rule: Enum name must be a valid identifier
+    if (!isValidIdentifier(name)) {
+      errors.push({ message: `Invalid enum name '${name}': must be a valid identifier and not a reserved word` })
+    }
+
     // Rule 4: Enums must have at least one value
     if (enumDef.values.length === 0) {
       errors.push({ message: `Enum '${name}' must have at least one value` })
@@ -352,12 +358,41 @@ export function validateSchema(schema: SchemaAST): ParseError[] {
         errors.push({ message: `Enum '${name}' has duplicate value '${value}'` })
       }
       seen.add(value)
+
+      // Rule: Enum values must not contain control characters
+      if (!isValidStringValue(value)) {
+        errors.push({ message: `Enum '${name}' has invalid value '${value}': must not contain control characters` })
+      }
     }
   }
 
   // Validate tables
   for (const [tableName, table] of Object.entries(schema.tables)) {
     const fieldNames = new Set(table.fields.map(f => f.name))
+
+    // Rule: Table name must be a valid identifier
+    if (!isValidIdentifier(tableName)) {
+      errors.push({ message: `Invalid table name '${tableName}': must be a valid identifier and not a reserved word`, table: tableName })
+    }
+
+    // Rule: Field names must be valid identifiers
+    for (const field of table.fields) {
+      if (!isValidIdentifier(field.name)) {
+        errors.push({
+          message: `Invalid field name '${field.name}' in table '${tableName}': must be a valid identifier and not a reserved word`,
+          table: tableName,
+          field: field.name,
+        })
+      }
+    }
+
+    // Rule: mapTo value must not contain control characters
+    if (table.mapTo !== undefined && !isValidStringValue(table.mapTo)) {
+      errors.push({
+        message: `Invalid map value for table '${tableName}': must not contain control characters`,
+        table: tableName,
+      })
+    }
 
     // Rule 2: Exactly one @id field
     const idFields = table.fields.filter(f =>

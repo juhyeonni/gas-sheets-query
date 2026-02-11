@@ -6,6 +6,7 @@
  */
 
 import type { SchemaAST, TableAST } from '../parser/types.js'
+import { escapeStringLiteral } from '../utils/sanitize.js'
 
 // =============================================================================
 // Constants
@@ -57,7 +58,7 @@ export function generateClientTypes(ast: SchemaAST): string {
   const enumNames = Object.keys(ast.enums).sort()
   for (const name of enumNames) {
     const enumAst = ast.enums[name]
-    const values = enumAst.values.map(v => `'${v}'`).join(' | ')
+    const values = enumAst.values.map(v => `'${escapeStringLiteral(v)}'`).join(' | ')
     lines.push(`export type ${name} = ${values}`)
   }
 
@@ -103,11 +104,11 @@ export function generateClientTypes(ast: SchemaAST): string {
  * Generate schema object for runtime
  */
 function generateTableSchema(table: TableAST): string {
-  const columns = table.fields.map(f => `'${f.name}'`).join(', ')
+  const columns = table.fields.map(f => `'${escapeStringLiteral(f.name)}'`).join(', ')
   const parts = [`columns: [${columns}] as const`]
 
   if (table.mapTo) {
-    parts.push(`sheetName: '${table.mapTo}'`)
+    parts.push(`sheetName: '${escapeStringLiteral(table.mapTo)}'`)
   }
 
   return `{ ${parts.join(', ')} }`
@@ -154,7 +155,7 @@ export function generateClientCode(ast: SchemaAST): string {
   lines.push(' * ')
   lines.push(' * // Type-safe API')
   if (tableNames.length > 0) {
-    const exampleTable = tableNames[0]
+    const exampleTable = escapeStringLiteral(tableNames[0])
     lines.push(` * const items = db.from('${exampleTable}').findAll()`)
     lines.push(` * const item = db.from('${exampleTable}').query().where('id', '=', 1).first()`)
   }

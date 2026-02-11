@@ -5,6 +5,7 @@
  */
 
 import type { SchemaAST, TableAST } from '../parser/types.js'
+import { escapeStringLiteral } from '../utils/sanitize.js'
 
 // =============================================================================
 // Constants
@@ -65,12 +66,12 @@ function generateTablesType(tableNames: string[]): string {
  * Generate table config object
  */
 function generateTableConfig(table: TableAST): string {
-  const columns = table.fields.map(f => `'${f.name}'`).join(', ')
+  const columns = table.fields.map(f => `'${escapeStringLiteral(f.name)}'`).join(', ')
   const parts = [`columns: [${columns}] as const`]
-  
+
   // Add sheetName if mapped
   if (table.mapTo) {
-    parts.push(`sheetName: '${table.mapTo}'`)
+    parts.push(`sheetName: '${escapeStringLiteral(table.mapTo)}'`)
   }
   
   return `{ ${parts.join(', ')} }`

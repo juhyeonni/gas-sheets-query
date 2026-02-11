@@ -770,6 +770,124 @@ describe('validateSchema', () => {
   })
 })
 
+// =============================================================================
+// Identifier & String Validation (Issue #41)
+// =============================================================================
+
+describe('validateSchema identifier sanitization', () => {
+  it('should error on invalid enum name', () => {
+    const errors = validateSchema({
+      enums: {
+        'class': { name: 'class', values: ['A'] },
+      },
+      tables: {},
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("Invalid enum name 'class'") })
+    )
+  })
+
+  it('should error on enum name with special characters', () => {
+    const errors = validateSchema({
+      enums: {
+        "bad'name": { name: "bad'name", values: ['A'] },
+      },
+      tables: {},
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining('Invalid enum name') })
+    )
+  })
+
+  it('should error on enum value with control characters', () => {
+    const errors = validateSchema({
+      enums: {
+        Status: { name: 'Status', values: ['OK', "BAD\x00VALUE"] },
+      },
+      tables: {},
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining('must not contain control characters') })
+    )
+  })
+
+  it('should error on invalid table name', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        'function': {
+          name: 'function',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("Invalid table name 'function'") })
+    )
+  })
+
+  it('should error on invalid field name', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'return', type: 'string', optional: false, attributes: [] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("Invalid field name 'return'") })
+    )
+  })
+
+  it('should error on mapTo with control characters', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          mapTo: "Sheet\x00Name",
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining('must not contain control characters') })
+    )
+  })
+
+  it('should accept valid identifiers and string values', () => {
+    const errors = validateSchema({
+      enums: {
+        Role: { name: 'Role', values: ['USER', 'ADMIN'] },
+      },
+      tables: {
+        User: {
+          name: 'User',
+          mapTo: 'Users Sheet',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'role', type: 'Role', optional: false, attributes: [{ name: 'default', args: ['USER'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+})
+
 describe('parseSchema with validation', () => {
   it('should include validation errors in parseSchema result', () => {
     const yaml = `

@@ -5,6 +5,7 @@
  */
 
 import type { SchemaAST, EnumAST, TableAST, FieldAST } from '../parser/types.js'
+import { escapeStringLiteral } from '../utils/sanitize.js'
 
 // =============================================================================
 // Constants
@@ -46,7 +47,7 @@ function mapType(schemaType: string): string {
  * export type Role = 'USER' | 'ADMIN'
  */
 function generateEnum(enumAst: EnumAST): string {
-  const values = enumAst.values.map(v => `'${v}'`).join(' | ')
+  const values = enumAst.values.map(v => `'${escapeStringLiteral(v)}'`).join(' | ')
   return `export type ${enumAst.name} = ${values}`
 }
 

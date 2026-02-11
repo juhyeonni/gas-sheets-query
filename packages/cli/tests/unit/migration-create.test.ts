@@ -117,4 +117,53 @@ describe('migration:create command', () => {
     const content = readFileSync('migrations/0001_test.ts', 'utf-8')
     expect(content).toContain("import type { Migration, SchemaBuilder } from '@gsquery/core'")
   })
+
+  // ==========================================================================
+  // Name Validation (Issue #41)
+  // ==========================================================================
+
+  it('should reject empty name', () => {
+    const result = runMigrationCreate('', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('empty')
+  })
+
+  it('should reject whitespace-only name', () => {
+    const result = runMigrationCreate('   ', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('empty')
+  })
+
+  it('should reject name with control characters', () => {
+    const result = runMigrationCreate('add\x00table', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('control characters')
+  })
+
+  it('should reject name with */ sequence', () => {
+    const result = runMigrationCreate('close_comment_*/', {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain("'*/'")
+  })
+
+  it('should reject name exceeding 128 characters', () => {
+    const longName = 'a'.repeat(129)
+    const result = runMigrationCreate(longName, {})
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('128')
+  })
+
+  it('should accept name with exactly 128 characters', () => {
+    const name = 'a'.repeat(128)
+    const result = runMigrationCreate(name, {})
+    expect(result.success).toBe(true)
+  })
+
+  it('should escape single quotes in migration name', () => {
+    const result = runMigrationCreate("it's_a_test", {})
+    expect(result.success).toBe(true)
+
+    const content = readFileSync(result.filePath!, 'utf-8')
+    expect(content).toContain("name: 'it\\'s_a_test'")
+  })
 })

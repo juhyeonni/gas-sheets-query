@@ -9,6 +9,7 @@ import { writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { resolve, join } from 'path'
 import { loadConfig } from './init.js'
 import { toError } from '../utils/errors.js'
+import { escapeStringLiteral, isValidStringValue } from '../utils/sanitize.js'
 
 // =============================================================================
 // Types
@@ -64,6 +65,7 @@ function toSnakeCase(name: string): string {
  * Generate migration file content
  */
 function generateMigrationContent(version: number, name: string): string {
+  const escapedName = escapeStringLiteral(name)
   return `/**
  * Migration: ${name}
  * Version: ${version}
@@ -74,7 +76,7 @@ import type { Migration, SchemaBuilder } from '@gsquery/core'
 
 export const migration: Migration = {
   version: ${version},
-  name: '${name}',
+  name: '${escapedName}',
   
   async up(db: SchemaBuilder): Promise<void> {
     // Add your schema changes here
@@ -101,6 +103,20 @@ export default migration
  * Run the migration:create command
  */
 export function runMigrationCreate(name: string, options: MigrationCreateOptions): MigrationCreateResult {
+  // Validate migration name
+  if (!name || !name.trim()) {
+    return { success: false, error: 'Migration name must not be empty' }
+  }
+  if (name.length > 128) {
+    return { success: false, error: 'Migration name must be 128 characters or fewer' }
+  }
+  if (!isValidStringValue(name)) {
+    return { success: false, error: 'Migration name must not contain control characters' }
+  }
+  if (name.includes('*/')) {
+    return { success: false, error: "Migration name must not contain '*/' sequence" }
+  }
+
   // Get migrations directory
   const config = loadConfig()
   const migrationsDir = resolve(process.cwd(), options.dir || config?.migrationsDir || 'migrations')
