@@ -124,7 +124,7 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
     }
 
     // Apply limit
-    if (options.limitValue !== undefined && options.limitValue > 0) {
+    if (options.limitValue !== undefined && options.limitValue >= 0) {
       result = result.slice(0, options.limitValue)
     }
 
