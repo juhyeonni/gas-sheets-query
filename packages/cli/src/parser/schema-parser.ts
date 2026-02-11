@@ -5,6 +5,7 @@
  */
 
 import yaml from 'js-yaml'
+import { readFileSync } from 'fs'
 import {
   isBuiltInType,
   isDefaultFunction,
@@ -222,10 +223,10 @@ export function parseSchema(yamlContent: string): ParseResult {
     }
   }
   
-  let raw: RawSchema
-  
+  let raw: unknown
+
   try {
-    raw = yaml.load(yamlContent) as RawSchema
+    raw = yaml.load(yamlContent)
   } catch (e) {
     const err = e as Error
     return {
@@ -233,7 +234,7 @@ export function parseSchema(yamlContent: string): ParseResult {
       errors: [{ message: `YAML parse error: ${err.message}` }],
     }
   }
-  
+
   // Handle null/undefined from yaml.load
   if (!raw) {
     return {
@@ -245,15 +246,47 @@ export function parseSchema(yamlContent: string): ParseResult {
       errors: [],
     }
   }
-  
+
+  // Runtime validation of YAML structure
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return {
+      success: false,
+      errors: [{ message: `Invalid schema: expected object, got ${Array.isArray(raw) ? 'array' : typeof raw}` }],
+    }
+  }
+
+  const rawSchema = raw as Record<string, unknown>
+
+  // Validate enums field if present
+  if (rawSchema.enums !== undefined) {
+    if (typeof rawSchema.enums !== 'object' || Array.isArray(rawSchema.enums)) {
+      return {
+        success: false,
+        errors: [{ message: 'Invalid schema: enums must be an object' }],
+      }
+    }
+  }
+
+  // Validate tables field if present
+  if (rawSchema.tables !== undefined) {
+    if (typeof rawSchema.tables !== 'object' || Array.isArray(rawSchema.tables)) {
+      return {
+        success: false,
+        errors: [{ message: 'Invalid schema: tables must be an object' }],
+      }
+    }
+  }
+
+  const validatedRaw = rawSchema as RawSchema
+
   const schema: SchemaAST = {
     enums: {},
     tables: {},
   }
   
   // Parse enums
-  if (raw.enums) {
-    for (const [name, values] of Object.entries(raw.enums)) {
+  if (validatedRaw.enums) {
+    for (const [name, values] of Object.entries(validatedRaw.enums)) {
       try {
         schema.enums[name] = parseEnum(name, values)
       } catch (e) {
@@ -262,10 +295,10 @@ export function parseSchema(yamlContent: string): ParseResult {
       }
     }
   }
-  
+
   // Parse tables
-  if (raw.tables) {
-    for (const [name, tableDefinition] of Object.entries(raw.tables)) {
+  if (validatedRaw.tables) {
+    for (const [name, tableDefinition] of Object.entries(validatedRaw.tables)) {
       try {
         schema.tables[name] = parseTable(name, tableDefinition)
       } catch (e) {
@@ -412,11 +445,9 @@ function isEnumDefaultValue(value: string, fieldType: string, schema: SchemaAST)
 /**
  * Parse schema from file path
  */
-export async function parseSchemaFile(filePath: string): Promise<ParseResult> {
-  const fs = await import('fs')
-  
+export function parseSchemaFile(filePath: string): ParseResult {
   try {
-    const content = fs.readFileSync(filePath, 'utf-8')
+    const content = readFileSync(filePath, 'utf-8')
     return parseSchema(content)
   } catch (e) {
     const err = e as Error

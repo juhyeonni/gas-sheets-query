@@ -60,7 +60,7 @@ async function loadMigrations(migrationsDir: string): Promise<MigrationDef[]> {
   }
   
   const files = readdirSync(migrationsDir)
-    .filter(f => f.match(/^\d{4}_.*\.ts$/))
+    .filter(f => f.match(/^\d+_.*\.ts$/))
     .sort()
   
   const migrations = []
@@ -72,8 +72,16 @@ async function loadMigrations(migrationsDir: string): Promise<MigrationDef[]> {
     try {
       const module = await import(fileUrl)
       const migration = module.migration || module.default
-      
+
       if (migration && typeof migration.up === 'function' && typeof migration.down === 'function') {
+        // Validate version and name types
+        if (typeof migration.version !== 'number') {
+          throw new Error(`Invalid migration: version must be a number, got ${typeof migration.version}`)
+        }
+        if (typeof migration.name !== 'string') {
+          throw new Error(`Invalid migration: name must be a string, got ${typeof migration.name}`)
+        }
+
         migrations.push({
           version: migration.version,
           name: migration.name,
@@ -175,7 +183,13 @@ export const rollbackCommand = new Command('rollback')
   .description('Preview migration rollback (actual execution happens in GAS runtime)')
   .option('-d, --dir <path>', 'Migrations directory (default: from config or "migrations")')
   .option('-a, --all', 'Rollback all migrations')
-  .option('-s, --steps <number>', 'Number of migrations to rollback', (val) => parseInt(val, 10))
+  .option('-s, --steps <number>', 'Number of migrations to rollback', (val) => {
+    const num = parseInt(val, 10)
+    if (isNaN(num)) {
+      throw new Error(`Invalid steps number: '${val}'. Expected a number.`)
+    }
+    return num
+  })
   .action(async (options: RollbackOptions) => {
     console.log('[PREVIEW] Scanning rollback plan...')
     console.log('')

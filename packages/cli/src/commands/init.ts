@@ -89,17 +89,39 @@ export function runInit(options: InitOptions): InitResult {
  */
 export function loadConfig(): GSQConfig | null {
   const configPath = resolve(process.cwd(), CONFIG_FILENAME)
-  
+
   if (!existsSync(configPath)) {
     return null
   }
-  
+
+  let content: unknown
   try {
-    const content = JSON.parse(readFileSync(configPath, 'utf-8'))
-    return content as GSQConfig
-  } catch {
-    return null
+    content = JSON.parse(readFileSync(configPath, 'utf-8'))
+  } catch (error) {
+    throw new Error(
+      `Failed to parse ${CONFIG_FILENAME}: ${error instanceof Error ? error.message : 'Invalid JSON'}`
+    )
   }
+
+  // Runtime validation of config structure
+  if (!content || typeof content !== 'object') {
+    throw new Error(`Invalid config: expected object, got ${typeof content}`)
+  }
+
+  const config = content as Record<string, unknown>
+
+  // Validate that present fields have correct types
+  const validFields = ['spreadsheetId', 'migrationsDir', 'generatedDir', 'schemaFile']
+
+  for (const field of validFields) {
+    if (config[field] !== undefined && typeof config[field] !== 'string') {
+      throw new Error(
+        `Invalid config: field '${field}' must be a string, got ${typeof config[field]}`
+      )
+    }
+  }
+
+  return config as unknown as GSQConfig
 }
 
 // =============================================================================

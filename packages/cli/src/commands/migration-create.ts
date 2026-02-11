@@ -39,7 +39,7 @@ function getNextVersion(migrationsDir: string): number {
   
   const files = readdirSync(migrationsDir)
   const versions = files
-    .filter(f => f.match(/^\d{4}_.*\.ts$/))
+    .filter(f => f.match(/^\d+_.*\.ts$/))
     .map(f => parseInt(f.split('_')[0], 10))
     .filter(v => !isNaN(v))
   
