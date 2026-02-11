@@ -101,15 +101,25 @@ export function createStore<T extends RowWithId>(
   // If spreadsheetId is provided, use SheetsAdapter
   // This works even if isGASEnvironment() returns false in bundled code
   if (options.spreadsheetId || isGASEnvironment()) {
+    // Warn when using active spreadsheet without explicit spreadsheetId
+    if (!options.spreadsheetId && isGASEnvironment()) {
+      console.warn(
+        `[gsquery] Using active spreadsheet for table '${tableName}' (no spreadsheetId provided). ` +
+        `This may write to unintended spreadsheet. Consider passing explicit spreadsheetId.`
+      )
+    }
+
     const sheetName = tableSchema.sheetName || tableName
-    // Use type assertion since SheetsAdapter requires { id: number }
-    // but runtime will handle both number and string IDs
-    return new SheetsAdapter({
+    // Type assertion needed: While T extends RowWithId (which has id: string | number),
+    // TypeScript can't verify at compile time that T's id field exactly matches
+    // SheetsAdapter's requirement. This is safe because RowWithId guarantees id exists
+    // with the correct type at runtime.
+    return new SheetsAdapter<T>({
       spreadsheetId: options.spreadsheetId,
       sheetName,
       columns: [...tableSchema.columns],
       idMode
-    }) as unknown as DataStore<T>
+    }) as DataStore<T>
   }
 
   // Fallback to MockAdapter for Node.js (dev/test)
@@ -172,7 +182,10 @@ export function createClientFactory<Tables extends Record<string, RowWithId>>(
       tables: Object.fromEntries(
         Object.entries(schema.tables).map(([name, s]) => [
           name,
-          { columns: [...s.columns] }
+          {
+            columns: [...s.columns],
+            sheetName: s.sheetName
+          }
         ])
       )
     }

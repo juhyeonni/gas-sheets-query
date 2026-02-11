@@ -163,6 +163,8 @@ export interface TableSchema<T extends Row = Row> {
   columns: readonly (keyof T & string)[]
   /** ID column name (default: 'id') */
   idColumn?: string
+  /** Sheet name (defaults to table name if not specified) */
+  sheetName?: string
 }
 
 /** Database configuration (legacy) */
