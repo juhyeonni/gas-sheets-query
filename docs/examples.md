@@ -382,6 +382,8 @@ const monthlyRevenue = db.from('orders')
 
 ### Having (Group Filter)
 
+`having()` filters groups by aggregation results. The first argument must match a key in `agg()`.
+
 ```typescript
 // Only categories with more than 10 orders
 const popularCategories = db.from('products')

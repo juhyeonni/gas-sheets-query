@@ -18,7 +18,8 @@ Abstracts the repetitive Sheets CRUD + query logic when developing GAS (Google A
 gas-sheets-query/
 ├── packages/
 │   ├── core/       # Core library (SheetsDB, QueryBuilder)
-│   └── cli/        # CLI tools (gsquery)
+│   ├── cli/        # CLI tools (gsquery)
+│   └── client/     # Generated typed client runtime
 ```
 
 ## 🚀 Quick Start
@@ -58,7 +59,7 @@ npx gsquery generate
 ```typescript
 import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
-// Create DB instance
+// Create DB instance (mock: true for testing)
 const db = defineSheetsDB({
   tables: {
     users: {
@@ -66,9 +67,8 @@ const db = defineSheetsDB({
       types: { id: 0, name: '', email: '', role: '' }
     }
   },
-  stores: {
-    users: new MockAdapter()  // For testing, use SheetsAdapter in production
-  }
+  mock: true  // Auto-creates MockAdapter for all tables
+  // For production, use stores: { users: new SheetsAdapter({...}) }
 })
 
 // CRUD
@@ -186,11 +186,10 @@ export const migration = {
 ## 🗺 Roadmap
 
 - [x] v0.1 - Core (MVP): Basic CRUD + Query Builder
-- [x] v0.5 - Schema Generator: CLI (`gsquery generate`), type/client code generation
-- [ ] v0.6 - Performance: Optimization, Batch, Indexing
-- [ ] v0.7 - Advanced Query: Visualization API, JOIN, Aggregation
-- [ ] v0.8 - DX: Migration, Documentation
-- [ ] v1.0 - Production: npm publish, real-world validation
+- [x] v0.2 - Performance: Optimization, Batch, Indexing
+- [x] v0.3 - Advanced Query: Visualization API, JOIN, Aggregation
+- [x] v0.4 - DX: Migration, Schema Generator, CLI
+- [ ] v1.0 - Production: npm publish, integration testing, release
 
 ## 📝 License
 

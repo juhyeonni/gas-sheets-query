@@ -30,7 +30,7 @@ pnpm add @gsquery/core
 npm install @gsquery/core
 
 # yarn
-yarn add gas-sheets-query
+yarn add @gsquery/core
 ```
 
 ---
@@ -206,11 +206,10 @@ export interface Post {
 
 ### Local Development (MockAdapter)
 
-Use `MockAdapter` for testing and local development:
+Use `mock: true` for testing and local development (auto-creates in-memory MockAdapter for all tables):
 
 ```typescript
-import { defineSheetsDB, MockAdapter } from '@gsquery/core'
-import type { User, Post } from './generated/types'
+import { defineSheetsDB } from '@gsquery/core'
 
 const db = defineSheetsDB({
   tables: {
@@ -223,10 +222,7 @@ const db = defineSheetsDB({
       types: { id: 0, title: '', content: '', authorId: 0, published: false, createdAt: new Date() }
     }
   },
-  stores: {
-    users: new MockAdapter<User>(),
-    posts: new MockAdapter<Post>()
-  }
+  mock: true  // Auto-creates MockAdapter for all tables
 })
 ```
 
@@ -236,14 +232,18 @@ Use SheetsAdapter when connecting to actual Google Sheets:
 
 ```typescript
 // Running in GAS environment
-import { createSheetsDB, SheetsAdapter } from '@gsquery/core'
+import { defineSheetsDB, SheetsAdapter } from '@gsquery/core'
 
-const db = createSheetsDB({
-  config: {
-    spreadsheetId: 'YOUR_SPREADSHEET_ID',
-    tables: {
-      users: { columns: ['id', 'email', 'name', 'role'] },
-      posts: { columns: ['id', 'title', 'authorId'] }
+const db = defineSheetsDB({
+  spreadsheetId: 'YOUR_SPREADSHEET_ID',
+  tables: {
+    users: {
+      columns: ['id', 'email', 'name', 'role'] as const,
+      types: { id: 0, email: '', name: '', role: '' }
+    },
+    posts: {
+      columns: ['id', 'title', 'authorId'] as const,
+      types: { id: 0, title: '', authorId: 0 }
     }
   },
   stores: {

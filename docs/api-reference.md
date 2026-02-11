@@ -49,7 +49,8 @@ const db = defineSheetsDB({
 |----------|------|----------|-------------|
 | `spreadsheetId` | `string` | ✗ | Google Spreadsheet ID |
 | `tables` | `Record<string, TableSchemaTyped>` | ✓ | Table schema definitions |
-| `stores` | `Record<string, DataStore>` | ✓ | DataStore for each table |
+| `stores` | `Record<string, DataStore>` | ✗ | DataStore for each table (optional when `mock` is true) |
+| `mock` | `boolean` | ✗ | Auto-create MockAdapter for all tables (for testing) |
 
 ### createSheetsDB
 
@@ -328,7 +329,7 @@ const max = query.max('amount')
 ### Group Aggregation
 
 ```typescript
-// Grouping
+// Single group
 const stats = db.from('orders')
   .query()
   .where('status', '=', 'PAID')
@@ -349,14 +350,16 @@ const stats = db.from('orders')
 
 ### Having
 
+`having()` filters groups by aggregation results. Chain it before `agg()` - it references the agg field names defined in `agg()`.
+
 ```typescript
-// Filter groups
+// Filter groups - 'orderCount' must match a key in agg()
 const bigCategories = db.from('orders')
   .query()
   .groupBy('category')
-  .having('count', '>', 10)  // Only groups with more than 10 items
+  .having('orderCount', '>', 10)  // Only groups with more than 10 items
   .agg({
-    count: 'count',
+    orderCount: 'count',
     total: 'sum:amount'
   })
 ```
@@ -481,11 +484,14 @@ gsquery generate [options]
 Options:
   -s, --schema <path>     Schema file path (default: schema.gsq.yaml)
   -o, --output <dir>      Output directory (default: generated/)
+  -w, --watch             Watch schema file for changes and regenerate
+  -c, --client            Also generate typed client in @gsquery/client/generated
 ```
 
 Generated files:
 - `generated/types.ts` - Type definitions
 - `generated/client.ts` - DB client
+- `generated/index.ts` - Re-exports
 
 ### gsquery migration:create
 
@@ -504,21 +510,27 @@ Generated file:
 
 ### gsquery migrate
 
-Run pending migrations.
+Preview pending migrations (actual execution happens in GAS runtime).
 
 ```bash
 gsquery migrate [options]
 
 Options:
-  --to <version>    Migrate to specific version only
+  -d, --dir <path>        Migrations directory (default: from config or "migrations")
+  -t, --to <version>      Migrate to specific version only
 ```
 
 ### gsquery rollback
 
-Rollback last migration.
+Preview migration rollback.
 
 ```bash
-gsquery rollback
+gsquery rollback [options]
+
+Options:
+  -d, --dir <path>        Migrations directory (default: from config or "migrations")
+  -a, --all               Rollback all migrations
+  -s, --steps <number>    Number of migrations to rollback (default: 1)
 ```
 
 ---
