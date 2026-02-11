@@ -27,6 +27,37 @@ TypeScript library for using Google Sheets as a database in GAS projects.
 cat .claude/project.json
 ```
 
+## Branching Strategy
+
+**Two main branches:**
+
+| Branch | Purpose | Protection |
+|--------|---------|------------|
+| `main` | Production releases (npm publish) | Protected |
+| `dev` | Active development | Default branch |
+
+**Workflow:**
+1. Work on feature branches from `dev`
+2. Create PR to `dev` for review
+3. Merge to `dev` after approval
+4. Periodically merge `dev` → `main` for releases
+
+**Creating feature branch:**
+```bash
+git checkout dev
+git pull
+git checkout -b feature/your-feature
+```
+
+**Release process:**
+```bash
+git checkout main
+git merge dev
+pnpm version [patch|minor|major]
+git push --tags
+pnpm release
+```
+
 ## Workflow
 
 ### 1. Start Session
