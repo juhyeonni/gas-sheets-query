@@ -21,11 +21,12 @@ describe('Error Handling Edge Cases', () => {
   describe('Repository batch fallbacks', () => {
     it('should use fallback when store does not implement batchInsert', () => {
       // Create a minimal store without batchInsert
+      let counter = 1
       const store: DataStore<TestRow> = {
         findAll: () => [],
         find: () => [],
         findById: () => undefined,
-        insert: (data) => ({ id: 1, ...data } as TestRow),
+        insert: (data) => ({ id: counter++, ...data } as TestRow),
         update: () => undefined,
         delete: () => false
         // No batchInsert implementation
@@ -39,7 +40,7 @@ describe('Error Handling Edge Cases', () => {
 
       expect(results).toHaveLength(2)
       expect(results[0].id).toBe(1)
-      expect(results[1].id).toBe(1)
+      expect(results[1].id).toBe(2)
     })
 
     it('should use fallback when store does not implement batchUpdate', () => {
