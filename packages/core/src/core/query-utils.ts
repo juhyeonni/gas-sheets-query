@@ -5,6 +5,13 @@
 import type { Row, WhereCondition, OrderByCondition } from './types'
 
 /**
+ * Escape regex special characters in a string
+ */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
  * Evaluate a single where condition against a row
  */
 export function evaluateCondition<T extends Row>(row: T, condition: WhereCondition<T>): boolean {
@@ -26,7 +33,8 @@ export function evaluateCondition<T extends Row>(row: T, condition: WhereConditi
       return (fieldValue as number) <= (value as number)
     case 'like':
       if (typeof fieldValue !== 'string' || typeof value !== 'string') return false
-      const pattern = value.replace(/%/g, '.*').replace(/_/g, '.')
+      const escaped = escapeRegex(value)
+      const pattern = escaped.replace(/%/g, '.*').replace(/_/g, '.')
       return new RegExp(`^${pattern}$`, 'i').test(fieldValue)
     case 'in':
       return Array.isArray(value) && value.includes(fieldValue)

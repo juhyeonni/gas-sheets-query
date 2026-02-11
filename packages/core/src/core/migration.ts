@@ -309,14 +309,14 @@ export class MigrationRunner {
       }
       
       case 'removeColumn': {
-        // In-memory: we can't truly remove a column, but we can set it to undefined
-        // In real Sheets: would need to delete the column
+        // Set column value to undefined via update
+        // In-memory adapters: the column key will have undefined value
+        // In Sheets adapter: the cell will be cleared
         for (const row of rows) {
           if (operation.column! in row) {
-            const updates = { ...row }
-            delete updates[operation.column!]
-            delete updates.id
-            store.update(row.id as string | number, updates)
+            store.update(row.id as string | number, {
+              [operation.column!]: undefined
+            })
           }
         }
         break

@@ -67,8 +67,8 @@ describe('Aggregation Functions', () => {
         expect(query.where('status', '=', 'completed').avg('amount')).toBe(92)
       })
 
-      it('should return 0 for empty results', () => {
-        expect(query.where('status', '=', 'nonexistent').avg('amount')).toBe(0)
+      it('should return null for empty results', () => {
+        expect(query.where('status', '=', 'nonexistent').avg('amount')).toBeNull()
       })
     })
 
@@ -81,8 +81,8 @@ describe('Aggregation Functions', () => {
         expect(query.where('category', '=', 'electronics').min('amount')).toBe(100)
       })
 
-      it('should return 0 for empty results', () => {
-        expect(query.where('status', '=', 'nonexistent').min('amount')).toBe(0)
+      it('should return null for empty results', () => {
+        expect(query.where('status', '=', 'nonexistent').min('amount')).toBeNull()
       })
     })
 
@@ -95,8 +95,8 @@ describe('Aggregation Functions', () => {
         expect(query.where('category', '=', 'books').max('amount')).toBe(50)
       })
 
-      it('should return 0 for empty results', () => {
-        expect(query.where('status', '=', 'nonexistent').max('amount')).toBe(0)
+      it('should return null for empty results', () => {
+        expect(query.where('status', '=', 'nonexistent').max('amount')).toBeNull()
       })
     })
   })
@@ -260,9 +260,9 @@ describe('Aggregation Functions', () => {
       
       expect(emptyQuery.count()).toBe(0)
       expect(emptyQuery.sum('amount')).toBe(0)
-      expect(emptyQuery.avg('amount')).toBe(0)
-      expect(emptyQuery.min('amount')).toBe(0)
-      expect(emptyQuery.max('amount')).toBe(0)
+      expect(emptyQuery.avg('amount')).toBeNull()
+      expect(emptyQuery.min('amount')).toBeNull()
+      expect(emptyQuery.max('amount')).toBeNull()
     })
 
     it('should handle single row', () => {

@@ -1,9 +1,9 @@
 /**
  * SheetsDB - Main entry point for gas-sheets-query
  */
-import type { 
+import type {
   RowWithId,
-  DataStore, 
+  DataStore,
   SheetsDBConfig,
   TableSchemaTyped,
   InferRowFromSchema,
@@ -13,6 +13,7 @@ import { Repository } from './repository'
 import { QueryBuilder, createQueryBuilder } from './query-builder'
 import { JoinQueryBuilder, createJoinQueryBuilder, StoreResolver } from './join-query-builder'
 import { TableNotFoundError, MissingStoreError } from './errors'
+import { MockAdapter } from '../adapters/mock-adapter'
 
 /**
  * Table handle providing Repository and QueryBuilder access
@@ -176,8 +177,10 @@ export interface DefineSheetsDBOptions<
   spreadsheetId?: string
   /** Table schemas with optional type hints */
   tables: TableSchemas
-  /** Data stores (for testing or custom implementations) */
-  stores: { [K in keyof TableSchemas]: DataStore<InferRowFromSchema<TableSchemas[K]>> }
+  /** Data stores (for testing or custom implementations). Optional when mock is true. */
+  stores?: { [K in keyof TableSchemas]: DataStore<InferRowFromSchema<TableSchemas[K]>> }
+  /** Use in-memory MockAdapter for all tables (for testing) */
+  mock?: boolean
 }
 
 /**
@@ -186,44 +189,27 @@ export interface DefineSheetsDBOptions<
  * @example
  * ```ts
  * // Types are automatically inferred from the schema!
+ * // Use mock: true for testing (auto-creates MockAdapter for all tables)
  * const db = defineSheetsDB({
  *   tables: {
  *     users: {
  *       columns: ['id', 'name', 'email', 'age', 'active'] as const,
- *       types: {
- *         id: 0,          // → number
- *         name: '',       // → string
- *         email: '',      // → string
- *         age: 0,         // → number
- *         active: true    // → boolean
- *       }
+ *       types: { id: 0, name: '', email: '', age: 0, active: true }
  *     },
  *     posts: {
  *       columns: ['id', 'title', 'userId', 'published'] as const,
- *       types: {
- *         id: 0,
- *         title: '',
- *         userId: 0,
- *         published: false
- *       }
+ *       types: { id: 0, title: '', userId: 0, published: false }
  *     }
  *   },
- *   stores: {
- *     users: new MockAdapter(),
- *     posts: new MockAdapter()
- *   }
+ *   mock: true  // auto-creates in-memory stores for testing
  * })
- * 
- * // Full autocomplete! ✨
+ *
+ * // Full autocomplete!
  * db.from('users').query()
- *   .where('name', '=', 'John')      // ✅ 'name' autocomplete
- *   .where('age', '>', 18)           // ✅ 'age' autocomplete
- *   .where('active', '=', true)      // ✅ boolean type
+ *   .where('name', '=', 'John')      // 'name' autocomplete
+ *   .where('age', '>', 18)           // 'age' autocomplete
+ *   .where('active', '=', true)      // boolean type
  *   .exec()
- * 
- * // Type error on invalid columns
- * db.from('users').query()
- *   .where('foo', '=', 'bar')        // ❌ Error: 'foo' is not a valid column
  * ```
  */
 export function defineSheetsDB<
@@ -231,8 +217,21 @@ export function defineSheetsDB<
 >(
   options: DefineSheetsDBOptions<TableSchemas>
 ): SheetsDB<InferTablesFromConfig<TableSchemas>> {
-  const { spreadsheetId, tables, stores } = options
-  
+  const { spreadsheetId, tables, mock } = options
+
+  // Build or auto-create stores
+  let resolvedStores: Record<string, DataStore<RowWithId>>
+  if (options.stores) {
+    resolvedStores = options.stores as Record<string, DataStore<RowWithId>>
+  } else if (mock) {
+    resolvedStores = {}
+    for (const tableName of Object.keys(tables)) {
+      resolvedStores[tableName] = new MockAdapter()
+    }
+  } else {
+    throw new Error('defineSheetsDB requires either "stores" or "mock: true"')
+  }
+
   // Build legacy config
   const config: SheetsDBConfig = {
     spreadsheetId,
@@ -243,48 +242,48 @@ export function defineSheetsDB<
       ])
     )
   }
-  
+
   // Validate stores
   for (const tableName of Object.keys(tables)) {
-    if (!(tableName in stores)) {
+    if (!(tableName in resolvedStores)) {
       throw new MissingStoreError(tableName)
     }
   }
-  
+
   type InferredTables = InferTablesFromConfig<TableSchemas>
-  
+
   // Create store resolver for JOIN support
   const storeResolver: StoreResolver = <T extends RowWithId>(tableName: string) => {
-    if (!(tableName in stores)) {
-      throw new TableNotFoundError(tableName, Object.keys(stores))
+    if (!(tableName in resolvedStores)) {
+      throw new TableNotFoundError(tableName, Object.keys(resolvedStores))
     }
-    return stores[tableName as keyof typeof stores] as DataStore<T>
+    return resolvedStores[tableName] as DataStore<T>
   }
-  
+
   // Cache table handles
   const handles: Record<string, unknown> = {}
-  
+
   return {
     config,
-    
+
     from<K extends keyof InferredTables & string>(tableName: K): TableHandle<InferredTables[K]> {
       if (!(tableName in tables)) {
         throw new TableNotFoundError(tableName, Object.keys(tables))
       }
-      
+
       if (!(tableName in handles)) {
-        const store = stores[tableName as keyof typeof stores]
+        const store = resolvedStores[tableName]
         handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>, tableName, storeResolver)
       }
-      
+
       return handles[tableName] as TableHandle<InferredTables[K]>
     },
-    
+
     getStore<K extends keyof InferredTables & string>(tableName: K): DataStore<InferredTables[K]> {
-      if (!(tableName in stores)) {
-        throw new TableNotFoundError(tableName, Object.keys(stores))
+      if (!(tableName in resolvedStores)) {
+        throw new TableNotFoundError(tableName, Object.keys(resolvedStores))
       }
-      return stores[tableName as keyof typeof stores] as DataStore<InferredTables[K]>
+      return resolvedStores[tableName] as DataStore<InferredTables[K]>
     }
   }
 }

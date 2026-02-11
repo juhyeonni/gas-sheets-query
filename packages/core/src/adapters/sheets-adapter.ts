@@ -45,33 +45,6 @@ export interface SheetsAdapterOptions {
   columnTypes?: Record<string, ColumnType>
 }
 
-// GAS type declarations (for TypeScript in GAS environment)
-declare const SpreadsheetApp: {
-  openById(id: string): GoogleAppsScript.Spreadsheet.Spreadsheet
-  getActiveSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet
-}
-
-declare namespace GoogleAppsScript.Spreadsheet {
-  interface Spreadsheet {
-    getSheetByName(name: string): Sheet | null
-    insertSheet(name: string): Sheet
-  }
-  interface Sheet {
-    getDataRange(): Range
-    getRange(row: number, column: number, numRows?: number, numColumns?: number): Range
-    getLastRow(): number
-    getLastColumn(): number
-    appendRow(values: unknown[]): Sheet
-    deleteRow(rowPosition: number): void
-    deleteRows(rowPosition: number, howMany: number): void
-    clear(): Sheet
-  }
-  interface Range {
-    getValues(): unknown[][]
-    setValues(values: unknown[][]): Range
-    setValue(value: unknown): Range
-  }
-}
 
 /**
  * Google Sheets DataStore implementation
@@ -85,10 +58,12 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
   private createIfNotExists: boolean
   private idMode: IdMode
   private columnTypes: Record<string, ColumnType>
-  
-  // Cache for performance
+
+  // Sheet reference cache
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null
+  // Data cache - invalidated on write operations
+  private _dataCache: T[] | null = null
 
   constructor(options: SheetsAdapterOptions) {
     this.spreadsheetId = options.spreadsheetId
@@ -136,10 +111,16 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
     return this._sheet
   }
 
-  /** Clear cached references (useful after sheet modifications) */
+  /** Clear all caches (sheet references and data) */
   clearCache(): void {
     this._sheet = null
     this._spreadsheet = null
+    this._dataCache = null
+  }
+
+  /** Invalidate data cache (called after write operations) */
+  private invalidateDataCache(): void {
+    this._dataCache = null
   }
 
   /** 
@@ -269,22 +250,38 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
     }
   }
 
-  /** Get the next available ID */
+  /**
+   * Get the next available ID.
+   * Uses LockService for concurrency safety when available.
+   */
   private getNextId(): number {
+    let lock: GoogleAppsScript.Lock.Lock | null = null
+    try {
+      if (typeof LockService !== 'undefined') {
+        lock = LockService.getScriptLock()
+        lock.waitLock(10000)
+      }
+      return this.readMaxId() + 1
+    } finally {
+      if (lock) {
+        lock.releaseLock()
+      }
+    }
+  }
+
+  /** Read the current max ID from the sheet */
+  private readMaxId(): number {
     const sheet = this.getSheet()
     const lastRow = sheet.getLastRow()
-    
-    if (lastRow <= 1) {
-      return 1 // First data row
-    }
-    
-    // Get all IDs and find max
+
+    if (lastRow <= 1) return 0
+
     const idColIndex = this.columns.indexOf(this.idColumn) + 1
     const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
     const ids = idRange.getValues().flat().filter(id => typeof id === 'number' && !isNaN(id))
-    
-    if (ids.length === 0) return 1
-    return Math.max(...ids as number[]) + 1
+
+    if (ids.length === 0) return 0
+    return Math.max(...ids as number[])
   }
 
   /** Find row index by ID (1-indexed, returns -1 if not found) */
@@ -304,19 +301,26 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
   }
 
   findAll(): T[] {
+    if (this._dataCache !== null) {
+      return [...this._dataCache]
+    }
+
     const sheet = this.getSheet()
     const lastRow = sheet.getLastRow()
-    
+
     if (lastRow <= 1) {
-      return [] // Only header or empty
+      this._dataCache = []
+      return []
     }
-    
+
     const dataRange = sheet.getRange(2, 1, lastRow - 1, this.columns.length)
     const values = dataRange.getValues()
-    
-    return values
-      .filter(row => row.some(cell => cell !== '')) // Skip empty rows
+
+    this._dataCache = values
+      .filter(row => row.some(cell => cell !== ''))
       .map(row => this.rowToObject(row))
+
+    return [...this._dataCache]
   }
 
   findById(id: string | number): T | undefined {
@@ -350,7 +354,7 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
     }
     
     // Apply limit
-    if (options.limitValue !== undefined && options.limitValue > 0) {
+    if (options.limitValue !== undefined && options.limitValue >= 0) {
       result = result.slice(0, options.limitValue)
     }
     
@@ -358,8 +362,9 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
   }
 
   insert(data: Omit<T, 'id'> | T): T {
+    this.invalidateDataCache()
     const sheet = this.getSheet()
-    
+
     if (this.idMode === 'client') {
       // Client mode: use client-provided ID
       if (!(this.idColumn in (data as Record<string, unknown>))) {
@@ -382,7 +387,8 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
   update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
-    
+
+    this.invalidateDataCache()
     const sheet = this.getSheet()
     const currentValues = sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()[0]
     const currentRow = this.rowToObject(currentValues)
@@ -398,16 +404,18 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
   delete(id: string | number): boolean {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return false
-    
+
+    this.invalidateDataCache()
     const sheet = this.getSheet()
     sheet.deleteRow(rowIndex)
-    
+
     return true
   }
 
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
     if (items.length === 0) return []
-    
+
+    this.invalidateDataCache()
     const sheet = this.getSheet()
     const results: T[] = []
     const rowsToInsert: unknown[][] = []
@@ -443,28 +451,29 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
 
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
     if (items.length === 0) return []
-    
+
+    this.invalidateDataCache()
     const results: T[] = []
     const sheet = this.getSheet()
     
     // Build a map of id -> data for batch processing
-    const updateMap = new Map<number, Partial<Omit<T, 'id'>>>()
+    const updateMap = new Map<string | number, Partial<Omit<T, 'id'>>>()
     for (const { id, data } of items) {
-      updateMap.set(id as number, data)
+      updateMap.set(id, data)
     }
-    
+
     // Get all data to find rows to update
     const lastRow = sheet.getLastRow()
     if (lastRow <= 1) return results
-    
+
     const allData = sheet.getRange(2, 1, lastRow - 1, this.columns.length).getValues()
     const idColIndex = this.columns.indexOf(this.idColumn)
-    
+
     const updatedRows: { rowIndex: number; values: unknown[] }[] = []
-    
+
     for (let i = 0; i < allData.length; i++) {
-      const rowId = allData[i][idColIndex] as number
-      const updateData = updateMap.get(rowId)
+      const rowId = allData[i][idColIndex] as string | number
+      const updateData = updateMap.get(rowId) ?? updateMap.get(String(rowId))
       
       if (updateData) {
         const currentRow = this.rowToObject(allData[i])
@@ -486,6 +495,7 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
   }
 
   reset(data: T[] = []): void {
+    this.invalidateDataCache()
     const sheet = this.getSheet()
     
     // Clear all data except header
