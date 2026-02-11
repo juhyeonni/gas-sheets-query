@@ -218,32 +218,50 @@ describe('runGenerate', () => {
   // =========================================================================
   // Options
   // =========================================================================
-  
+
   describe('options', () => {
     it('should use provided schema path', async () => {
       const customPath = join(TEST_DIR, 'custom-schema.yaml')
       writeFileSync(customPath, VALID_SCHEMA, 'utf-8')
-      
+
       const result = await runGenerate({
         schema: customPath,
         output: OUTPUT_DIR,
       })
-      
+
       expect(result.success).toBe(true)
     })
-    
+
     it('should use provided output directory', async () => {
       writeSchema(VALID_SCHEMA)
       const customOutput = join(TEST_DIR, 'custom-output')
-      
+
       await runGenerate({
         schema: SCHEMA_PATH,
         output: customOutput,
       })
-      
+
       expect(existsSync(join(customOutput, 'types.ts'))).toBe(true)
       expect(existsSync(join(customOutput, 'client.ts'))).toBe(true)
       expect(existsSync(join(customOutput, 'index.ts'))).toBe(true)
+    })
+
+    it('should warn when --client is used but @gsquery/client not found', async () => {
+      writeSchema(VALID_SCHEMA)
+
+      const result = await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+        client: true,
+      })
+
+      expect(result.success).toBe(true)
+      expect(result.files).toContain('types.ts')
+      expect(result.files).toContain('client.ts')
+      expect(result.files).toContain('index.ts')
+      // Should have warning about @gsquery/client not found
+      const clientWarning = result.errors.find(e => e.includes('@gsquery/client'))
+      expect(clientWarning).toBeDefined()
     })
   })
 })
