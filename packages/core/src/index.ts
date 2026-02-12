@@ -5,6 +5,7 @@
 
 // Core types
 export type {
+  IdMode,
   Row,
   RowWithId,
   Operator,
@@ -37,8 +38,8 @@ export { createSheetsDB, defineSheetsDB } from './core/sheets-db'
 export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOptions } from './core/sheets-db'
 
 // Adapters
-export { MockAdapter, MockAdapterOptions, IdMode as MockIdMode } from './adapters/mock-adapter'
-export { SheetsAdapter, SheetsAdapterOptions, IdMode } from './adapters/sheets-adapter'
+export { MockAdapter, MockAdapterOptions } from './adapters/mock-adapter'
+export { SheetsAdapter, SheetsAdapterOptions } from './adapters/sheets-adapter'
 
 // Query utilities
 export { evaluateCondition, compareRows } from './core/query-utils'

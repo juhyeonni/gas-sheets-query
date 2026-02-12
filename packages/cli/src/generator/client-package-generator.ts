@@ -93,7 +93,7 @@ export function generateClientTypes(ast: SchemaAST): string {
     lines.push('}')
   }
 
-  return lines.join('\n')
+  return lines.join('\n') + '\n'
 }
 
 // =============================================================================
@@ -172,7 +172,7 @@ export function generateClientCode(ast: SchemaAST): string {
   lines.push('  return createClient({ mock: true })')
   lines.push('}')
 
-  return lines.join('\n')
+  return lines.join('\n') + '\n'
 }
 
 // =============================================================================
@@ -193,7 +193,7 @@ export function generateClientIndex(): string {
   lines.push('// Re-export useful types from @gsquery/core')
   lines.push("export type { SheetsDB, TableHandle, RowWithId, DataStore } from '@gsquery/core'")
 
-  return lines.join('\n')
+  return lines.join('\n') + '\n'
 }
 
 // =============================================================================

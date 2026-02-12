@@ -118,5 +118,5 @@ export function generateTypes(ast: SchemaAST): string {
     lines.push(generateInterface(ast.tables[tableNames[i]]))
   }
   
-  return lines.join('\n')
+  return lines.join('\n') + '\n'
 }

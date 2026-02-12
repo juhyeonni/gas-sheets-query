@@ -190,6 +190,6 @@ export function generateClient(ast: SchemaAST): string {
   
   // createTestDB function
   lines.push(generateCreateTestDB(tableNames))
-  
-  return lines.join('\n')
+
+  return lines.join('\n') + '\n'
 }

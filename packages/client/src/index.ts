@@ -37,6 +37,7 @@ export {
 } from './runtime.js'
 
 export type {
+  IdMode,
   ClientOptions,
   GeneratedSchema,
   Client,
@@ -71,15 +72,31 @@ export const schema = {
  * Run `gsquery generate --client` to generate proper types and client.
  */
 export function createClient(_options?: { spreadsheetId?: string; mock?: boolean }): {
-  from(tableName: string): never
+  from(tableName: string): {
+    findAll(): never
+    findById(id: string | number): never
+    query(): never
+    insert(data: Record<string, unknown>): never
+    update(id: string | number, data: Record<string, unknown>): never
+    delete(id: string | number): never
+  }
 } {
   const message =
     '@gsquery/client: No schema generated yet. ' +
     'Run `gsquery generate --client` to generate types and client from your schema.'
 
+  const handler = (): never => { throw new Error(message) }
+
   return {
-    from(_tableName: string): never {
-      throw new Error(message)
+    from(_tableName: string) {
+      return {
+        findAll: handler,
+        findById: handler,
+        query: handler,
+        insert: handler,
+        update: handler,
+        delete: handler,
+      }
     }
   }
 }

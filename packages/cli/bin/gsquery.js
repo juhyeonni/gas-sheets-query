@@ -29,4 +29,7 @@ program.addCommand(migrationCreateCommand)
 program.addCommand(migrateCommand)
 program.addCommand(rollbackCommand)
 
-program.parse()
+program.parseAsync().catch((err) => {
+  console.error(`Error: ${err.message || err}`)
+  process.exit(1)
+})

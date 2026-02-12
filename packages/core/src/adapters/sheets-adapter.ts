@@ -2,11 +2,8 @@
  * SheetsAdapter - Real Google Sheets DataStore implementation
  * Uses Google Apps Script SpreadsheetApp API
  */
-import type { Row, DataStore, QueryOptions, BatchUpdateItem } from '../core/types'
+import type { Row, DataStore, QueryOptions, BatchUpdateItem, IdMode } from '../core/types'
 import { evaluateCondition, compareRows } from '../core/query-utils'
-
-/** ID generation mode */
-export type IdMode = 'auto' | 'client'
 
 /** Column type definition for schema-based serialization */
 export type ColumnType = 
