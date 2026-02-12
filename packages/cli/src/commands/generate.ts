@@ -29,6 +29,7 @@ export interface GenerateResult {
   success: boolean
   files: string[]
   errors: string[]
+  warnings: string[]
 }
 
 // =============================================================================
@@ -78,6 +79,7 @@ function writeFile(filePath: string, content: string): void {
  */
 export async function runGenerate(options: GenerateOptions): Promise<GenerateResult> {
   const errors: string[] = []
+  const warnings: string[] = []
   const files: string[] = []
   
   // Resolve paths
@@ -90,6 +92,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
       success: false,
       files: [],
       errors: [`Schema file not found: ${schemaPath}`],
+      warnings: [],
     }
   }
   
@@ -103,6 +106,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
       success: false,
       files: [],
       errors: [`Failed to read schema file: ${error.message}`],
+      warnings: [],
     }
   }
   
@@ -114,13 +118,14 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
       success: false,
       files: [],
       errors: parseResult.errors.map(e => e.message),
+      warnings: [],
     }
   }
   
   // Collect parse warnings
   if (parseResult.errors.length > 0) {
     for (const err of parseResult.errors) {
-      errors.push(`Warning: ${err.message}`)
+      warnings.push(err.message)
     }
   }
   
@@ -138,6 +143,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
       success: false,
       files,
       errors: [...errors, `Failed to generate types: ${error.message}`],
+      warnings,
     }
   }
   
@@ -153,6 +159,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
       success: false,
       files,
       errors: [...errors, `Failed to generate client: ${error.message}`],
+      warnings,
     }
   }
   
@@ -168,6 +175,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
       success: false,
       files,
       errors: [...errors, `Failed to generate index: ${error.message}`],
+      warnings,
     }
   }
   
@@ -176,7 +184,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
     try {
       const clientDir = findClientPackage()
       if (!clientDir) {
-        errors.push('Warning: @gsquery/client not found in node_modules. Install it first: pnpm add @gsquery/client')
+        warnings.push('@gsquery/client not found in node_modules. Install it first: pnpm add @gsquery/client')
       } else {
         const generatedDir = resolve(clientDir, 'generated')
         const clientFiles = generateClientPackage(schema)
@@ -188,7 +196,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
       }
     } catch (err) {
       const error = toError(err)
-      errors.push(`Warning: Failed to generate client package: ${error.message}`)
+      warnings.push(`Failed to generate client package: ${error.message}`)
     }
   }
   
@@ -196,6 +204,7 @@ export async function runGenerate(options: GenerateOptions): Promise<GenerateRes
     success: true,
     files,
     errors,
+    warnings,
   }
 }
 
@@ -249,10 +258,9 @@ async function runAndPrint(options: GenerateOptions): Promise<boolean> {
   }
   
   // Show warnings if any
-  const warnings = result.errors.filter(e => e.startsWith('Warning:'))
-  if (warnings.length > 0) {
+  if (result.warnings.length > 0) {
     console.log('⚠️  Warnings:')
-    for (const warning of warnings) {
+    for (const warning of result.warnings) {
       console.log(`   ${warning}`)
     }
   }

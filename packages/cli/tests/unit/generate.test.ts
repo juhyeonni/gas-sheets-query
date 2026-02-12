@@ -260,7 +260,7 @@ describe('runGenerate', () => {
       expect(result.files).toContain('client.ts')
       expect(result.files).toContain('index.ts')
       // Should have warning about @gsquery/client not found
-      const clientWarning = result.errors.find(e => e.includes('@gsquery/client'))
+      const clientWarning = result.warnings.find(e => e.includes('@gsquery/client'))
       expect(clientWarning).toBeDefined()
     })
   })
