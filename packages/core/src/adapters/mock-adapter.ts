@@ -1,12 +1,9 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { Row, DataStore, QueryOptions, WhereCondition, BatchUpdateItem } from '../core/types'
+import type { Row, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode } from '../core/types'
 import { IndexStore, IndexDefinition } from '../core/index-store'
 import { evaluateCondition, compareRows } from '../core/query-utils'
-
-/** ID generation mode */
-export type IdMode = 'auto' | 'client'
 
 /** MockAdapter configuration options */
 export interface MockAdapterOptions<T extends Row = Row> {

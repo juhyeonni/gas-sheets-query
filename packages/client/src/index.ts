@@ -37,6 +37,7 @@ export {
 } from './runtime.js'
 
 export type {
+  IdMode,
   ClientOptions,
   GeneratedSchema,
   Client,

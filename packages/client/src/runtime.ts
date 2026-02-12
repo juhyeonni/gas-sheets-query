@@ -5,10 +5,11 @@
  * This module is environment-aware and works in both GAS and Node.js.
  */
 
-import type { 
-  RowWithId, 
-  DataStore, 
-  SheetsDBConfig 
+import type {
+  RowWithId,
+  DataStore,
+  SheetsDBConfig,
+  IdMode
 } from '@gsquery/core'
 import { 
   createSheetsDB, 
@@ -23,13 +24,6 @@ import type { SheetsDB, TableHandle } from '@gsquery/core'
 // =============================================================================
 // Types
 // =============================================================================
-
-/**
- * ID mode for insert operations
- * - 'auto': Server generates numeric IDs (1, 2, 3...) - Online-first
- * - 'client': Client provides IDs (UUIDs, etc.) - Offline-first
- */
-export type IdMode = 'auto' | 'client'
 
 /**
  * Client options
@@ -230,6 +224,7 @@ export {
 }
 
 export type {
+  IdMode,
   RowWithId,
   DataStore,
   SheetsDB,

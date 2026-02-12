@@ -2,6 +2,13 @@
  * Core types for gas-sheets-query
  */
 
+/**
+ * ID generation mode for insert operations
+ * - 'auto': Server generates numeric IDs (1, 2, 3...) - Online-first
+ * - 'client': Client provides IDs (UUIDs, etc.) - Offline-first
+ */
+export type IdMode = 'auto' | 'client'
+
 /** Generic row type - any object with string keys */
 export type Row = Record<string, unknown>
 
