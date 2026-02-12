@@ -45,7 +45,7 @@ export function generateIndex(): string {
     "export * from './types.js'",
     "export * from './client.js'",
   ]
-  return lines.join('\n')
+  return lines.join('\n') + '\n'
 }
 
 // =============================================================================
