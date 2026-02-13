@@ -24,7 +24,7 @@ function generateLibraryImport(hasTables: boolean): string {
   if (!hasTables) {
     return "import { createSheetsDB, MockAdapter } from '@gsquery/core'"
   }
-  return "import { createSheetsDB, MockAdapter, DataStore } from '@gsquery/core'"
+  return "import { createSheetsDB, MockAdapter, DataStore, Row } from '@gsquery/core'"
 }
 
 /**
@@ -42,19 +42,20 @@ function generateTypeImport(tableNames: string[]): string {
 
 /**
  * Generate Tables type alias
+ * Adds Row intersection for compatibility with DataStore constraint
  */
 function generateTablesType(tableNames: string[]): string {
   if (tableNames.length === 0) {
     return 'export type Tables = {}'
   }
-  
+
   const sorted = [...tableNames].sort()
   const lines = ['export type Tables = {']
   for (const name of sorted) {
-    lines.push(`  ${name}: ${name}`)
+    lines.push(`  ${name}: ${name} & Row`)
   }
   lines.push('}')
-  
+
   return lines.join('\n')
 }
 
@@ -107,6 +108,7 @@ function generateSchema(tables: Record<string, TableAST>): string {
 
 /**
  * Generate createDB factory function
+ * Uses Row intersection for DataStore compatibility
  */
 function generateCreateDB(tableNames: string[]): string {
   if (tableNames.length === 0) {
@@ -117,10 +119,10 @@ function generateCreateDB(tableNames: string[]): string {
   })
 }`
   }
-  
+
   const sorted = [...tableNames].sort()
-  const storeParams = sorted.map(name => `  ${name}: DataStore<${name}>`).join('\n')
-  
+  const storeParams = sorted.map(name => `  ${name}: DataStore<${name} & Row>`).join('\n')
+
   return `export function createDB(stores: {
 ${storeParams}
 }) {
@@ -133,6 +135,7 @@ ${storeParams}
 
 /**
  * Generate createTestDB helper function
+ * Uses Row intersection for MockAdapter compatibility
  */
 function generateCreateTestDB(tableNames: string[]): string {
   if (tableNames.length === 0) {
@@ -140,10 +143,10 @@ function generateCreateTestDB(tableNames: string[]): string {
   return createDB({})
 }`
   }
-  
+
   const sorted = [...tableNames].sort()
-  const adapters = sorted.map(name => `    ${name}: new MockAdapter<${name}>()`).join(',\n')
-  
+  const adapters = sorted.map(name => `    ${name}: new MockAdapter<${name} & Row>()`).join(',\n')
+
   return `export function createTestDB() {
   return createDB({
 ${adapters}
