@@ -921,6 +921,169 @@ tables:
 })
 
 // =============================================================================
+// @relation Attribute (Issue #76)
+// =============================================================================
+
+describe('@relation attribute parsing', () => {
+  it('should parse @relation(User) attribute', () => {
+    const field = parseField('assigneeId', 'string? @relation(User)')
+    expect(field).toEqual({
+      name: 'assigneeId',
+      type: 'string',
+      optional: true,
+      attributes: [{ name: 'relation', args: ['User'] }],
+    })
+  })
+
+  it('should parse @relation on string[] field', () => {
+    const field = parseField('memberIds', 'string[] @relation(User)')
+    expect(field).toEqual({
+      name: 'memberIds',
+      type: 'string[]',
+      optional: false,
+      attributes: [{ name: 'relation', args: ['User'] }],
+    })
+  })
+})
+
+describe('validateSchema @relation rules', () => {
+  it('should accept valid @relation targeting a defined table', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'name', type: 'string', optional: false, attributes: [] },
+          ],
+          blockAttributes: [],
+        },
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+
+  it('should error when @relation target is not a defined table', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['NonExistent'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("@relation target 'NonExistent'") })
+    )
+  })
+
+  it('should error when @relation is used on non-string field', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'assigneeId', type: 'number', optional: false, attributes: [{ name: 'relation', args: ['User'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("only allowed on string-based fields") })
+    )
+  })
+
+  it('should error when @relation has no target argument', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'assigneeId', type: 'string', optional: false, attributes: [{ name: 'relation', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("must specify a target table") })
+    )
+  })
+
+  it('should accept @relation on string[] field', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+        Team: {
+          name: 'Team',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'memberIds', type: 'string[]', optional: false, attributes: [{ name: 'relation', args: ['User'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+})
+
+describe('parseSchema with @relation', () => {
+  it('should parse full schema with @relation', () => {
+    const yaml = `
+tables:
+  User:
+    fields:
+      id: string @id
+      name: string
+  Task:
+    fields:
+      id: string @id
+      title: string
+      assigneeId: string? @relation(User)
+`
+    const result = parseSchema(yaml)
+    expect(result.success).toBe(true)
+
+    const assigneeField = result.schema?.tables.Task.fields.find(f => f.name === 'assigneeId')
+    expect(assigneeField?.attributes).toContainEqual({ name: 'relation', args: ['User'] })
+  })
+})
+
+// =============================================================================
 // Integration Test with Example File
 // =============================================================================
 

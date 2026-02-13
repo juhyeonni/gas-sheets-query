@@ -148,6 +148,101 @@ describe('generateClientIndex', () => {
   })
 })
 
+// =============================================================================
+// @relation Type Aliases (Issue #76)
+// =============================================================================
+
+const schemaWithRelation: SchemaAST = {
+  enums: {},
+  tables: {
+    User: {
+      name: 'User',
+      fields: [
+        { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+        { name: 'name', type: 'string', optional: false, attributes: [] },
+      ],
+      blockAttributes: [],
+    },
+    Task: {
+      name: 'Task',
+      fields: [
+        { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+        { name: 'title', type: 'string', optional: false, attributes: [] },
+        { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+      ],
+      blockAttributes: [],
+    },
+  },
+}
+
+describe('generateClientTypes @relation', () => {
+  it('generates type alias for relation target', () => {
+    const result = generateClientTypes(schemaWithRelation)
+
+    expect(result).toContain("export type UserId = User['id']")
+  })
+
+  it('replaces field type with relation alias', () => {
+    const result = generateClientTypes(schemaWithRelation)
+
+    expect(result).toContain('assigneeId?: UserId')
+  })
+
+  it('handles array relation field', () => {
+    const schema: SchemaAST = {
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+        Team: {
+          name: 'Team',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'memberIds', type: 'string[]', optional: false, attributes: [{ name: 'relation', args: ['User'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    }
+    const result = generateClientTypes(schema)
+
+    expect(result).toContain('memberIds: UserId[]')
+  })
+
+  it('does not generate duplicate aliases', () => {
+    const schema: SchemaAST = {
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+            { name: 'creatorId', type: 'string', optional: false, attributes: [{ name: 'relation', args: ['User'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    }
+    const result = generateClientTypes(schema)
+
+    const matches = result.match(/export type UserId/g)
+    expect(matches).toHaveLength(1)
+  })
+})
+
 describe('generateClientPackage (all files)', () => {
   it('returns all three files', () => {
     const files = generateClientPackage(simpleSchema)

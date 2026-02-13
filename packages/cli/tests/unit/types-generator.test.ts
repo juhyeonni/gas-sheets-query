@@ -402,13 +402,224 @@ describe('generateTypes', () => {
           }
         }
       }
-      
+
       const result = generateTypes(ast)
-      
+
       const enumIndex = result.indexOf('export type Role')
       const interfaceIndex = result.indexOf('export interface User')
-      
+
       expect(enumIndex).toBeLessThan(interfaceIndex)
+    })
+  })
+
+  // =========================================================================
+  // @relation Type Aliases (Issue #76)
+  // =========================================================================
+
+  describe('@relation type aliases', () => {
+    it('should generate type alias for relation target', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          Task: {
+            name: 'Task',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain("export type UserId = User['id']")
+    })
+
+    it('should replace field type with relation alias', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          Task: {
+            name: 'Task',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain('assigneeId?: UserId')
+    })
+
+    it('should handle array relation field (UserId[])', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          Team: {
+            name: 'Team',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'memberIds', type: 'string[]', optional: false, attributes: [{ name: 'relation', args: ['User'] }] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain('memberIds: UserId[]')
+    })
+
+    it('should not generate duplicate aliases for same target', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          Task: {
+            name: 'Task',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+              { name: 'creatorId', type: 'string', optional: false, attributes: [{ name: 'relation', args: ['User'] }] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      // Should appear exactly once
+      const matches = result.match(/export type UserId/g)
+      expect(matches).toHaveLength(1)
+    })
+
+    it('should generate multiple aliases sorted alphabetically', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          Project: {
+            name: 'Project',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          Task: {
+            name: 'Task',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'projectId', type: 'string', optional: false, attributes: [{ name: 'relation', args: ['Project'] }] },
+              { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain("export type ProjectId = Project['id']")
+      expect(result).toContain("export type UserId = User['id']")
+
+      const projectIdx = result.indexOf('export type ProjectId')
+      const userIdx = result.indexOf('export type UserId')
+      expect(projectIdx).toBeLessThan(userIdx)
+    })
+
+    it('should place aliases between enums and interfaces', () => {
+      const ast: SchemaAST = {
+        enums: {
+          Status: { name: 'Status', values: ['OPEN', 'DONE'] }
+        },
+        tables: {
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          Task: {
+            name: 'Task',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'assigneeId', type: 'string', optional: false, attributes: [{ name: 'relation', args: ['User'] }] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      const enumIdx = result.indexOf('export type Status')
+      const aliasIdx = result.indexOf('export type UserId')
+      const interfaceIdx = result.indexOf('export interface')
+
+      expect(enumIdx).toBeLessThan(aliasIdx)
+      expect(aliasIdx).toBeLessThan(interfaceIdx)
+    })
+
+    it('should not generate aliases when no @relation exists', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'string', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'name', type: 'string', optional: false, attributes: [] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).not.toContain("['id']")
     })
   })
 })

@@ -36,7 +36,7 @@ export type DefaultValue =
  */
 export interface FieldAttribute {
   /** Attribute name without @ */
-  name: 'id' | 'unique' | 'default' | 'updatedAt'
+  name: 'id' | 'unique' | 'default' | 'updatedAt' | 'relation'
   /** Arguments (e.g., for @default) */
   args: DefaultValue[]
 }

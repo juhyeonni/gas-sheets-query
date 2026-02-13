@@ -438,6 +438,39 @@ export function validateSchema(schema: SchemaAST): ParseError[] {
       }
     }
 
+    // Rule 7: @relation target must be a defined table
+    // Rule 8: @relation is only allowed on string-based fields
+    for (const field of table.fields) {
+      const relationAttr = field.attributes.find(a => a.name === 'relation')
+      if (relationAttr) {
+        const target = relationAttr.args[0]
+        if (typeof target !== 'string' || !target) {
+          errors.push({
+            message: `@relation in field '${tableName}.${field.name}' must specify a target table`,
+            table: tableName,
+            field: field.name,
+          })
+        } else {
+          if (!schema.tables[target]) {
+            errors.push({
+              message: `@relation target '${target}' in field '${tableName}.${field.name}' is not a defined table`,
+              table: tableName,
+              field: field.name,
+            })
+          }
+        }
+
+        const stringTypes = ['string', 'string[]']
+        if (!stringTypes.includes(field.type)) {
+          errors.push({
+            message: `@relation in field '${tableName}.${field.name}' is only allowed on string-based fields, got '${field.type}'`,
+            table: tableName,
+            field: field.name,
+          })
+        }
+      }
+    }
+
     // Rule 6: Index/unique columns must reference existing fields
     for (const blockAttr of table.blockAttributes) {
       if (blockAttr.name === 'index' || blockAttr.name === 'unique') {
