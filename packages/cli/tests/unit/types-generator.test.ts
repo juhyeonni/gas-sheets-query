@@ -260,9 +260,74 @@ describe('generateTypes', () => {
   })
   
   // =========================================================================
+  // Array Types
+  // =========================================================================
+
+  describe('array types', () => {
+    it('should handle string[] type', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          Note: {
+            name: 'Note',
+            fields: [
+              { name: 'tags', type: 'string[]', optional: false, attributes: [] }
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain('tags: string[]')
+    })
+
+    it('should handle number[] type', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          Data: {
+            name: 'Data',
+            fields: [
+              { name: 'values', type: 'number[]', optional: false, attributes: [] }
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain('values: number[]')
+    })
+
+    it('should handle optional array types', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          Task: {
+            name: 'Task',
+            fields: [
+              { name: 'labels', type: 'string[]', optional: true, attributes: [] },
+              { name: 'scores', type: 'number[]', optional: true, attributes: [] }
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain('labels?: string[]')
+      expect(result).toContain('scores?: number[]')
+    })
+  })
+
+  // =========================================================================
   // Integration Tests
   // =========================================================================
-  
+
   describe('integration', () => {
     it('should generate complete output with enums and tables', () => {
       const ast: SchemaAST = {
