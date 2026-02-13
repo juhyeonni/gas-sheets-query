@@ -48,20 +48,16 @@ function generateField(field: FieldAST): string {
 
 /**
  * Generate TypeScript interface for a table
- * 
- * Includes index signature [key: string]: unknown for Row compatibility
- * 
+ *
  * @example
  * export interface User {
- *   [key: string]: unknown
  *   id: string
  *   name: string
  * }
  */
 function generateInterface(table: TableAST): string {
-  const indexSig = '  [key: string]: unknown'
   const fields = table.fields.map(generateField).join('\n')
-  return `export interface ${table.name} {\n${indexSig}\n${fields}\n}`
+  return `export interface ${table.name} {\n${fields}\n}`
 }
 
 // =============================================================================

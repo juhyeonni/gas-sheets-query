@@ -1,13 +1,13 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { Row, DataStore, QueryOptions, BatchUpdateItem } from './types'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem } from './types'
 import { RowNotFoundError } from './errors'
 
 /**
  * Repository provides a clean CRUD interface over any DataStore implementation
  */
-export class Repository<T extends Row & { id: string | number }> {
+export class Repository<T extends RowWithId> {
   constructor(
     private readonly store: DataStore<T>,
     private readonly tableName?: string

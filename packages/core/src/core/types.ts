@@ -49,7 +49,7 @@ export interface QueryOptions<T = Row> {
 }
 
 /** Batch update item - id and data to update */
-export interface BatchUpdateItem<T extends Row = Row> {
+export interface BatchUpdateItem<T extends RowWithId = RowWithId> {
   id: string | number
   data: Partial<Omit<T, 'id'>>
 }
@@ -58,7 +58,7 @@ export interface BatchUpdateItem<T extends Row = Row> {
  * DataStore interface - abstraction over data storage
  * Implemented by GasAdapter (real Sheets) and MockAdapter (testing)
  */
-export interface DataStore<T extends Row = Row> {
+export interface DataStore<T extends RowWithId = RowWithId> {
   /** Get all rows from the table */
   findAll(): T[]
   
@@ -165,7 +165,7 @@ export type InferTablesFromConfig<
 // ============================================================================
 
 /** Table schema definition (legacy) */
-export interface TableSchema<T extends Row = Row> {
+export interface TableSchema<T extends RowWithId = RowWithId> {
   /** Column names in order */
   columns: readonly (keyof T & string)[]
   /** ID column name (default: 'id') */

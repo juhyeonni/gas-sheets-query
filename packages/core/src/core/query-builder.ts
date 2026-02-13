@@ -1,7 +1,7 @@
 /**
  * Query Builder - fluent API for building queries
  */
-import type { Row, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types'
+import type { RowWithId, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types'
 import { NoResultsError } from './errors'
 
 /**
@@ -49,7 +49,7 @@ export interface HavingCondition {
  *   .exec()
  * ```
  */
-export class QueryBuilder<T extends Row & { id: string | number }> {
+export class QueryBuilder<T extends RowWithId> {
   private whereConditions: WhereCondition<T>[] = []
   private orderByConditions: OrderByCondition<T>[] = []
   private limitValue?: number
@@ -418,7 +418,7 @@ export class QueryBuilder<T extends Row & { id: string | number }> {
 /**
  * Create a new QueryBuilder for the given store
  */
-export function createQueryBuilder<T extends Row & { id: string | number }>(
+export function createQueryBuilder<T extends RowWithId>(
   store: DataStore<T>
 ): QueryBuilder<T> {
   return new QueryBuilder<T>(store)
