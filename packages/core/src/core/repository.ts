@@ -1,13 +1,13 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { Row, DataStore, QueryOptions, BatchUpdateItem } from './types'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem } from './types'
 import { RowNotFoundError } from './errors'
 
 /**
  * Repository provides a clean CRUD interface over any DataStore implementation
  */
-export class Repository<T extends Row & { id: string | number }> {
+export class Repository<T extends RowWithId> {
   constructor(
     private readonly store: DataStore<T>,
     private readonly tableName?: string
@@ -49,7 +49,7 @@ export class Repository<T extends Row & { id: string | number }> {
   /**
    * Insert a new row
    */
-  create(data: Omit<T, 'id'>): T {
+  create(data: T | Omit<T, 'id'>): T {
     return this.store.insert(data)
   }
 
@@ -57,7 +57,7 @@ export class Repository<T extends Row & { id: string | number }> {
    * Update a row by ID
    * @throws RowNotFoundError if not found
    */
-  update(id: string | number, data: Partial<Omit<T, 'id'>>): T {
+  update(id: string | number, data: Partial<T>): T {
     const updated = this.store.update(id, data)
     if (!updated) {
       throw new RowNotFoundError(id, this.tableName)
@@ -68,7 +68,7 @@ export class Repository<T extends Row & { id: string | number }> {
   /**
    * Update a row by ID, returns undefined if not found
    */
-  updateOrNull(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
+  updateOrNull(id: string | number, data: Partial<T>): T | undefined {
     return this.store.update(id, data)
   }
 
@@ -108,7 +108,7 @@ export class Repository<T extends Row & { id: string | number }> {
    * Batch insert multiple rows at once
    * More efficient than calling create() in a loop
    */
-  batchInsert(data: Omit<T, 'id'>[]): T[] {
+  batchInsert(data: (T | Omit<T, 'id'>)[]): T[] {
     if (this.store.batchInsert) {
       return this.store.batchInsert(data)
     }
@@ -120,7 +120,7 @@ export class Repository<T extends Row & { id: string | number }> {
    * Batch update multiple rows at once
    * Skips rows that don't exist (no error thrown)
    */
-  batchUpdate(items: { id: string | number; data: Partial<Omit<T, 'id'>> }[]): T[] {
+  batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[] {
     if (this.store.batchUpdate) {
       return this.store.batchUpdate(items as BatchUpdateItem<T>[])
     }

@@ -40,6 +40,7 @@ export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOption
 // Adapters
 export { MockAdapter, MockAdapterOptions } from './adapters/mock-adapter'
 export { SheetsAdapter, SheetsAdapterOptions } from './adapters/sheets-adapter'
+export type { ColumnType } from './adapters/sheets-adapter'
 
 // Query utilities
 export { evaluateCondition, compareRows } from './core/query-utils'

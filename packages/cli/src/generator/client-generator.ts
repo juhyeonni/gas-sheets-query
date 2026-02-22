@@ -47,14 +47,14 @@ function generateTablesType(tableNames: string[]): string {
   if (tableNames.length === 0) {
     return 'export type Tables = {}'
   }
-  
+
   const sorted = [...tableNames].sort()
   const lines = ['export type Tables = {']
   for (const name of sorted) {
     lines.push(`  ${name}: ${name}`)
   }
   lines.push('}')
-  
+
   return lines.join('\n')
 }
 
@@ -117,10 +117,10 @@ function generateCreateDB(tableNames: string[]): string {
   })
 }`
   }
-  
+
   const sorted = [...tableNames].sort()
   const storeParams = sorted.map(name => `  ${name}: DataStore<${name}>`).join('\n')
-  
+
   return `export function createDB(stores: {
 ${storeParams}
 }) {
@@ -140,10 +140,10 @@ function generateCreateTestDB(tableNames: string[]): string {
   return createDB({})
 }`
   }
-  
+
   const sorted = [...tableNames].sort()
   const adapters = sorted.map(name => `    ${name}: new MockAdapter<${name}>()`).join(',\n')
-  
+
   return `export function createTestDB() {
   return createDB({
 ${adapters}

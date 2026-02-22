@@ -1,12 +1,12 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { Row, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode } from '../core/types'
+import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode } from '../core/types'
 import { IndexStore, IndexDefinition } from '../core/index-store'
 import { evaluateCondition, compareRows } from '../core/query-utils'
 
 /** MockAdapter configuration options */
-export interface MockAdapterOptions<T extends Row = Row> {
+export interface MockAdapterOptions<T extends RowWithId = RowWithId> {
   /** Initial data */
   initialData?: T[]
   /** Index definitions (schema-based) */
@@ -23,7 +23,7 @@ export interface MockAdapterOptions<T extends Row = Row> {
  * In-memory DataStore implementation for testing
  * Uses an index (Map) for O(1) ID lookups instead of O(N) array scan
  */
-export class MockAdapter<T extends Row & { id: string | number }> implements DataStore<T> {
+export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   private data: T[] = []
   private nextId = 1
   /** Index for O(1) lookups by ID - maps id to array index */
@@ -243,7 +243,7 @@ export class MockAdapter<T extends Row & { id: string | number }> implements Dat
   /**
    * Update a row by ID - O(1) using index
    */
-  update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
+  update(id: string | number, data: Partial<T>): T | undefined {
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
     

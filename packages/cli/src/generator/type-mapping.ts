@@ -17,6 +17,10 @@ export function mapType(schemaType: string): string {
       return 'boolean'
     case 'datetime':
       return 'Date'
+    case 'string[]':
+      return 'string[]'
+    case 'number[]':
+      return 'number[]'
     default:
       // Enum or custom type - keep as-is
       return schemaType

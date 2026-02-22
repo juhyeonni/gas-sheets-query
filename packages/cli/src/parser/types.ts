@@ -11,7 +11,7 @@
 /**
  * Supported field types
  */
-export type FieldType = 'string' | 'number' | 'boolean' | 'datetime'
+export type FieldType = 'string' | 'number' | 'boolean' | 'datetime' | 'string[]' | 'number[]'
 
 /**
  * Built-in default value functions
@@ -36,7 +36,7 @@ export type DefaultValue =
  */
 export interface FieldAttribute {
   /** Attribute name without @ */
-  name: 'id' | 'unique' | 'default' | 'updatedAt'
+  name: 'id' | 'unique' | 'default' | 'updatedAt' | 'relation'
   /** Arguments (e.g., for @default) */
   args: DefaultValue[]
 }
@@ -163,7 +163,7 @@ export interface ParseError {
  * Check if a type is a built-in type
  */
 export function isBuiltInType(type: string): type is FieldType {
-  return ['string', 'number', 'boolean', 'datetime'].includes(type)
+  return ['string', 'number', 'boolean', 'datetime', 'string[]', 'number[]'].includes(type)
 }
 
 /**

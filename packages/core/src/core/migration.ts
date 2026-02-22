@@ -3,7 +3,7 @@
  * 
  * Provides version-controlled schema changes with up/down migrations.
  */
-import type { Row, DataStore } from './types'
+import type { Row, RowWithId, DataStore } from './types'
 import { SheetsQueryError } from './errors'
 
 // ============================================================================
@@ -177,7 +177,7 @@ class RecordingSchemaBuilder implements SchemaBuilder {
 /**
  * Resolver to get DataStore for a table
  */
-export type StoreResolver = <T extends Row>(tableName: string) => DataStore<T>
+export type StoreResolver = <T extends RowWithId>(tableName: string) => DataStore<T>
 
 /**
  * Migration runner configuration
@@ -292,7 +292,7 @@ export class MigrationRunner {
    * Apply a schema operation to the data
    */
   private applyOperation(operation: SchemaOperation): void {
-    const store = this.storeResolver<Row>(operation.table)
+    const store = this.storeResolver<RowWithId>(operation.table)
     const rows = store.findAll()
     
     switch (operation.type) {
@@ -325,7 +325,7 @@ export class MigrationRunner {
       case 'renameColumn': {
         for (const row of rows) {
           if (operation.oldColumn! in row && !(operation.newColumn! in row)) {
-            const value = row[operation.oldColumn!]
+            const value = (row as Record<string, unknown>)[operation.oldColumn!]
             const updates: Record<string, unknown> = {
               [operation.oldColumn!]: undefined,
               [operation.newColumn!]: value

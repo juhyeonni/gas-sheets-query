@@ -2,7 +2,7 @@
  * SheetsAdapter - Real Google Sheets DataStore implementation
  * Uses Google Apps Script SpreadsheetApp API
  */
-import type { Row, DataStore, QueryOptions, BatchUpdateItem, IdMode } from '../core/types'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode } from '../core/types'
 import { evaluateCondition, compareRows } from '../core/query-utils'
 
 /** Column type definition for schema-based serialization */
@@ -47,7 +47,7 @@ export interface SheetsAdapterOptions {
  * Google Sheets DataStore implementation
  * Provides CRUD operations on a single sheet
  */
-export class SheetsAdapter<T extends Row & { id: string | number }> implements DataStore<T> {
+export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private spreadsheetId?: string
   private sheetName: string
   private columns: string[]
@@ -381,7 +381,7 @@ export class SheetsAdapter<T extends Row & { id: string | number }> implements D
     }
   }
 
-  update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
+  update(id: string | number, data: Partial<T>): T | undefined {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
 
