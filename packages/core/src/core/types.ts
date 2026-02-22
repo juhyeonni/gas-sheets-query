@@ -12,8 +12,8 @@ export type IdMode = 'auto' | 'client'
 /** Generic row type - any object with string keys */
 export type Row = Record<string, unknown>
 
-/** Row with required id field */
-export type RowWithId = Row & { id: string | number }
+/** Row with required id field (no index signature required) */
+export type RowWithId = { id: string | number }
 
 /** Comparison operators for where clauses */
 export type Operator = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'like' | 'in'
@@ -51,7 +51,7 @@ export interface QueryOptions<T = Row> {
 /** Batch update item - id and data to update */
 export interface BatchUpdateItem<T extends RowWithId = RowWithId> {
   id: string | number
-  data: Partial<Omit<T, 'id'>>
+  data: Partial<T>
 }
 
 /**
@@ -69,16 +69,16 @@ export interface DataStore<T extends RowWithId = RowWithId> {
   findById(id: string | number): T | undefined
   
   /** Insert a new row, returns the inserted row with ID */
-  insert(data: Omit<T, 'id'>): T
-  
+  insert(data: T | Omit<T, 'id'>): T
+
   /** Update a row by ID, returns updated row or undefined if not found */
-  update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined
-  
+  update(id: string | number, data: Partial<T>): T | undefined
+
   /** Delete a row by ID, returns true if deleted */
   delete(id: string | number): boolean
-  
+
   /** Batch insert multiple rows at once (optional) */
-  batchInsert?(data: Omit<T, 'id'>[]): T[]
+  batchInsert?(data: (T | Omit<T, 'id'>)[]): T[]
   
   /** Batch update multiple rows at once (optional) */
   batchUpdate?(items: BatchUpdateItem<T>[]): T[]
@@ -179,5 +179,5 @@ export interface SheetsDBConfig {
   /** Spreadsheet ID (optional, uses active spreadsheet if not provided) */
   spreadsheetId?: string
   /** Table definitions */
-  tables: Record<string, TableSchema>
+  tables: Record<string, TableSchema<any>>
 }

@@ -2,7 +2,7 @@
  * JoinQueryBuilder - Query builder with JOIN support
  * Simulates relational joins using batch fetching to prevent N+1 queries
  */
-import type { Row, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types'
+import type { DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types'
 import { NoResultsError } from './errors'
 
 /**
@@ -273,7 +273,7 @@ export class JoinQueryBuilder<T extends RowWithId> {
     const foreignStore = this.storeResolver(table)
     const foreignRows = foreignStore.find({
       where: [{
-        field: foreignField,
+        field: foreignField as keyof RowWithId & string,
         operator: 'in',
         value: Array.from(foreignKeys)
       }],

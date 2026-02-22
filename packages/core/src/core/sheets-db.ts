@@ -29,25 +29,25 @@ export interface TableHandle<T extends RowWithId> {
   joinQuery(): JoinQueryBuilder<T>
   
   /** Shorthand: create a row */
-  create(data: Omit<T, 'id'>): T
-  
+  create(data: T | Omit<T, 'id'>): T
+
   /** Shorthand: find by id */
   findById(id: string | number): T
-  
+
   /** Shorthand: find all */
   findAll(): T[]
-  
+
   /** Shorthand: update by id */
-  update(id: string | number, data: Partial<Omit<T, 'id'>>): T
-  
+  update(id: string | number, data: Partial<T>): T
+
   /** Shorthand: delete by id */
   delete(id: string | number): void
-  
+
   /** Batch insert multiple rows at once */
-  batchInsert(data: Omit<T, 'id'>[]): T[]
-  
+  batchInsert(data: (T | Omit<T, 'id'>)[]): T[]
+
   /** Batch update multiple rows at once */
-  batchUpdate(items: { id: string | number; data: Partial<Omit<T, 'id'>> }[]): T[]
+  batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[]
 }
 
 /**
@@ -133,7 +133,7 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
     if (!(tableName in stores)) {
       throw new TableNotFoundError(tableName, Object.keys(stores))
     }
-    return stores[tableName as keyof typeof stores] as DataStore<T>
+    return stores[tableName as keyof typeof stores] as unknown as DataStore<T>
   }
   
   // Cache table handles

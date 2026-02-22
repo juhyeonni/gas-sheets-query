@@ -381,7 +381,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     }
   }
 
-  update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
+  update(id: string | number, data: Partial<T>): T | undefined {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
 

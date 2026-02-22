@@ -243,7 +243,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   /**
    * Update a row by ID - O(1) using index
    */
-  update(id: string | number, data: Partial<Omit<T, 'id'>>): T | undefined {
+  update(id: string | number, data: Partial<T>): T | undefined {
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
     

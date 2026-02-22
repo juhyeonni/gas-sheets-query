@@ -325,7 +325,7 @@ export class MigrationRunner {
       case 'renameColumn': {
         for (const row of rows) {
           if (operation.oldColumn! in row && !(operation.newColumn! in row)) {
-            const value = row[operation.oldColumn!]
+            const value = (row as Record<string, unknown>)[operation.oldColumn!]
             const updates: Record<string, unknown> = {
               [operation.oldColumn!]: undefined,
               [operation.newColumn!]: value
