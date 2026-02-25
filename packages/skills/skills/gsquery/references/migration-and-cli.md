@@ -1,0 +1,267 @@
+# Migration & CLI Reference
+
+## Migration System
+
+### MigrationRunner
+
+```ts
+import { createMigrationRunner, MockAdapter } from '@gsquery/core'
+import type { MigrationRecord } from '@gsquery/core'
+
+const runner = createMigrationRunner({
+  migrationsStore: new MockAdapter<MigrationRecord>(),
+  storeResolver: (tableName) => db.getStore(tableName),
+  migrations: [
+    {
+      version: 1,
+      name: 'add-role-column',
+      up: (schema) => schema.addColumn('users', 'role', { default: 'viewer' }),
+      down: (schema) => schema.removeColumn('users', 'role'),
+    },
+    {
+      version: 2,
+      name: 'add-bio-column',
+      up: (schema) => schema.addColumn('users', 'bio', { default: '' }),
+      down: (schema) => schema.removeColumn('users', 'bio'),
+    },
+  ],
+})
+```
+
+### Running Migrations
+
+```ts
+// Run all pending
+const result = await runner.migrate()
+// { applied: [{ version: 1, name: 'add-role-column' }], currentVersion: 1 }
+
+// Run up to specific version
+await runner.migrate({ to: 1 })
+
+// Rollback last migration
+const rollback = await runner.rollback()
+// { rolledBack: { version: 1, name: 'add-role-column' }, currentVersion: 0 }
+
+// Rollback all
+await runner.rollbackAll()
+// { rolledBack: [...], currentVersion: 0 }
+
+// Status
+runner.getCurrentVersion()      // number
+runner.getAppliedMigrations()   // MigrationRecord[]
+runner.getPendingMigrations()   // Migration[]
+runner.getStatus()              // { currentVersion, applied, pending }
+```
+
+### Migration Type
+
+```ts
+interface Migration {
+  version: number       // positive integer, must be unique
+  name: string          // descriptive name
+  up: (schema: SchemaBuilder) => void | Promise<void>
+  down: (schema: SchemaBuilder) => void | Promise<void>
+}
+```
+
+### SchemaBuilder Operations
+
+```ts
+interface SchemaBuilder {
+  addColumn<T>(table: string, column: string, options?: ColumnOptions<T>): void
+  removeColumn(table: string, column: string): void
+  renameColumn(table: string, oldName: string, newName: string): void
+}
+
+interface ColumnOptions<T = unknown> {
+  default?: T
+  type?: 'string' | 'number' | 'boolean' | 'date'
+}
+```
+
+### MigrationRunnerConfig
+
+```ts
+interface MigrationRunnerConfig {
+  migrationsStore: DataStore<MigrationRecord>  // tracks applied migrations
+  storeResolver: <T extends RowWithId>(tableName: string) => DataStore<T>
+  migrations: Migration[]
+}
+
+interface MigrationRecord {
+  id: number
+  version: number
+  name: string
+  appliedAt: string  // ISO date string
+}
+```
+
+---
+
+## @gsquery/cli
+
+CLI tool for schema parsing, type generation, and migration management.
+
+### Installation
+
+```bash
+pnpm add -D @gsquery/cli
+```
+
+### Commands
+
+```bash
+# Initialize project with schema template
+gsquery init [directory]
+
+# Generate TypeScript types + client from schema
+gsquery generate <schema-file> [-o output-dir] [--watch]
+
+# Run pending migrations
+gsquery migrate [--to version] [--config path]
+
+# Roll back last migration (or all)
+gsquery rollback [--all] [--config path]
+
+# Create a new timestamped migration file
+gsquery migration:create <name>
+```
+
+### Schema File (.gsq.yaml)
+
+```yaml
+# schema.gsq.yaml
+enums:
+  Role:
+    - admin
+    - editor
+    - viewer
+
+tables:
+  User:
+    mapTo: Users           # optional sheet name mapping
+    fields:
+      id:
+        type: number
+        attributes: ["@id"]
+      name:
+        type: string
+      email:
+        type: string
+        attributes: ["@unique"]
+      role:
+        type: Role
+        attributes: ["@default(viewer)"]
+      createdAt:
+        type: datetime
+        attributes: ["@default(now)"]
+    blockAttributes:
+      - "@@index([email])"
+
+  Post:
+    fields:
+      id:
+        type: number
+        attributes: ["@id"]
+      title:
+        type: string
+      authorId:
+        type: number
+        attributes: ["@relation(User)"]
+      published:
+        type: boolean
+        attributes: ["@default(false)"]
+```
+
+### Schema Field Types
+
+| Type | TypeScript |
+|------|-----------|
+| `string` | `string` |
+| `number` | `number` |
+| `boolean` | `boolean` |
+| `datetime` | `Date` |
+| `string[]` | `string[]` |
+| `number[]` | `number[]` |
+| Enum name | Union type |
+
+### Schema Attributes
+
+| Attribute | Purpose |
+|-----------|---------|
+| `@id` | Primary key |
+| `@unique` | Unique constraint |
+| `@default(value)` | Default value |
+| `@default(autoincrement)` | Auto-increment |
+| `@default(now)` | Current timestamp |
+| `@default(uuid)` | UUID generation |
+| `@updatedAt` | Auto-update timestamp |
+| `@relation(Table)` | Foreign key relation |
+
+### Block Attributes
+
+| Attribute | Purpose |
+|-----------|---------|
+| `@@index([fields])` | Column index |
+| `@@unique([fields])` | Unique composite constraint |
+| `@@map(sheetName)` | Map to sheet name |
+
+---
+
+## @gsquery/client
+
+Typed client factory with environment auto-detection.
+
+```ts
+import { createClientFactory } from '@gsquery/client'
+
+// schema is generated by `gsquery generate`
+const factory = createClientFactory<Tables>(schema)
+
+// Production (GAS)
+const db = factory({ spreadsheetId: 'abc123' })
+
+// Testing (Node.js)
+const db = factory({ mock: true })
+```
+
+### Client Options
+
+```ts
+interface ClientOptions {
+  spreadsheetId?: string
+  mock?: boolean
+  stores?: Record<string, DataStore<RowWithId>>
+  idMode?: IdMode
+}
+```
+
+### Environment Detection
+
+```ts
+import { isGASEnvironment, isNodeEnvironment } from '@gsquery/client'
+
+if (isGASEnvironment()) {
+  // use SheetsAdapter
+} else {
+  // use MockAdapter
+}
+```
+
+## Anti-Patterns
+
+```ts
+// WRONG: migration versions not sequential/unique
+const migrations = [
+  { version: 1, name: 'a', up: ..., down: ... },
+  { version: 1, name: 'b', up: ..., down: ... },  // duplicate version!
+]
+
+// WRONG: migration without down() — breaks rollback
+{ version: 1, name: 'add-col', up: (s) => s.addColumn('t', 'c'), down: () => {} }
+// RIGHT: always implement proper down()
+{ version: 1, name: 'add-col', up: (s) => s.addColumn('t', 'c'), down: (s) => s.removeColumn('t', 'c') }
+
+// WRONG: using gsquery generate without a .gsq.yaml schema file
+// RIGHT: run gsquery init first to create the schema template
+```

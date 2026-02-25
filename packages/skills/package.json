@@ -1,0 +1,61 @@
+{
+  "name": "@gsquery/skills",
+  "version": "0.9.0",
+  "description": "AI coding assistant context files for gas-sheets-query",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "gsquery-skills": "./bin/gsquery-skills.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./skills": "./skills",
+    "./cheatsheet": "./skills/generic/gsquery-cheatsheet.md"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "skills"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "gas-sheets-query",
+    "gsquery",
+    "openskills",
+    "claude-code",
+    "skills",
+    "ai",
+    "cursor",
+    "copilot",
+    "context"
+  ],
+  "author": "juhyeonni",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/juhyeonni/gas-sheets-query.git",
+    "directory": "packages/skills"
+  },
+  "peerDependencies": {
+    "@gsquery/core": ">=0.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
