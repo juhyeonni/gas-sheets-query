@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/client",
-  "version": "0.3.0",
+  "version": "0.9.0",
   "description": "Typed client for gas-sheets-query",
   "type": "module",
   "main": "./dist/index.js",
