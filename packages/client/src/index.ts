@@ -22,6 +22,38 @@
  * After generation, the ./generated module provides full type safety.
  */
 
+// Local-first adapter (browser)
+export {
+  MutationQueue,
+  LocalAdapter,
+  SyncEngine,
+  createClientDB,
+} from './local/index.js'
+
+export type {
+  MutationQueueOptions,
+  MutationStorage,
+  LocalAdapterOptions,
+  SyncEngineOptions,
+  CreateClientDBOptions,
+  ClientDBResult,
+  ClientDBSchema,
+  SyncTransport,
+  Mutation,
+  MutationType,
+  MergedMutation,
+  ConflictItem,
+  ConflictStrategy,
+  SyncEvent,
+  SyncEventType,
+  SyncEventListener,
+} from './local/index.js'
+
+// Transports
+export { MockTransport } from './transports/index.js'
+export { GasApiTransport } from './transports/index.js'
+export type { GasApiTransportOptions } from './transports/index.js'
+
 // Runtime exports (always available)
 export {
   createClientFactory,
