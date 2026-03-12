@@ -22,45 +22,62 @@ import type { IndexDefinition } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
 import type { MutationStorage } from './mutation-queue.js'
 
-/** IDB helper - open the gsquery database */
-function openIDB(tableName: string): Promise<IDBDatabase> {
+/**
+ * Open the gsquery IndexedDB with all required object stores in a single
+ * upgrade transaction. This avoids the race condition where multiple
+ * adapters independently try to open/upgrade the same database.
+ */
+export function openSharedIDB(tableNames: string[]): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('gsquery', 1)
-    request.onupgradeneeded = () => {
-      const db = request.result
-      if (!db.objectStoreNames.contains(tableName)) {
-        db.createObjectStore(tableName, { keyPath: 'id' })
+    // First, open without a version to discover the current version
+    const probe = indexedDB.open('gsquery')
+    probe.onsuccess = () => {
+      const existing = probe.result
+      const currentVersion = existing.version
+
+      // Check if all stores already exist
+      const missing = tableNames.filter(
+        name => !existing.objectStoreNames.contains(name)
+      )
+      const needsMeta = !existing.objectStoreNames.contains('_meta')
+
+      if (missing.length === 0 && !needsMeta) {
+        // All stores exist — reuse the connection
+        resolve(existing)
+        return
       }
-      if (!db.objectStoreNames.contains('_meta')) {
+
+      // Need an upgrade — close this connection and reopen with bumped version
+      existing.close()
+      const nextVersion = currentVersion + 1
+      const upgrade = indexedDB.open('gsquery', nextVersion)
+      upgrade.onupgradeneeded = () => {
+        const db = upgrade.result
+        for (const name of tableNames) {
+          if (!db.objectStoreNames.contains(name)) {
+            db.createObjectStore(name, { keyPath: 'id' })
+          }
+        }
+        if (!db.objectStoreNames.contains('_meta')) {
+          db.createObjectStore('_meta', { keyPath: 'tableName' })
+        }
+      }
+      upgrade.onsuccess = () => resolve(upgrade.result)
+      upgrade.onerror = () => reject(upgrade.error)
+    }
+    probe.onerror = () => {
+      // DB doesn't exist yet — create fresh with version 1
+      const fresh = indexedDB.open('gsquery', 1)
+      fresh.onupgradeneeded = () => {
+        const db = fresh.result
+        for (const name of tableNames) {
+          db.createObjectStore(name, { keyPath: 'id' })
+        }
         db.createObjectStore('_meta', { keyPath: 'tableName' })
       }
+      fresh.onsuccess = () => resolve(fresh.result)
+      fresh.onerror = () => reject(fresh.error)
     }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-/** Ensure object store exists (for tables added after initial DB creation) */
-function ensureStore(db: IDBDatabase, storeName: string): Promise<IDBDatabase> {
-  if (db.objectStoreNames.contains(storeName)) {
-    return Promise.resolve(db)
-  }
-  // Need to upgrade DB version to add store
-  const version = db.version + 1
-  db.close()
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('gsquery', version)
-    request.onupgradeneeded = () => {
-      const upgraded = request.result
-      if (!upgraded.objectStoreNames.contains(storeName)) {
-        upgraded.createObjectStore(storeName, { keyPath: 'id' })
-      }
-      if (!upgraded.objectStoreNames.contains('_meta')) {
-        upgraded.createObjectStore('_meta', { keyPath: 'tableName' })
-      }
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
   })
 }
 
@@ -73,6 +90,8 @@ export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
   mutationStorage?: MutationStorage
   /** Disable IndexedDB persistence (for testing) */
   disableIDB?: boolean
+  /** Pre-opened shared IDBDatabase handle (from openSharedIDB) */
+  idbDb?: IDBDatabase
 }
 
 export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
@@ -95,6 +114,11 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.idbEnabled = !options.disableIDB && typeof indexedDB !== 'undefined'
     this.indexStore = new IndexStore<T>(options.indexes ?? [])
 
+    // Accept pre-opened shared IDB handle
+    if (options.idbDb) {
+      this.idbDb = options.idbDb
+    }
+
     this.queue = new MutationQueue<T>({
       tableName: options.tableName,
       storage: options.mutationStorage,
@@ -111,8 +135,10 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     if (!this.idbEnabled) return
 
     try {
-      const db = await openIDB(this.tableName)
-      this.idbDb = await ensureStore(db, this.tableName)
+      // If a shared DB handle was provided, just hydrate from it
+      if (!this.idbDb) {
+        this.idbDb = await openSharedIDB([this.tableName])
+      }
 
       const rows = await this.readAllFromIDB()
       if (rows.length > 0) {
@@ -422,13 +448,6 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   private async persistToIDB(): Promise<void> {
     if (!this.idbDb) return
-
-    const db = this.idbDb
-
-    // Ensure the object store exists
-    if (!db.objectStoreNames.contains(this.tableName)) {
-      this.idbDb = await ensureStore(db, this.tableName)
-    }
 
     return new Promise((resolve, reject) => {
       const tx = this.idbDb!.transaction(this.tableName, 'readwrite')

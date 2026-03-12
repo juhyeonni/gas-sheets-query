@@ -5,7 +5,7 @@
 import type { RowWithId, DataStore, SheetsDBConfig } from '@gsquery/core'
 import { createSheetsDB } from '@gsquery/core'
 import type { SheetsDB } from '@gsquery/core'
-import { LocalAdapter } from './local-adapter.js'
+import { LocalAdapter, openSharedIDB } from './local-adapter.js'
 import type { LocalAdapterOptions } from './local-adapter.js'
 import { SyncEngine } from './sync-engine.js'
 import type { SyncEngineOptions } from './sync-engine.js'
@@ -57,7 +57,19 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
   const stores: Record<string, DataStore<any>> = {}
   const adapters: Record<string, LocalAdapter<any>> = {}
 
-  // Create LocalAdapter per table
+  // Open shared IDB with all table stores in a single upgrade transaction
+  const idbEnabled = !(disableIDB ?? false) && typeof indexedDB !== 'undefined'
+  let sharedDb: IDBDatabase | undefined
+  if (idbEnabled) {
+    try {
+      const allTableNames = Object.keys(schema.tables)
+      sharedDb = await openSharedIDB(allTableNames)
+    } catch {
+      // IndexedDB unavailable - adapters will run in-memory only
+    }
+  }
+
+  // Create LocalAdapter per table with shared IDB handle
   for (const [tableName, tableSchema] of Object.entries(schema.tables)) {
     const adapterOpts: LocalAdapterOptions = {
       tableName,
@@ -66,6 +78,7 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
       mutationStorage,
       disableIDB: disableIDB ?? false,
       initialData: options.initialData?.[tableName as keyof Tables] as any[],
+      idbDb: sharedDb,
     }
 
     const adapter = new LocalAdapter(adapterOpts)
