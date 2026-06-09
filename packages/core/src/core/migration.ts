@@ -293,8 +293,33 @@ export class MigrationRunner {
    */
   private applyOperation(operation: SchemaOperation): void {
     const store = this.storeResolver<RowWithId>(operation.table)
+
+    // Prefer physical schema ops when the store supports them (e.g. Sheets adapter).
+    // Positional stores MUST use these so the header and column layout stay aligned;
+    // a row-by-row update cannot insert/remove a physical column without corrupting it.
+    switch (operation.type) {
+      case 'addColumn':
+        if (store.addColumn) {
+          store.addColumn(operation.column!, operation.options?.default)
+          return
+        }
+        break
+      case 'removeColumn':
+        if (store.removeColumn) {
+          store.removeColumn(operation.column!)
+          return
+        }
+        break
+      case 'renameColumn':
+        if (store.renameColumn) {
+          store.renameColumn(operation.oldColumn!, operation.newColumn!)
+          return
+        }
+        break
+    }
+
+    // Fallback for stores that map columns by name (in-memory / mock): update rows.
     const rows = store.findAll()
-    
     switch (operation.type) {
       case 'addColumn': {
         const defaultValue = operation.options?.default
@@ -307,11 +332,8 @@ export class MigrationRunner {
         }
         break
       }
-      
+
       case 'removeColumn': {
-        // Set column value to undefined via update
-        // In-memory adapters: the column key will have undefined value
-        // In Sheets adapter: the cell will be cleared
         for (const row of rows) {
           if (operation.column! in row) {
             store.update(row.id as string | number, {
@@ -321,7 +343,7 @@ export class MigrationRunner {
         }
         break
       }
-      
+
       case 'renameColumn': {
         for (const row of rows) {
           if (operation.oldColumn! in row && !(operation.newColumn! in row)) {
