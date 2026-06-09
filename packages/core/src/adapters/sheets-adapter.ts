@@ -513,4 +513,59 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const sheet = this.getSheet()
     return sheet.getDataRange().getValues()
   }
+
+  /** Read the current header row as strings (empty if no header). */
+  private readHeader(): string[] {
+    const sheet = this.getSheet()
+    const lastCol = sheet.getLastColumn()
+    if (lastCol < 1) return []
+    return sheet.getRange(1, 1, 1, lastCol).getValues()[0].map((v) => String(v))
+  }
+
+  /**
+   * Physically add a column to the sheet (header + shift + default backfill).
+   * The adapter is positional, so the column must be inserted at the position
+   * it occupies in `this.columns` to keep the physical layout aligned.
+   * Idempotent: no-op if the header already contains the column.
+   */
+  addColumn(column: string, defaultValue?: unknown): void {
+    const index = this.columns.indexOf(column)
+    if (index < 0) return
+    const sheet = this.getSheet()
+    if (this.readHeader().includes(column)) return // already added
+    const pos = index + 1 // 1-based target position
+    sheet.insertColumnBefore(pos)
+    // Rewrite the whole header from the schema to guarantee alignment.
+    sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+    const lastRow = sheet.getLastRow()
+    if (lastRow > 1 && defaultValue !== undefined) {
+      const fill = Array.from({ length: lastRow - 1 }, () => [defaultValue])
+      sheet.getRange(2, pos, lastRow - 1, 1).setValues(fill)
+    }
+    this.invalidateDataCache()
+  }
+
+  /**
+   * Physically remove a column from the sheet (located via the header).
+   * Idempotent: no-op if the column is not present.
+   */
+  removeColumn(column: string): void {
+    const sheet = this.getSheet()
+    const idx = this.readHeader().indexOf(column)
+    if (idx < 0) return
+    sheet.deleteColumn(idx + 1)
+    this.invalidateDataCache()
+  }
+
+  /**
+   * Rename a column header (position/data unchanged).
+   * Idempotent: no-op if the old name is absent.
+   */
+  renameColumn(oldName: string, newName: string): void {
+    const sheet = this.getSheet()
+    const idx = this.readHeader().indexOf(oldName)
+    if (idx < 0) return
+    sheet.getRange(1, idx + 1).setValue(newName)
+    this.invalidateDataCache()
+  }
 }

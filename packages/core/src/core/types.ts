@@ -79,9 +79,23 @@ export interface DataStore<T extends RowWithId = RowWithId> {
 
   /** Batch insert multiple rows at once (optional) */
   batchInsert?(data: (T | Omit<T, 'id'>)[]): T[]
-  
+
   /** Batch update multiple rows at once (optional) */
   batchUpdate?(items: BatchUpdateItem<T>[]): T[]
+
+  /**
+   * Physically add a column to the underlying storage (optional).
+   * Stores that map columns by position (e.g. Sheets) must implement this so
+   * migrations keep the physical layout and header aligned with the schema.
+   * In-memory stores can omit it (the migration falls back to row updates).
+   */
+  addColumn?(column: string, defaultValue?: unknown): void
+
+  /** Physically remove a column from the underlying storage (optional). */
+  removeColumn?(column: string): void
+
+  /** Physically rename a column in the underlying storage (optional). */
+  renameColumn?(oldName: string, newName: string): void
 }
 
 // ============================================================================
