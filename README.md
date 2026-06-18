@@ -19,7 +19,8 @@ gas-sheets-query/
 ├── packages/
 │   ├── core/       # Core library (SheetsDB, QueryBuilder)
 │   ├── cli/        # CLI tools (gsquery)
-│   └── client/     # Generated typed client runtime
+│   ├── client/     # Generated typed client runtime
+│   └── skills/     # AI coding assistant context files (@gsquery/skills)
 ```
 
 ## 🚀 Quick Start
@@ -191,10 +192,22 @@ export const migration = {
 - [x] v0.4 - DX: Migration, Schema Generator, CLI
 - [ ] v1.0 - Production: npm publish, integration testing, release
 
-## 📝 License
+## 🤖 AI Coding Assistants
 
-MIT
+Install [`@gsquery/skills`](./packages/skills) so AI tools (Claude Code, Cursor, Copilot, etc.) write correct gsquery code:
+
+```bash
+npx openskills install @gsquery/skills
+```
 
 ## 🤝 Contributing
 
-Issues and PRs are welcome! See [Contributing Guide](./CONTRIBUTING.md).
+Issues and PRs are welcome! Please read:
+
+- [Contributing Guide](./CONTRIBUTING.md)
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
+- [Security Policy](./SECURITY.md)
+
+## 📝 License
+
+[MIT](./LICENSE) © Juhyeon Lee
