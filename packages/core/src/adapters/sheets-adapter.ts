@@ -80,9 +80,17 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   /** Get the spreadsheet instance */
   private getSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
     if (!this._spreadsheet) {
-      this._spreadsheet = this.spreadsheetId
+      const ss = this.spreadsheetId
         ? SpreadsheetApp.openById(this.spreadsheetId)
         : SpreadsheetApp.getActiveSpreadsheet()
+      if (!ss) {
+        throw new Error(
+          `No spreadsheet available for sheet '${this.sheetName}'. ` +
+          'Bind this script to a Sheet, or pass spreadsheetId to SheetsAdapter, ' +
+          'or set Script Property SPREADSHEET_ID.'
+        )
+      }
+      this._spreadsheet = ss
     }
     return this._spreadsheet
   }
