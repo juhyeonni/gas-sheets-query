@@ -560,6 +560,68 @@ describe('SheetsAdapter', () => {
     })
   })
 
+  describe('concurrency: lock spans ID allocation and write (#80)', () => {
+    function setupWithCapturedLock(sheet: StubSheet) {
+      const lock = { waitLock: vi.fn(), releaseLock: vi.fn() }
+      const ss = {
+        getSheetByName: vi.fn(() => sheet),
+        insertSheet: vi.fn(() => sheet)
+      }
+      ;(globalThis as Record<string, unknown>).SpreadsheetApp = {
+        openById: vi.fn(() => ss),
+        getActiveSpreadsheet: vi.fn(() => ss)
+      }
+      ;(globalThis as Record<string, unknown>).LockService = {
+        getScriptLock: vi.fn(() => lock)
+      }
+      return lock
+    }
+
+    it('insert (auto mode) releases the lock only AFTER the row is written', () => {
+      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const lock = setupWithCapturedLock(sheet)
+
+      const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
+      adapter.insert({ name: 'Alice', age: 30, active: true })
+
+      expect(lock.waitLock).toHaveBeenCalled()
+      expect(lock.releaseLock).toHaveBeenCalled()
+      expect(sheet.appendRow).toHaveBeenCalled()
+
+      const acquireOrder = lock.waitLock.mock.invocationCallOrder[0]
+      const writeOrder = sheet.appendRow.mock.invocationCallOrder[0]
+      const releaseOrder = lock.releaseLock.mock.invocationCallOrder[0]
+
+      // Lock must be held across the write: acquire < write < release
+      expect(acquireOrder).toBeLessThan(writeOrder)
+      expect(releaseOrder).toBeGreaterThan(writeOrder)
+    })
+
+    it('batchInsert (auto mode) releases the lock only AFTER the batch write', () => {
+      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const lock = setupWithCapturedLock(sheet)
+
+      const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
+      adapter.batchInsert([
+        { name: 'A', age: 1, active: true },
+        { name: 'B', age: 2, active: false }
+      ])
+
+      expect(lock.releaseLock).toHaveBeenCalled()
+
+      // The final getRange(...).setValues(...) is the batch write.
+      const results = sheet.getRange.mock.results
+      const writeRange = results[results.length - 1].value as StubRange
+      expect(writeRange.setValues).toHaveBeenCalled()
+
+      const writeOrder = writeRange.setValues.mock.invocationCallOrder[0]
+      const releaseOrder = lock.releaseLock.mock.invocationCallOrder[0]
+
+      // Write must happen before the lock is released.
+      expect(releaseOrder).toBeGreaterThan(writeOrder)
+    })
+  })
+
   describe('update', () => {
     it('should update existing row', () => {
       const sheet = createStubSheet([

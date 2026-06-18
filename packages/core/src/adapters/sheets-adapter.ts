@@ -256,22 +256,32 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   /**
-   * Get the next available ID.
-   * Uses LockService for concurrency safety when available.
+   * Run a function while holding the script lock (when LockService is available).
+   * The lock is held for the entire duration of fn so that read-allocate-write
+   * sequences stay atomic across concurrent executions.
    */
-  private getNextId(): number {
+  private withLock<R>(fn: () => R): R {
     let lock: GoogleAppsScript.Lock.Lock | null = null
     try {
       if (typeof LockService !== 'undefined') {
         lock = LockService.getScriptLock()
         lock.waitLock(10000)
       }
-      return this.readMaxId() + 1
+      return fn()
     } finally {
       if (lock) {
         lock.releaseLock()
       }
     }
+  }
+
+  /**
+   * Get the next available ID by scanning the current max.
+   * Must be called inside withLock() together with the row write so that
+   * ID allocation and the write are atomic.
+   */
+  private getNextId(): number {
+    return this.readMaxId() + 1
   }
 
   /** Read the current max ID from the sheet */
@@ -380,12 +390,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       sheet.appendRow(rowValues)
       return newRow
     } else {
-      // Auto mode: server generates numeric ID (default, backward compatible)
-      const id = this.getNextId()
-      const newRow = { ...data, [this.idColumn]: id } as T
-      const rowValues = this.objectToRow(newRow)
-      sheet.appendRow(rowValues)
-      return newRow
+      // Auto mode: allocate the ID and write the row atomically under the lock,
+      // otherwise concurrent executions can allocate the same ID.
+      return this.withLock(() => {
+        const id = this.getNextId()
+        const newRow = { ...data, [this.idColumn]: id } as T
+        const rowValues = this.objectToRow(newRow)
+        sheet.appendRow(rowValues)
+        return newRow
+      })
     }
   }
 
@@ -422,11 +435,18 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
     this.invalidateDataCache()
     const sheet = this.getSheet()
-    const results: T[] = []
-    const rowsToInsert: unknown[][] = []
-    
+
+    // Batch write all rows at once, appending after the current last row.
+    const writeRows = (rows: unknown[][]) => {
+      const lastRow = sheet.getLastRow()
+      sheet.getRange(lastRow + 1, 1, rows.length, this.columns.length)
+        .setValues(rows)
+    }
+
     if (this.idMode === 'client') {
-      // Client mode: use client-provided IDs
+      // Client mode: use client-provided IDs (no server-side allocation)
+      const results: T[] = []
+      const rowsToInsert: unknown[][] = []
       for (const data of items) {
         if (!(this.idColumn in (data as Record<string, unknown>))) {
           throw new Error(`ID is required in client mode (idMode: 'client')`)
@@ -435,8 +455,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         results.push(newRow)
         rowsToInsert.push(this.objectToRow(newRow))
       }
-    } else {
-      // Auto mode: server generates numeric IDs
+      writeRows(rowsToInsert)
+      return results
+    }
+
+    // Auto mode: allocate IDs (incl. the getLastRow used for the write
+    // position) and write atomically under the lock to avoid duplicate IDs.
+    return this.withLock(() => {
+      const results: T[] = []
+      const rowsToInsert: unknown[][] = []
       let nextId = this.getNextId()
       for (const data of items) {
         const newRow = { ...data, [this.idColumn]: nextId } as T
@@ -444,14 +471,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         rowsToInsert.push(this.objectToRow(newRow))
         nextId++
       }
-    }
-    
-    // Batch write all rows at once
-    const lastRow = sheet.getLastRow()
-    sheet.getRange(lastRow + 1, 1, rowsToInsert.length, this.columns.length)
-      .setValues(rowsToInsert)
-    
-    return results
+      writeRows(rowsToInsert)
+      return results
+    })
   }
 
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
