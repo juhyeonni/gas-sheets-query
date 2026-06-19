@@ -36,7 +36,15 @@ jobs:
         run: pnpm test
 
       - name: Publish to npm
-        run: pnpm -r publish --access public --no-git-checks
+        run: |
+          # Prerelease tags (rc/alpha/beta) publish under the "rc" dist-tag so
+          # they never clobber the "latest" tag that normal installs resolve to.
+          case "${GITHUB_REF}" in
+            *-rc*|*alpha*|*beta*)
+              pnpm -r publish --access public --no-git-checks --tag rc ;;
+            *)
+              pnpm -r publish --access public --no-git-checks ;;
+          esac
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
