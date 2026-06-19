@@ -9,7 +9,8 @@ import type {
   RowWithId,
   DataStore,
   SheetsDBConfig,
-  IdMode
+  IdMode,
+  ColumnType
 } from '@gsquery/core'
 import { 
   createSheetsDB, 
@@ -46,6 +47,8 @@ export interface GeneratedSchema {
   tables: Record<string, {
     columns: readonly string[]
     sheetName?: string
+    /** Column types for schema-driven (de)serialization (e.g. datetime -> 'date'). */
+    columnTypes?: Record<string, ColumnType>
   }>
 }
 
@@ -82,7 +85,7 @@ export function isNodeEnvironment(): boolean {
  */
 export function createStore<T extends RowWithId>(
   tableName: string,
-  tableSchema: { columns: readonly string[]; sheetName?: string },
+  tableSchema: { columns: readonly string[]; sheetName?: string; columnTypes?: Record<string, ColumnType> },
   options: ClientOptions
 ): DataStore<T> {
   const idMode = options.idMode || 'auto'
@@ -112,6 +115,7 @@ export function createStore<T extends RowWithId>(
       spreadsheetId: options.spreadsheetId,
       sheetName,
       columns: [...tableSchema.columns],
+      columnTypes: tableSchema.columnTypes,
       idMode
     }) as DataStore<T>
   }

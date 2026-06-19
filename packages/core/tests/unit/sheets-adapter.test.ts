@@ -1222,7 +1222,7 @@ describe('SheetsAdapter', () => {
       expect(result[1].count).toBe(0) // empty → 0
     })
 
-    it('should handle date type', () => {
+    it('should deserialize date type to a real Date (#97)', () => {
       const date = new Date('2024-01-15T10:30:00Z')
       const sheet = createStubSheet([
         ['id', 'created'],
@@ -1230,31 +1230,33 @@ describe('SheetsAdapter', () => {
       ])
       setupGASGlobals(sheet)
 
-      const adapter = new SheetsAdapter<{ id: number; created: string }>({
+      const adapter = new SheetsAdapter<{ id: number; created: Date }>({
         spreadsheetId: 'test',
         sheetName: 'Test',
         columns: ['id', 'created'],
         columnTypes: { created: 'date' }
       })
       const result = adapter.findAll()
-      expect(result[0].created).toBe(date.toISOString())
+      expect(result[0].created).toBeInstanceOf(Date)
+      expect((result[0].created as Date).getTime()).toBe(date.getTime())
     })
 
-    it('should pass through non-Date values for date type', () => {
+    it('should parse date-string values for date type into a Date (#97)', () => {
       const sheet = createStubSheet([
         ['id', 'created'],
         [1, '2024-01-15']
       ])
       setupGASGlobals(sheet)
 
-      const adapter = new SheetsAdapter<{ id: number; created: string }>({
+      const adapter = new SheetsAdapter<{ id: number; created: Date }>({
         spreadsheetId: 'test',
         sheetName: 'Test',
         columns: ['id', 'created'],
         columnTypes: { created: 'date' }
       })
       const result = adapter.findAll()
-      expect(result[0].created).toBe('2024-01-15')
+      expect(result[0].created).toBeInstanceOf(Date)
+      expect((result[0].created as Date).getTime()).toBe(new Date('2024-01-15').getTime())
     })
 
     it('should pass through already-parsed values for array/object types', () => {

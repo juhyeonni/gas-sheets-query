@@ -109,6 +109,18 @@ export function generateClientTypes(ast: SchemaAST): string {
 // =============================================================================
 
 /**
+ * Map schema field types to runtime ColumnType for schema-driven (de)serialization.
+ * Only types whose runtime representation differs from the raw cell value are
+ * emitted; boolean/number/string are left to the adapter's native handling so
+ * the stored sheet format is unchanged.
+ */
+const COLUMN_TYPE_MAP: Record<string, string> = {
+  datetime: 'date',
+  'string[]': 'string[]',
+  'number[]': 'number[]',
+}
+
+/**
  * Generate schema object for runtime
  */
 function generateTableSchema(table: TableAST): string {
@@ -117,6 +129,17 @@ function generateTableSchema(table: TableAST): string {
 
   if (table.mapTo) {
     parts.push(`sheetName: '${escapeStringLiteral(table.mapTo)}'`)
+  }
+
+  const columnTypeEntries = table.fields
+    .map(f => {
+      const mapped = COLUMN_TYPE_MAP[f.type]
+      return mapped ? `'${escapeStringLiteral(f.name)}': '${mapped}'` : null
+    })
+    .filter((entry): entry is string => entry !== null)
+
+  if (columnTypeEntries.length > 0) {
+    parts.push(`columnTypes: { ${columnTypeEntries.join(', ')} }`)
   }
 
   return `{ ${parts.join(', ')} }`

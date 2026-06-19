@@ -198,15 +198,23 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         return Boolean(value)
       case 'number':
         return Number(value)
-      case 'date':
-        if (value instanceof Date) return value.toISOString()
+      case 'date': {
+        // Date columns deserialize to a real Date so the runtime value matches
+        // the generated `Date` type (#97). rowToObject may have pre-converted a
+        // GAS Date to an ISO string, so parse strings/numbers back to a Date.
+        if (value instanceof Date) return value
+        if (typeof value === 'string' || typeof value === 'number') {
+          const parsed = new Date(value)
+          if (!isNaN(parsed.getTime())) return parsed
+        }
         return value
+      }
       default:
         return value
     }
   }
 
-  /** 
+  /**
    * Convert object to sheet row (array)
    * Uses schema-based types if available, falls back to auto-detection
    */
