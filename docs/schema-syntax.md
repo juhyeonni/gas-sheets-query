@@ -91,6 +91,8 @@ Designates the field as primary key. Only one per table.
 id: number @id
 ```
 
+> **Contract (1.0):** the `@id` field **must be named `id`**. Schema validation rejects any other name (e.g. `userId: number @id`) with a clear error. Custom primary-key column names are planned for a future release. This keeps the generated types, both adapters, and the runtime consistent.
+
 ### @default(value)
 
 Sets the default value.

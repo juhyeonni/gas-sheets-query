@@ -586,6 +586,43 @@ describe('validateSchema', () => {
     )
   })
 
+  // Rule 2b (1.0 contract, #101): @id field must be named 'id'
+  it("should error when the @id field is not named 'id'", () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'userId', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("@id field must be named 'id'") })
+    )
+  })
+
+  it("should not error when the @id field is named 'id'", () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).not.toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("@id field must be named 'id'") })
+    )
+  })
+
   // Rule 3: @default arguments must be valid
   it('should error on invalid @default function', () => {
     const errors = validateSchema({

@@ -27,6 +27,8 @@ const RESERVED_WORDS = new Set([
   // TS additional reserved
   'any', 'boolean', 'number', 'string', 'symbol', 'type', 'from', 'of',
   'namespace', 'module', 'declare', 'abstract', 'as', 'async', 'await',
+  // JS literal keywords (invalid as type/interface names)
+  'null', 'undefined', 'true', 'false',
 ])
 
 // =============================================================================
