@@ -16,6 +16,7 @@ import type {
   WhereCondition,
   BatchUpdateItem,
   IdMode,
+  UpdateData,
 } from '@gsquery/core'
 import { IndexStore, evaluateCondition, compareRows } from '@gsquery/core'
 import type { IndexDefinition } from '@gsquery/core'
@@ -251,17 +252,19 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     return newRow
   }
 
-  update(id: string | number, data: Partial<T>): T | undefined {
+  update(id: string | number, data: UpdateData<T>): T | undefined {
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
 
     const oldRow = this.data[index]
-    const newRow = { ...oldRow, ...data }
+    // id is immutable via update; preserve it so the idIndex stays consistent
+    // and behavior matches the other adapters (#98).
+    const newRow = { ...oldRow, ...data, id: oldRow.id }
     this.data[index] = newRow
     this.indexStore.updateIndex(index, oldRow, newRow)
 
     // Record mutation and persist
-    this.queue.push('update', id, data)
+    this.queue.push('update', id, data as Partial<T>)
     this.schedulePersist()
 
     return newRow
@@ -327,11 +330,11 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       if (index === undefined) continue
 
       const oldRow = this.data[index]
-      const newRow = { ...oldRow, ...data }
+      const newRow = { ...oldRow, ...data, id: oldRow.id } // id immutable (#98)
       this.data[index] = newRow
       this.indexStore.updateIndex(index, oldRow, newRow)
 
-      this.queue.push('update', id, data)
+      this.queue.push('update', id, data as Partial<T>)
       results.push(newRow)
     }
 
