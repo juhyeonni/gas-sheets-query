@@ -17,6 +17,7 @@
     "dist"
   ],
   "scripts": {
+    "prepublishOnly": "pnpm build",
     "build": "node build.mjs && tsc --emitDeclarationOnly",
     "build:gas": "node build.mjs",
     "dev": "vitest",

@@ -66,10 +66,21 @@ describe('createClientFactory', () => {
     expect(typeof createClient).toBe('function')
   })
 
+  it('throws instead of silently using MockAdapter when no spreadsheetId/mock in Node (#84)', () => {
+    const createClient = createClientFactory<TestTables>(testSchema)
+    // No spreadsheetId, mock not set, not in GAS -> must not silently use memory.
+    expect(() => createClient({})).toThrow(/no spreadsheetId provided|mock: true/)
+  })
+
+  it('does not throw when spreadsheetId is provided (#84)', () => {
+    const createClient = createClientFactory<TestTables>(testSchema)
+    expect(() => createClient({ spreadsheetId: 'sheet-123' })).not.toThrow()
+  })
+
   it('factory returns a SheetsDB instance in mock mode', () => {
     const createClient = createClientFactory<TestTables>(testSchema)
     const db = createClient({ mock: true })
-    
+
     expect(db).toBeDefined()
     expect(typeof db.from).toBe('function')
     expect(db.config).toBeDefined()

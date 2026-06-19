@@ -15,6 +15,7 @@
     "dist"
   ],
   "scripts": {
+    "prepublishOnly": "pnpm build",
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",

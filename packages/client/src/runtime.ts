@@ -120,8 +120,13 @@ export function createStore<T extends RowWithId>(
     }) as DataStore<T>
   }
 
-  // Fallback to MockAdapter for Node.js (dev/test)
-  return new MockAdapter<T>({ idMode })
+  // No spreadsheetId, not in GAS, and mock not requested. Refuse to silently
+  // use an in-memory MockAdapter — production writes would vanish. Require an
+  // explicit opt-in (#84).
+  throw new Error(
+    `Cannot create a store for table '${tableName}': no spreadsheetId provided and not running in Google Apps Script. ` +
+    `Pass a spreadsheetId, or set mock: true to use the in-memory adapter for development/testing.`
+  )
 }
 
 // =============================================================================
