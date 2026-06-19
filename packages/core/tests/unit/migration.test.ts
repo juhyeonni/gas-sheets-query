@@ -581,9 +581,34 @@ describe('MigrationRunner', () => {
         })
         
         await runner.migrate()
-        
+
         const users = usersStore.findAll()
         expect(users[0].newName).toBe('John')
+      })
+
+      it('renames even when the target key lingers as undefined from a prior op (#99/OQ-5)', async () => {
+        usersStore.insert({ name: 'John', email: 'john@test.com' })
+
+        const migrations: Migration[] = [
+          {
+            version: 1,
+            // v1.up removes newName (leaves it as an undefined key), then renames
+            // name -> newName. The rename must NOT be skipped by an `in` check.
+            name: 'clear_then_rename',
+            up: (db) => {
+              db.removeColumn('users', 'newName')
+              db.renameColumn('users', 'name', 'newName')
+            },
+            down: () => {}
+          }
+        ]
+
+        const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+        await runner.migrate()
+
+        const user = usersStore.findAll()[0]
+        expect(user.newName).toBe('John')
+        expect(user.name).toBeUndefined()
       })
     })
 

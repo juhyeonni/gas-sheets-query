@@ -59,7 +59,7 @@ describe('Large Dataset Behavior', () => {
 
       expect(results.length).toBe(10000)
       const ids = new Set(results.map(r => r.id))
-      expect(ids.size).toBe(10000) // all ids unique
+      expect(ids.size).toBe(10000)
     })
 
     it('should query large dataset with filters correctly', () => {
@@ -175,7 +175,7 @@ describe('Large Dataset Behavior', () => {
         expect(results[0].id).toBe(page * pageSize + 1)
         seen.push(...results.map(r => r.id))
       }
-      expect(new Set(seen).size).toBe(totalPages * pageSize) // no overlaps
+      expect(new Set(seen).size).toBe(totalPages * pageSize)
     })
 
     it('should handle complex multi-condition queries correctly', () => {

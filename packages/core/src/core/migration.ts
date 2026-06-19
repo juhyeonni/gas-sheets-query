@@ -314,11 +314,12 @@ export class MigrationRunner {
       }
       
       case 'removeColumn': {
-        // Set column value to undefined via update
-        // In-memory adapters: the column key will have undefined value
-        // In Sheets adapter: the cell will be cleared
+        // Clears the column's value (in-memory: key left undefined; Sheets: cell
+        // cleared). This is a value operation — it does not drop the column from
+        // the sheet header. addColumn's `=== undefined` guard (#99) lets a later
+        // re-add re-apply its default over the cleared value.
         for (const row of rows) {
-          if (operation.column! in row) {
+          if ((row as Record<string, unknown>)[operation.column!] !== undefined) {
             store.update(row.id as string | number, {
               [operation.column!]: undefined
             })
@@ -326,16 +327,20 @@ export class MigrationRunner {
         }
         break
       }
-      
+
       case 'renameColumn': {
         for (const row of rows) {
-          if (operation.oldColumn! in row && !(operation.newColumn! in row)) {
-            const value = (row as Record<string, unknown>)[operation.oldColumn!]
-            const updates: Record<string, unknown> = {
+          const r = row as Record<string, unknown>
+          // Rename when the source has a value and the target is empty
+          // (missing OR left undefined by a prior op) — `=== undefined` rather
+          // than `in`, consistent with the addColumn guard (#99). Using `in`
+          // here would wrongly skip the rename when the target key lingers as
+          // undefined from an earlier removeColumn/rename.
+          if (r[operation.oldColumn!] !== undefined && r[operation.newColumn!] === undefined) {
+            store.update(row.id as string | number, {
               [operation.oldColumn!]: undefined,
-              [operation.newColumn!]: value
-            }
-            store.update(row.id as string | number, updates)
+              [operation.newColumn!]: r[operation.oldColumn!]
+            })
           }
         }
         break

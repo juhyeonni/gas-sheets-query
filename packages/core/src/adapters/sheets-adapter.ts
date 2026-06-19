@@ -138,12 +138,14 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       const col = this.columns[i]
       let value = values[i]
       const colType = this.columnTypes[col]
-      
-      // Convert Date objects to ISO strings for consistency
-      if (value instanceof Date) {
+
+      // Normalize GAS Dates to ISO strings for consistency — except for
+      // date-typed columns, which deserialize back to a real Date below
+      // (skip the wasteful Date -> string -> Date round trip).
+      if (value instanceof Date && colType !== 'date') {
         value = value.toISOString()
       }
-      
+
       // Schema-based deserialization
       if (colType) {
         value = this.deserializeByType(value, colType)
