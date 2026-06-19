@@ -81,7 +81,7 @@ async function confirm(message: string): Promise<boolean> {
   })
 }
 
-function copyFiles(files: SkillFile[], dest: string): void {
+export function copyFiles(files: SkillFile[], dest: string): void {
   for (const file of files) {
     const targetPath = join(dest, file.relativePath)
     const targetDir = dirname(targetPath)
@@ -93,7 +93,7 @@ function copyFiles(files: SkillFile[], dest: string): void {
   }
 }
 
-function parseArgs(args: string[]): { command: string; options: InstallOptions } {
+export function parseArgs(args: string[]): { command: string; options: InstallOptions } {
   const command = args[0] || 'help'
   const options: InstallOptions = {}
 

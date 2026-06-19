@@ -3,13 +3,15 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { 
-  createClientFactory, 
+import {
+  createClientFactory,
   createMockClient,
+  createStore,
   isGASEnvironment,
   isNodeEnvironment,
   type GeneratedSchema
 } from '../../src/runtime.js'
+import { MockAdapter, SheetsAdapter } from '@gsquery/core'
 
 // =============================================================================
 // Test Schema
@@ -155,17 +157,59 @@ describe('createMockClient', () => {
 
   it('mock client supports all operations', () => {
     const db = createMockClient<TestTables>(testSchema)
-    
+
     const post = db.from('Post').create({
       title: 'Hello World',
       content: 'This is a test',
       userId: 1
     })
-    
+
     expect(post.id).toBeDefined()
     expect(post.title).toBe('Hello World')
-    
+
     const posts = db.from('Post').findAll()
     expect(posts.length).toBe(1)
+  })
+})
+
+describe('createStore (#86)', () => {
+  const tableSchema = { columns: ['id', 'name'] as const }
+
+  it('returns a MockAdapter in mock mode', () => {
+    expect(createStore('User', tableSchema, { mock: true })).toBeInstanceOf(MockAdapter)
+  })
+
+  it('returns a SheetsAdapter when a spreadsheetId is provided', () => {
+    expect(createStore('User', tableSchema, { spreadsheetId: 'sheet-1' })).toBeInstanceOf(SheetsAdapter)
+  })
+
+  it('passes columnTypes through to the SheetsAdapter', () => {
+    const store = createStore(
+      'Event',
+      { columns: ['id', 'createdAt'] as const, columnTypes: { createdAt: 'date' } },
+      { spreadsheetId: 'sheet-1' }
+    )
+    expect(store).toBeInstanceOf(SheetsAdapter)
+  })
+})
+
+describe('custom stores (#86)', () => {
+  it('uses provided custom stores for every table', () => {
+    const createClient = createClientFactory<TestTables>(testSchema)
+    const userStore = new MockAdapter<User>()
+    const postStore = new MockAdapter<Post>()
+
+    const db = createClient({ stores: { User: userStore, Post: postStore } })
+    db.from('User').create({ name: 'Z', email: 'z@test.com', age: 1 })
+
+    expect(userStore.findAll().length).toBe(1)
+  })
+
+  it('throws when a custom store is missing for a table', () => {
+    const createClient = createClientFactory<TestTables>(testSchema)
+    const userStore = new MockAdapter<User>()
+
+    // Post store omitted -> must throw rather than silently drop the table.
+    expect(() => createClient({ stores: { User: userStore } })).toThrow(/Post/)
   })
 })

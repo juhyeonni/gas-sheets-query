@@ -305,7 +305,44 @@ describe('MigrationRunner', () => {
       
       await expect(runner.migrate()).rejects.toThrow(MigrationExecutionError)
     })
-    
+
+    it('keeps earlier migrations applied on a mid-batch failure (no auto-rollback) (#86)', async () => {
+      usersStore.insert({ name: 'John', email: 'john@test.com' })
+
+      const migrations: Migration[] = [
+        {
+          version: 1,
+          name: 'add_role',
+          up: (db) => { db.addColumn('users', 'role', { default: 'user' }) },
+          down: (db) => { db.removeColumn('users', 'role') }
+        },
+        {
+          version: 2,
+          name: 'boom',
+          up: () => { throw new Error('boom') },
+          down: () => {}
+        }
+      ]
+
+      const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+
+      await expect(runner.migrate()).rejects.toThrow(MigrationExecutionError)
+
+      // v1 stayed applied (no automatic rollback); v2 was not recorded.
+      expect(await runner.getCurrentVersion()).toBe(1)
+      expect(migrationsStore.findAll().map(r => r.version)).toEqual([1])
+      expect(usersStore.findAll()[0].role).toBe('user')
+    })
+
+    it('names the failing migration in MigrationExecutionError (#86)', async () => {
+      const migrations: Migration[] = [
+        { version: 1, name: 'will_fail', up: () => { throw new Error('nope') }, down: () => {} }
+      ]
+      const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+
+      await expect(runner.migrate()).rejects.toThrow(/will_fail/)
+    })
+
     it('should return empty array when no pending migrations', async () => {
       migrationsStore.insert({ version: 1, name: 'first', appliedAt: '2024-01-01' })
       

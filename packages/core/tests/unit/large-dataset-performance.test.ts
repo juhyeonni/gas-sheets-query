@@ -1,8 +1,9 @@
 /**
- * Large dataset performance tests for stability validation
+ * Large dataset behavior tests for stability validation.
  *
- * These tests verify that the system performs acceptably with large amounts of data.
- * While not strict benchmarks, they ensure operations complete within reasonable timeframes.
+ * These verify the system stays CORRECT at scale (10k+ rows). Timing is logged
+ * for information only — assertions are behavioral, never wall-clock, because
+ * wall-clock thresholds flake on shared CI runners (see #86).
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { Repository } from '../../src/core/repository'
@@ -18,14 +19,13 @@ interface TestRow extends RowWithId {
   status: string
 }
 
-describe('Large Dataset Performance', () => {
+describe('Large Dataset Behavior', () => {
   describe('Large dataset CRUD operations', () => {
-    it('should handle 10,000 sequential inserts in reasonable time', () => {
+    it('should handle 10,000 sequential inserts correctly', () => {
       const adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
       const start = performance.now()
-
       for (let i = 0; i < 10000; i++) {
         repo.create({
           name: `User ${i}`,
@@ -34,16 +34,15 @@ describe('Large Dataset Performance', () => {
           status: i % 2 === 0 ? 'active' : 'inactive'
         })
       }
-
-      const duration = performance.now() - start
+      console.log(`[Timing] 10,000 inserts: ${(performance.now() - start).toFixed(2)}ms`)
 
       expect(repo.count()).toBe(10000)
-      expect(duration).toBeLessThan(1000) // Should complete in under 1 second
-
-      console.log(`[Performance] 10,000 inserts: ${duration.toFixed(2)}ms`)
+      // ids are unique and sequential
+      expect(repo.findById(1)?.name).toBe('User 0')
+      expect(repo.findById(10000)?.name).toBe('User 9999')
     })
 
-    it('should handle batch insert of 10,000 rows efficiently', () => {
+    it('should batch insert 10,000 rows with unique ids', () => {
       const adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
@@ -56,47 +55,43 @@ describe('Large Dataset Performance', () => {
 
       const start = performance.now()
       const results = repo.batchInsert(data)
-      const duration = performance.now() - start
+      console.log(`[Timing] Batch insert 10,000: ${(performance.now() - start).toFixed(2)}ms`)
 
       expect(results.length).toBe(10000)
-      expect(duration).toBeLessThan(500) // Batch should be faster than sequential
-
-      console.log(`[Performance] Batch insert 10,000: ${duration.toFixed(2)}ms`)
+      const ids = new Set(results.map(r => r.id))
+      expect(ids.size).toBe(10000) // all ids unique
     })
 
-    it('should efficiently query large dataset with filters', () => {
+    it('should query large dataset with filters correctly', () => {
       const adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
-      // Insert 10,000 rows
       const data = Array.from({ length: 10000 }, (_, i) => ({
         name: `User ${i}`,
         category: `Category ${i % 10}`,
         value: i,
-        status: i % 3 === 0 ? 'active' : 'inactive' // Use % 3 so there are matches
+        status: i % 3 === 0 ? 'active' : 'inactive'
       }))
       repo.batchInsert(data)
 
-      // Query with filters (Category 0, 3, 6, 9 will have active rows since i % 3 === 0 exists for those)
-      const start = performance.now()
       const query = new QueryBuilder(adapter)
       const results = query
         .where('category', '=', 'Category 0')
         .where('status', '=', 'active')
         .exec()
-      const duration = performance.now() - start
 
       expect(results.length).toBeGreaterThan(0)
-      expect(duration).toBeLessThan(100) // Should be fast even without indexes
-
-      console.log(`[Performance] Query 10,000 rows with filters: ${duration.toFixed(2)}ms, Results: ${results.length}`)
+      // Every returned row must satisfy both filters.
+      expect(results.every(r => r.category === 'Category 0' && r.status === 'active')).toBe(true)
+      // Matches a manual scan.
+      const expected = adapter.findAll().filter(r => r.category === 'Category 0' && r.status === 'active').length
+      expect(results.length).toBe(expected)
     })
 
-    it('should handle batch update of many rows', () => {
+    it('should batch update many rows without touching the rest', () => {
       const adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
-      // Insert 10,000 rows
       const data = Array.from({ length: 10000 }, (_, i) => ({
         name: `User ${i}`,
         category: `Category ${i % 10}`,
@@ -105,27 +100,23 @@ describe('Large Dataset Performance', () => {
       }))
       const inserted = repo.batchInsert(data)
 
-      // Batch update 5,000 rows
       const updates = inserted.slice(0, 5000).map(row => ({
         id: row.id,
         data: { status: 'completed' }
       }))
-
-      const start = performance.now()
       const results = repo.batchUpdate(updates)
-      const duration = performance.now() - start
 
       expect(results.length).toBe(5000)
-      expect(duration).toBeLessThan(500)
-
-      console.log(`[Performance] Batch update 5,000 rows: ${duration.toFixed(2)}ms`)
+      expect(results.every(r => r.status === 'completed')).toBe(true)
+      // Untouched rows remain 'pending'.
+      expect(repo.findById(inserted[5000].id)?.status).toBe('pending')
+      expect(adapter.findAll().filter(r => r.status === 'completed').length).toBe(5000)
     })
 
-    it('should handle findById lookups efficiently on large dataset', () => {
+    it('should findById correctly on a large dataset', () => {
       const adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
-      // Insert 10,000 rows
       const data = Array.from({ length: 10000 }, (_, i) => ({
         name: `User ${i}`,
         category: `Category ${i % 10}`,
@@ -134,21 +125,15 @@ describe('Large Dataset Performance', () => {
       }))
       repo.batchInsert(data)
 
-      // Perform 1,000 random lookups
-      const start = performance.now()
-      for (let i = 0; i < 1000; i++) {
-        const id = Math.floor(Math.random() * 10000) + 1
-        repo.findById(id)
+      // Spot-check lookups across the range return the right row.
+      for (const id of [1, 2500, 5000, 7500, 10000]) {
+        expect(repo.findById(id)?.id).toBe(id)
       }
-      const duration = performance.now() - start
-
-      expect(duration).toBeLessThan(10) // O(1) lookups should be very fast
-
-      console.log(`[Performance] 1,000 findById on 10,000 rows: ${duration.toFixed(2)}ms`)
+      expect(adapter.findById(10001)).toBeUndefined()
     })
   })
 
-  describe('Query performance with sorting and pagination', () => {
+  describe('Query behavior with sorting and pagination', () => {
     let adapter: MockAdapter<TestRow>
     let repo: Repository<TestRow>
 
@@ -156,58 +141,45 @@ describe('Large Dataset Performance', () => {
       adapter = new MockAdapter<TestRow>()
       repo = new Repository(adapter)
 
-      // Setup: Insert 5,000 rows
       const data = Array.from({ length: 5000 }, (_, i) => ({
         name: `User ${i}`,
         category: `Category ${i % 10}`,
-        value: Math.floor(Math.random() * 1000),
+        value: i % 1000,
         status: i % 2 === 0 ? 'active' : 'inactive'
       }))
       repo.batchInsert(data)
     })
 
-    it('should handle sorting large result sets', () => {
+    it('should sort large result sets correctly', () => {
       const query = new QueryBuilder(adapter)
-
-      const start = performance.now()
-      const results = query
-        .orderBy('value', 'desc')
-        .exec()
-      const duration = performance.now() - start
+      const results = query.orderBy('value', 'desc').exec()
 
       expect(results.length).toBe(5000)
-      expect(results[0].value).toBeGreaterThanOrEqual(results[1].value)
-      expect(duration).toBeLessThan(50)
-
-      console.log(`[Performance] Sort 5,000 rows: ${duration.toFixed(2)}ms`)
+      // Fully ordered, not just the first pair.
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1].value).toBeGreaterThanOrEqual(results[i].value)
+      }
     })
 
-    it('should efficiently paginate through large datasets', () => {
+    it('should paginate without gaps or overlaps', () => {
       const pageSize = 50
       const totalPages = 20
+      const seen: number[] = []
 
-      const start = performance.now()
       for (let page = 0; page < totalPages; page++) {
         const query = new QueryBuilder(adapter)
-        const results = query
-          .orderBy('id', 'asc')
-          .offset(page * pageSize)
-          .limit(pageSize)
-          .exec()
+        const results = query.orderBy('id', 'asc').offset(page * pageSize).limit(pageSize).exec()
 
         expect(results.length).toBe(pageSize)
+        // ids start at 1 and are contiguous in id-asc order.
+        expect(results[0].id).toBe(page * pageSize + 1)
+        seen.push(...results.map(r => r.id))
       }
-      const duration = performance.now() - start
-
-      expect(duration).toBeLessThan(100) // 20 pages should be fast
-
-      console.log(`[Performance] Paginate ${totalPages} pages of ${pageSize}: ${duration.toFixed(2)}ms`)
+      expect(new Set(seen).size).toBe(totalPages * pageSize) // no overlaps
     })
 
-    it('should handle complex multi-condition queries', () => {
+    it('should handle complex multi-condition queries correctly', () => {
       const query = new QueryBuilder(adapter)
-
-      const start = performance.now()
       const results = query
         .where('category', 'in', ['Category 1', 'Category 2', 'Category 3'])
         .where('value', '>', 500)
@@ -215,86 +187,66 @@ describe('Large Dataset Performance', () => {
         .orderBy('value', 'desc')
         .limit(100)
         .exec()
-      const duration = performance.now() - start
 
       expect(results.length).toBeLessThanOrEqual(100)
-      expect(duration).toBeLessThan(50)
-
-      console.log(`[Performance] Complex query on 5,000 rows: ${duration.toFixed(2)}ms`)
+      expect(results.every(r =>
+        ['Category 1', 'Category 2', 'Category 3'].includes(r.category) &&
+        r.value > 500 &&
+        r.status === 'active'
+      )).toBe(true)
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1].value).toBeGreaterThanOrEqual(results[i].value)
+      }
     })
   })
 
-  describe('Aggregation performance', () => {
+  describe('Aggregation behavior', () => {
     let adapter: MockAdapter<TestRow>
 
     beforeEach(() => {
       adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
-      // Setup: Insert 5,000 rows with varied data
       const data = Array.from({ length: 5000 }, (_, i) => ({
         name: `User ${i}`,
-        category: `Category ${i % 5}`, // 5 categories
-        value: Math.floor(Math.random() * 1000),
+        category: `Category ${i % 5}`,
+        value: i % 1000,
         status: ['active', 'inactive', 'pending'][i % 3]
       }))
       repo.batchInsert(data)
     })
 
-    it('should perform count aggregation efficiently', () => {
-      const query = new QueryBuilder(adapter)
-
-      const start = performance.now()
-      const count = query.where('status', '=', 'active').count()
-      const duration = performance.now() - start
-
-      expect(count).toBeGreaterThan(0)
-      expect(duration).toBeLessThan(30)
-
-      console.log(`[Performance] Count on 5,000 rows: ${duration.toFixed(2)}ms`)
+    it('should count with a filter correctly', () => {
+      const count = new QueryBuilder(adapter).where('status', '=', 'active').count()
+      const expected = adapter.findAll().filter(r => r.status === 'active').length
+      expect(count).toBe(expected)
     })
 
-    it('should perform sum/avg aggregations efficiently', () => {
-      const query = new QueryBuilder(adapter)
+    it('should sum and average correctly', () => {
+      const all = adapter.findAll()
+      const expectedSum = all.reduce((a, r) => a + r.value, 0)
 
-      const start = performance.now()
-      const sum = query.sum('value')
-      const avg = query.avg('value')
-      const duration = performance.now() - start
-
-      expect(sum).toBeGreaterThan(0)
-      expect(avg).toBeGreaterThan(0)
-      expect(duration).toBeLessThan(30)
-
-      console.log(`[Performance] Sum+Avg on 5,000 rows: ${duration.toFixed(2)}ms`)
+      expect(new QueryBuilder(adapter).sum('value')).toBe(expectedSum)
+      expect(new QueryBuilder(adapter).avg('value')).toBeCloseTo(expectedSum / all.length, 6)
     })
 
-    it('should handle group by with multiple groups', () => {
-      const query = new QueryBuilder(adapter)
-
-      const start = performance.now()
-      const results = query
+    it('should group by multiple fields covering all rows', () => {
+      const results = new QueryBuilder(adapter)
         .groupBy('category', 'status')
-        .agg({
-          count: 'count',
-          avgValue: 'avg:value',
-          sumValue: 'sum:value'
-        })
-      const duration = performance.now() - start
+        .agg({ count: 'count', avgValue: 'avg:value', sumValue: 'sum:value' })
 
       expect(results.length).toBeGreaterThan(0)
-      expect(duration).toBeLessThan(50)
-
-      console.log(`[Performance] GroupBy on 5,000 rows: ${duration.toFixed(2)}ms, Groups: ${results.length}`)
+      // Group counts must sum to the full dataset.
+      const total = results.reduce((a, g) => a + (g.count as number), 0)
+      expect(total).toBe(adapter.findAll().length)
     })
   })
 
-  describe('Memory and stability', () => {
-    it('should handle multiple operations on same large dataset', () => {
+  describe('Stability', () => {
+    it('should keep results correct across mixed operations', () => {
       const adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
-      // Insert 5,000 rows
       const data = Array.from({ length: 5000 }, (_, i) => ({
         name: `User ${i}`,
         category: `Category ${i % 10}`,
@@ -303,33 +255,17 @@ describe('Large Dataset Performance', () => {
       }))
       repo.batchInsert(data)
 
-      const start = performance.now()
-
-      // Perform multiple operations
-      repo.findAll()
-
-      const query1 = new QueryBuilder(adapter)
-      query1.where('category', '=', 'Category 5').exec()
-
+      expect(repo.findAll().length).toBe(5000)
+      new QueryBuilder(adapter).where('category', '=', 'Category 5').exec()
       repo.update(1, { status: 'inactive' })
-
-      const query2 = new QueryBuilder(adapter)
-      query2.orderBy('value', 'desc').limit(100).exec()
-
-      repo.count()
-
-      const duration = performance.now() - start
-
-      expect(duration).toBeLessThan(100)
-
-      console.log(`[Performance] Multiple operations on 5,000 rows: ${duration.toFixed(2)}ms`)
+      expect(repo.findById(1)?.status).toBe('inactive')
+      expect(repo.count()).toBe(5000)
     })
 
-    it('should handle rapid repeated queries without degradation', () => {
+    it('should return identical results across repeated queries (no degradation)', () => {
       const adapter = new MockAdapter<TestRow>()
       const repo = new Repository(adapter)
 
-      // Insert 1,000 rows
       const data = Array.from({ length: 1000 }, (_, i) => ({
         name: `User ${i}`,
         category: `Category ${i % 5}`,
@@ -338,36 +274,23 @@ describe('Large Dataset Performance', () => {
       }))
       repo.batchInsert(data)
 
-      const durations: number[] = []
-
-      // Perform same query 100 times
+      const counts = new Set<number>()
       for (let i = 0; i < 100; i++) {
-        const start = performance.now()
-        const query = new QueryBuilder(adapter)
-        query.where('category', '=', 'Category 1').exec()
-        durations.push(performance.now() - start)
+        const results = new QueryBuilder(adapter).where('category', '=', 'Category 1').exec()
+        counts.add(results.length)
       }
-
-      const avgDuration = durations.reduce((a, b) => a + b, 0) / durations.length
-      const maxDuration = Math.max(...durations)
-
-      expect(maxDuration).toBeLessThan(50) // No single query should be slow (relaxed for CI)
-      expect(avgDuration).toBeLessThan(20)  // Average should be very fast (relaxed for CI)
-
-      console.log(`[Performance] 100 repeated queries: avg ${avgDuration.toFixed(3)}ms, max ${maxDuration.toFixed(3)}ms`)
+      // Every run returns the same count.
+      expect(counts.size).toBe(1)
+      expect([...counts][0]).toBe(adapter.findAll().filter(r => r.category === 'Category 1').length)
     })
   })
 
   describe('Scalability validation', () => {
-    it('should confirm linear complexity for full scans', () => {
-      const sizes = [1000, 2000, 5000]
-      const timings: { size: number; time: number }[] = []
-
-      for (const size of sizes) {
+    it('should return all rows for full scans at every size', () => {
+      for (const size of [1000, 2000, 5000]) {
         const adapter = new MockAdapter<TestRow>()
         const repo = new Repository(adapter)
 
-        // Insert data
         const data = Array.from({ length: size }, (_, i) => ({
           name: `User ${i}`,
           category: `Category ${i % 10}`,
@@ -376,20 +299,8 @@ describe('Large Dataset Performance', () => {
         }))
         repo.batchInsert(data)
 
-        // Measure findAll
-        const start = performance.now()
-        repo.findAll()
-        const duration = performance.now() - start
-
-        timings.push({ size, time: duration })
+        expect(repo.findAll().length).toBe(size)
       }
-
-      console.log('[Scalability] findAll() timing:', timings)
-
-      // Verify reasonable performance at each size
-      timings.forEach(({ size, time }) => {
-        expect(time).toBeLessThan(size * 0.1) // Should be fast relative to size
-      })
     })
   })
 })
