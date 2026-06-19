@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/skills",
-  "version": "1.0.0-rc1",
+  "version": "1.0.0-rc2",
   "description": "AI coding assistant context files for gas-sheets-query",
   "type": "module",
   "main": "dist/index.js",
@@ -22,7 +22,7 @@
     "skills"
   ],
   "scripts": {
-    "prepublishOnly": "pnpm build",
+    "prepublishOnly": "pnpm clean && pnpm build",
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
