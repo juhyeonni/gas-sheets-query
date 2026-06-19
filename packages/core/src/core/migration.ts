@@ -175,9 +175,12 @@ class RecordingSchemaBuilder implements SchemaBuilder {
 // ============================================================================
 
 /**
- * Resolver to get DataStore for a table
+ * Resolver to get DataStore for a table.
+ * Defined once in join-query-builder; imported and re-exported here to keep
+ * this module's public surface (and the MigrationStoreResolver alias in index.ts).
  */
-export type StoreResolver = <T extends RowWithId>(tableName: string) => DataStore<T>
+import type { StoreResolver } from './join-query-builder'
+export type { StoreResolver }
 
 /**
  * Migration runner configuration

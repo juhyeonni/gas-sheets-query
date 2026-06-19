@@ -173,7 +173,13 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
 export interface DefineSheetsDBOptions<
   TableSchemas extends Record<string, TableSchemaTyped>
 > {
-  /** Spreadsheet ID (optional) */
+  /**
+   * Spreadsheet ID.
+   * @deprecated No-op in defineSheetsDB — store creation here uses the provided
+   * stores or a MockAdapter and does not read this. Configure the spreadsheet on
+   * the adapter/client instead. Kept for backward compatibility with the legacy
+   * config shape; will be removed in a future major.
+   */
   spreadsheetId?: string
   /** Table schemas with optional type hints */
   tables: TableSchemas

@@ -199,23 +199,6 @@ export class IndexStore<T extends Row> {
   }
 
   /**
-   * Find index starting with specific fields (prefix matching)
-   * Used for prefix matching in composite indexes
-   */
-  findIndexByPrefix(fields: string[]): IndexDefinition | undefined {
-    const prefix = fields.join('|')
-
-    for (const def of this.definitions) {
-      const key = createIndexKey(def.fields)
-      if (key === prefix || key.startsWith(prefix + '|')) {
-        return def
-      }
-    }
-
-    return undefined
-  }
-
-  /**
    * Reindex after delete
    * Row indices after the deleted row shift down due to splice
    */
