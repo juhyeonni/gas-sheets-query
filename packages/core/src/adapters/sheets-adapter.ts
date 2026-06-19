@@ -2,7 +2,7 @@
  * SheetsAdapter - Real Google Sheets DataStore implementation
  * Uses Google Apps Script SpreadsheetApp API
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode } from '../core/types'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
 import { evaluateCondition, compareRows } from '../core/query-utils'
 
 /** Column type definition for schema-based serialization */
@@ -410,7 +410,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     }
   }
 
-  update(id: string | number, data: Partial<T>): T | undefined {
+  update(id: string | number, data: UpdateData<T>): T | undefined {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
 

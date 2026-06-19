@@ -7,7 +7,8 @@ import type {
   SheetsDBConfig,
   TableSchemaTyped,
   InferRowFromSchema,
-  InferTablesFromConfig
+  InferTablesFromConfig,
+  UpdateData
 } from './types'
 import { Repository } from './repository'
 import { QueryBuilder, createQueryBuilder } from './query-builder'
@@ -38,7 +39,7 @@ export interface TableHandle<T extends RowWithId> {
   findAll(): T[]
 
   /** Shorthand: update by id */
-  update(id: string | number, data: Partial<T>): T
+  update(id: string | number, data: UpdateData<T>): T
 
   /** Shorthand: delete by id */
   delete(id: string | number): void

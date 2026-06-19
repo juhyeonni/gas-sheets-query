@@ -1,7 +1,7 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem } from './types'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, UpdateData } from './types'
 import { RowNotFoundError } from './errors'
 
 /**
@@ -57,7 +57,7 @@ export class Repository<T extends RowWithId> {
    * Update a row by ID
    * @throws RowNotFoundError if not found
    */
-  update(id: string | number, data: Partial<T>): T {
+  update(id: string | number, data: UpdateData<T>): T {
     const updated = this.store.update(id, data)
     if (!updated) {
       throw new RowNotFoundError(id, this.tableName)
@@ -68,7 +68,7 @@ export class Repository<T extends RowWithId> {
   /**
    * Update a row by ID, returns undefined if not found
    */
-  updateOrNull(id: string | number, data: Partial<T>): T | undefined {
+  updateOrNull(id: string | number, data: UpdateData<T>): T | undefined {
     return this.store.update(id, data)
   }
 

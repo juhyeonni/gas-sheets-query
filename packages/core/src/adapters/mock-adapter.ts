@@ -1,7 +1,7 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode } from '../core/types'
+import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
 import { IndexStore, IndexDefinition } from '../core/index-store'
 import { evaluateCondition, compareRows } from '../core/query-utils'
 
@@ -243,7 +243,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   /**
    * Update a row by ID - O(1) using index
    */
-  update(id: string | number, data: Partial<T>): T | undefined {
+  update(id: string | number, data: UpdateData<T>): T | undefined {
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
     

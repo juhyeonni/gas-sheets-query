@@ -48,10 +48,16 @@ export interface QueryOptions<T = Row> {
   offsetValue?: number
 }
 
+/**
+ * Patch accepted by update operations. The `id` is the primary key and is
+ * immutable, so it cannot be changed via update (#98).
+ */
+export type UpdateData<T extends RowWithId> = Partial<Omit<T, 'id'>>
+
 /** Batch update item - id and data to update */
 export interface BatchUpdateItem<T extends RowWithId = RowWithId> {
   id: string | number
-  data: Partial<T>
+  data: UpdateData<T>
 }
 
 /**
@@ -72,7 +78,7 @@ export interface DataStore<T extends RowWithId = RowWithId> {
   insert(data: T | Omit<T, 'id'>): T
 
   /** Update a row by ID, returns updated row or undefined if not found */
-  update(id: string | number, data: Partial<T>): T | undefined
+  update(id: string | number, data: UpdateData<T>): T | undefined
 
   /** Delete a row by ID, returns true if deleted */
   delete(id: string | number): boolean

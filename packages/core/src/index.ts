@@ -17,6 +17,7 @@ export type {
   QueryOptions,
   DataStore,
   BatchUpdateItem,
+  UpdateData,
   TableSchema,
   SheetsDBConfig,
   // Schema-based type inference
