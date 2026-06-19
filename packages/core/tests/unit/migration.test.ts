@@ -361,13 +361,39 @@ describe('MigrationRunner', () => {
       expect(migrationsStore.findAll().length).toBe(0)
     })
     
+    it('re-applies addColumn default after a prior removeColumn (#99)', async () => {
+      // Row starts with a status value; v1.up removes it (leaving the key
+      // undefined), v1.down re-adds it with a default on rollback.
+      usersStore.insert({ name: 'John', email: 'john@test.com', status: 'old' })
+
+      const migrations: Migration[] = [
+        {
+          version: 1,
+          name: 'drop_status',
+          up: (db) => {
+            db.removeColumn('users', 'status')
+          },
+          down: (db) => {
+            db.addColumn('users', 'status', { default: 'unknown' })
+          }
+        }
+      ]
+
+      const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+      await runner.migrate() // up: status -> undefined
+      expect(usersStore.findAll()[0].status).toBeUndefined()
+
+      await runner.rollback() // down: addColumn default must re-apply
+      expect(usersStore.findAll()[0].status).toBe('unknown')
+    })
+
     it('should throw when no migrations to rollback', async () => {
       const runner = createMigrationRunner({
         migrationsStore,
         storeResolver,
         migrations: []
       })
-      
+
       await expect(runner.rollback()).rejects.toThrow(NoMigrationsToRollbackError)
     })
     

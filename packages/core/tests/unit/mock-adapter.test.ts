@@ -193,6 +193,19 @@ describe('MockAdapter', () => {
     })
   })
 
+  describe('update id immutability (#98)', () => {
+    it('ignores attempts to overwrite id and keeps idIndex consistent', () => {
+      adapter.insert({ name: 'Alice', email: 'alice@test.com', age: 30, active: true })
+
+      const result = adapter.update(1, { id: 99, name: 'Alicia' } as Partial<User>)
+
+      expect(result?.id).toBe(1) // id unchanged
+      expect(result?.name).toBe('Alicia') // other fields applied
+      expect(adapter.findById(1)?.name).toBe('Alicia') // no ghost row
+      expect(adapter.findById(99)).toBeUndefined() // id 99 never created
+    })
+  })
+
   describe('reset', () => {
     it('should reset data', () => {
       adapter.insert({ name: 'John', email: 'john@test.com', age: 30, active: true })

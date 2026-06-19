@@ -299,7 +299,9 @@ export class MigrationRunner {
       case 'addColumn': {
         const defaultValue = operation.options?.default
         for (const row of rows) {
-          if (!(operation.column! in row)) {
+          // Treat missing-or-undefined as "needs default" so a default is
+          // re-applied after a prior removeColumn left the key undefined (#99).
+          if ((row as Record<string, unknown>)[operation.column!] === undefined) {
             store.update(row.id as string | number, {
               [operation.column!]: defaultValue
             })

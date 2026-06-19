@@ -248,9 +248,11 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     if (index === undefined) return undefined
     
     const oldRow = this.data[index]
-    const newRow = { ...oldRow, ...data }
+    // id is immutable via update; ignore any attempt to change it so the
+    // idIndex stays consistent and behavior matches SheetsAdapter (#98).
+    const newRow = { ...oldRow, ...data, id: oldRow.id }
     this.data[index] = newRow
-    
+
     // Update column indexes
     this.indexStore.updateIndex(index, oldRow, newRow)
     

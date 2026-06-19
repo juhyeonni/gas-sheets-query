@@ -418,8 +418,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const sheet = this.getSheet()
     const currentValues = sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()[0]
     const currentRow = this.rowToObject(currentValues)
-    
+
     const updatedRow = { ...currentRow, ...data } as T
+    // id is immutable via update; ignore any attempt to change it (#98).
+    ;(updatedRow as Record<string, unknown>)[this.idColumn] =
+      (currentRow as Record<string, unknown>)[this.idColumn]
     const rowValues = this.objectToRow(updatedRow)
     
     sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([rowValues])
