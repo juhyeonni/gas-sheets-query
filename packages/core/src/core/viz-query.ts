@@ -109,8 +109,9 @@ function toColumnRef(field: string, columnMap?: Record<string, string>): string 
   if (columnMap && field in columnMap) {
     return columnMap[field]
   }
-  // If no mapping, assume field name is the column label
-  return `\`${field}\``
+  // If no mapping, assume field name is the column label. Strip backticks so a
+  // crafted field name can't break out of the backtick-quoted identifier (#81).
+  return `\`${field.replace(/`/g, '')}\``
 }
 
 /**
@@ -155,10 +156,21 @@ function buildWhereClause(
         const inner = pattern.slice(1)
         return `${col} ends with ${toQueryLiteral(inner)}`
       } else {
-        // Exact match with wildcards: use matches (regex)
-        // Convert SQL LIKE to regex: % → .*, _ → .
-        const regex = pattern.replace(/%/g, '.*').replace(/_/g, '.')
-        return `${col} matches '${regex}'`
+        // Exact match with wildcards: use matches (regex).
+        // Escape every regex metacharacter in the user value, then translate
+        // the intended SQL wildcards (% -> .*, _ -> .). Anchor the pattern and
+        // route it through toQueryLiteral so quotes are doubled — otherwise a
+        // value like O'Brien or "' or 1=1 or '" would break out of the literal
+        // and inject clauses (#81).
+        const regex = pattern
+          .split('')
+          .map(ch => {
+            if (ch === '%') return '.*'
+            if (ch === '_') return '.'
+            return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          })
+          .join('')
+        return `${col} matches ${toQueryLiteral(`^${regex}$`)}`
       }
     }
     

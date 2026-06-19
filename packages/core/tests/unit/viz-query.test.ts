@@ -101,7 +101,51 @@ describe('viz-query', () => {
       const query = buildVizQuery(options)
       expect(query).toBe("select * where `email` ends with '@gmail.com'")
     })
-    
+
+    it('should build matches query for exact LIKE with embedded wildcard', () => {
+      const options: QueryOptions = {
+        where: [{ field: 'code', operator: 'like', value: 'a_c' }],
+        orderBy: []
+      }
+
+      const query = buildVizQuery(options)
+      // _ -> . (single char), anchored regex
+      expect(query).toBe("select * where `code` matches '^a.c$'")
+    })
+
+    it('should escape regex metacharacters and quotes in LIKE matches (#81)', () => {
+      const options: QueryOptions = {
+        where: [{ field: 'name', operator: 'like', value: "' or 1=1 or '" }],
+        orderBy: []
+      }
+
+      const query = buildVizQuery(options)
+      // Single quotes are doubled (no breakout); spaces/digits are literal.
+      expect(query).toBe("select * where `name` matches '^'' or 1=1 or ''$'")
+      // The injected value never produces a bare, unescaped quote boundary.
+      expect(query).not.toContain("matches '' or")
+    })
+
+    it('should escape regex special chars in LIKE matches (#81)', () => {
+      const options: QueryOptions = {
+        where: [{ field: 'path', operator: 'like', value: 'a.b(c)*' }],
+        orderBy: []
+      }
+
+      const query = buildVizQuery(options)
+      expect(query).toBe("select * where `path` matches '^a\\.b\\(c\\)\\*$'")
+    })
+
+    it('should strip backticks from unmapped field names (#81)', () => {
+      const options: QueryOptions = {
+        where: [{ field: 'name` , (select 1) `x', operator: '=', value: 'x' }],
+        orderBy: []
+      }
+
+      const query = buildVizQuery(options)
+      expect(query).toBe("select * where `name , (select 1) x` = 'x'")
+    })
+
     it('should build query with ORDER BY', () => {
       const options: QueryOptions = {
         where: [],
