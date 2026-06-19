@@ -31,7 +31,18 @@ export interface ConflictItem<T extends RowWithId = RowWithId> {
   clientMutation: MergedMutation<T>
 }
 
-/** Server communication interface */
+/**
+ * Server communication interface.
+ *
+ * Server contract for `push`: apply each mutation idempotently —
+ * - `insert`: upsert (create the row, or replace it if the id already exists),
+ * - `update`: patch an existing row,
+ * - `delete`: no-op if the row is already gone.
+ *
+ * The client guarantees it never emits an `update` for a row the server has not
+ * seen: a delete-then-recreate is coalesced to a single `insert` (upsert), so a
+ * strict-update server still applies it correctly. Inserts must therefore be upserts.
+ */
 export interface SyncTransport {
   pull<T extends RowWithId>(tableName: string): Promise<{ rows: T[] }>
   push<T extends RowWithId>(

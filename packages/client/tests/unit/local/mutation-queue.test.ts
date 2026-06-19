@@ -118,7 +118,7 @@ describe('MutationQueue', () => {
       })
     })
 
-    it('delete + insert → update (re-creation)', () => {
+    it('delete + insert → insert (re-creation as upsert, safe vs strict-update servers)', () => {
       queue.push('delete', 'a')
       queue.push('insert', 'a', undefined, { id: 'a', name: 'Reborn', value: 42 })
 
@@ -126,7 +126,7 @@ describe('MutationQueue', () => {
       expect(merged).toHaveLength(1)
       expect(merged[0]).toEqual({
         id: 'a',
-        type: 'update',
+        type: 'insert',
         data: { id: 'a', name: 'Reborn', value: 42 },
       })
     })

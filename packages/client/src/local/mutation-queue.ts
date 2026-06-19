@@ -143,11 +143,15 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
       }
     }
 
-    // delete + insert → update (re-creation)
+    // delete + insert → insert (re-creation as an upsert).
+    // Emitting 'insert' (not 'update') keeps re-creation safe against servers
+    // that treat update strictly — i.e. throw or no-op when the row is missing.
+    // The net effect (row exists with the new data) is identical, and insert is
+    // the upsert operation in the sync contract. See mutation-queue tests.
     if (prevType === 'delete' && nextType === 'insert') {
       return {
         id: prev.id,
-        type: 'update',
+        type: 'insert',
         data: { ...(next.row ?? next.data) } as Partial<T>,
       }
     }

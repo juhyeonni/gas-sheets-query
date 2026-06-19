@@ -101,7 +101,11 @@ export class GasApiTransport implements SyncTransport {
 
     const res = await fetch(url)
     if (!res.ok) throw new Error(`Pull failed: ${res.status} ${res.statusText}`)
-    return res.json()
+    try {
+      return await res.json()
+    } catch {
+      throw new Error(`Pull failed: invalid JSON response for table '${tableName}' (status ${res.status})`)
+    }
   }
 
   private async fetchPush<T extends RowWithId>(
@@ -118,6 +122,10 @@ export class GasApiTransport implements SyncTransport {
       body: JSON.stringify({ table: tableName, mutations }),
     })
     if (!res.ok) throw new Error(`Push failed: ${res.status} ${res.statusText}`)
-    return res.json()
+    try {
+      return await res.json()
+    } catch {
+      throw new Error(`Push failed: invalid JSON response for table '${tableName}' (status ${res.status})`)
+    }
   }
 }
