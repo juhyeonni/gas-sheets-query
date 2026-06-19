@@ -322,8 +322,14 @@ export class JoinQueryBuilder<T extends RowWithId> {
    * Execute and return the first result or undefined
    */
   first(): (T & Record<string, unknown>) | undefined {
-    const results = this.limit(1).exec()
-    return results[0]
+    // Apply limit 1 without permanently mutating this builder, so it stays reusable.
+    const savedLimit = this.limitValue
+    this.limitValue = 1
+    try {
+      return this.exec()[0]
+    } finally {
+      this.limitValue = savedLimit
+    }
   }
 
   /**

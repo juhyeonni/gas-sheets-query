@@ -165,7 +165,8 @@ export class QueryBuilder<T extends RowWithId> {
    * Execute and return the first result or undefined
    */
   first(): T | undefined {
-    const results = this.limit(1).exec()
+    // Build with limit 1 without mutating this builder, so it stays reusable.
+    const results = this.store.find({ ...this.build(), limitValue: 1 })
     return results[0]
   }
 

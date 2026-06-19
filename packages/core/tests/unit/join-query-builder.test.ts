@@ -301,6 +301,18 @@ describe('JoinQueryBuilder', () => {
       expect(post?.author).toBeDefined()
     })
 
+    it('first() does not mutate the builder limit (#96)', () => {
+      const qb = db.from('posts')
+        .joinQuery()
+        .join('users', 'authorId', 'id', { as: 'author' })
+        .orderBy('id')
+
+      const total = qb.exec().length
+      expect(total).toBeGreaterThan(1)
+      qb.first()
+      expect(qb.exec().length).toBe(total) // still full set, not truncated to 1
+    })
+
     it('should support firstOrFail()', () => {
       expect(() =>
         db.from('posts')
