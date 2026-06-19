@@ -50,9 +50,22 @@ export async function loadMigrations(
     return []
   }
 
-  const files = readdirSync(migrationsDir)
-    .filter(f => f.match(/^\d+_.*\.ts$/))
-    .sort()
+  // Match compiled .js too: the published bin runs under plain Node, which
+  // cannot import() a .ts file (ERR_UNKNOWN_FILE_EXTENSION) (#82).
+  const matched = readdirSync(migrationsDir).filter(f => /^\d+_.*\.(ts|js)$/.test(f))
+
+  // If both a .ts source and its compiled .js exist for the same migration,
+  // keep only one (otherwise the runner sees a duplicate version). Prefer .js
+  // since production runs under plain Node; dev with only .ts still works.
+  const byBase = new Map<string, string>()
+  for (const f of matched) {
+    const base = f.replace(/\.(ts|js)$/, '')
+    const existing = byBase.get(base)
+    if (!existing || (existing.endsWith('.ts') && f.endsWith('.js'))) {
+      byBase.set(base, f)
+    }
+  }
+  const files = [...byBase.values()].sort()
 
   const migrations = []
 
