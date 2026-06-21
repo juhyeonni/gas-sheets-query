@@ -14,6 +14,13 @@ export interface Mutation<T extends RowWithId = RowWithId> {
   /** Full row for insert mutations */
   row?: T
   timestamp: number
+  /**
+   * Monotonic sequence number assigned when the mutation is enqueued. Used as a
+   * push boundary so a successful push only clears the mutations it actually
+   * snapshotted — mutations enqueued during the push await (higher seq) survive
+   * instead of being silently dropped. See SyncEngine.pushTable (#109).
+   */
+  seq: number
 }
 
 /** A merged mutation ready for transport */

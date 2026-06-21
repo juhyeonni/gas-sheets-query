@@ -87,6 +87,75 @@ describe('SyncEngine', () => {
       expect(serverData.find(t => t.id === 't1')?.title).toBe('Task 1')
       expect(serverData.find(t => t.id === 't2')?.done).toBe(true)
     })
+
+    it('retains a mutation enqueued during the push await (no data loss) [#109]', async () => {
+      // A transport whose push blocks until we release the gate, so we can
+      // enqueue a new mutation for the same row mid-flight.
+      let releasePush!: () => void
+      const pushGate = new Promise<void>(r => {
+        releasePush = r
+      })
+      const slowTransport = {
+        async pull() {
+          return { rows: [] as Todo[] }
+        },
+        async push() {
+          await pushGate
+          return { success: true }
+        },
+      }
+      const a = new LocalAdapter<Todo>({
+        tableName: 'Todo',
+        idMode: 'client',
+        disableIDB: true,
+        mutationStorage: createMemoryStorage(),
+      })
+      const s = new SyncEngine({ transport: slowTransport as any })
+      s.registerTable('Todo', a, a.queue)
+
+      a.insert({ id: 't1', title: 'v1', done: false })
+
+      const pushPromise = s.push() // snapshots queue, blocks at the gate
+      a.update('t1', { title: 'v2' }) // enqueued during the await
+      releasePush()
+      await pushPromise
+
+      // The update made during the await must NOT be cleared.
+      expect(a.queue.hasPending).toBe(true)
+      const remaining = a.queue.getMerged()
+      expect(remaining).toHaveLength(1)
+      expect(remaining[0].id).toBe('t1')
+      expect(remaining[0].data).toMatchObject({ title: 'v2' })
+    })
+
+    it('surfaces a push failure with no conflicts instead of swallowing it [#110]', async () => {
+      const failTransport = {
+        pullCalled: false,
+        async pull() {
+          this.pullCalled = true
+          return { rows: [] as Todo[] }
+        },
+        async push() {
+          return { success: false }
+        },
+      }
+      const a = new LocalAdapter<Todo>({
+        tableName: 'Todo',
+        idMode: 'client',
+        disableIDB: true,
+        mutationStorage: createMemoryStorage(),
+      })
+      const s = new SyncEngine({ transport: failTransport as any })
+      s.registerTable('Todo', a, a.queue)
+
+      a.insert({ id: 't1', title: 'Local', done: false })
+
+      await expect(s.sync()).rejects.toThrow()
+      // pull must not run after a failed push...
+      expect(failTransport.pullCalled).toBe(false)
+      // ...and the unpushed mutation is preserved for a later retry.
+      expect(a.queue.hasPending).toBe(true)
+    })
   })
 
   // ── Pull ───────────────────────────────────────────────────────────
@@ -298,6 +367,32 @@ describe('SyncEngine', () => {
       // Client wins: local data should remain
       const t1 = adapter.findById('t1')
       expect(t1?.title).toBe('Local version')
+    })
+
+    it('client-wins retains the mutation so the local edit is re-pushed [#110]', async () => {
+      const clientWinsSync = new SyncEngine({
+        transport,
+        conflictStrategy: 'client-wins',
+      })
+      clientWinsSync.registerTable('Todo', adapter, adapter.queue)
+
+      adapter.insert({ id: 't1', title: 'Local version', done: false })
+
+      transport.conflictGenerator = (() => [
+        {
+          id: 't1',
+          serverRow: { id: 't1', title: 'Server version', done: true },
+          clientMutation: { id: 't1', type: 'insert' as const, data: { id: 't1', title: 'Local version', done: false } },
+        },
+      ]) as any
+
+      await clientWinsSync.push()
+
+      // The conflicting mutation is kept so the next sync re-pushes the local
+      // edit instead of letting the server version win on the next pull.
+      expect(adapter.queue.hasPending).toBe(true)
+      const remaining = adapter.queue.getMerged()
+      expect(remaining.find(m => m.id === 't1')).toBeDefined()
     })
 
     it('custom conflict resolver', async () => {

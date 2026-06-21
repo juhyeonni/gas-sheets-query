@@ -129,21 +129,42 @@ export class SyncEngine {
     const merged = binding.queue.getMerged()
     if (merged.length === 0) return
 
+    // Boundary: only mutations enqueued up to this point are part of this push.
+    // Anything enqueued during the await below (higher seq) must survive the
+    // clear, otherwise concurrent local writes are silently lost (#109).
+    const boundary = binding.queue.currentSeq()
     const result = await this.transport.push(tableName, merged)
 
     if (result.success) {
-      // Clear synced mutations
       const syncedIds = new Set(merged.map(m => m.id))
-      binding.queue.clearForRows(syncedIds)
+      binding.queue.clearForRows(syncedIds, boundary)
       this.emit({ type: 'push-complete', table: tableName, pushedCount: merged.length })
-    } else if (result.conflicts && result.conflicts.length > 0) {
-      // Handle conflicts
-      this.resolveConflicts(tableName, binding, result.conflicts, merged)
-      // Clear synced mutations (conflicts resolved)
-      const syncedIds = new Set(merged.map(m => m.id))
-      binding.queue.clearForRows(syncedIds)
-      this.emit({ type: 'push-complete', table: tableName, pushedCount: merged.length })
+      return
     }
+
+    if (result.conflicts && result.conflicts.length > 0) {
+      this.resolveConflicts(tableName, binding, result.conflicts, merged)
+
+      const syncedIds = new Set(merged.map(m => m.id))
+      // client-wins keeps the local row, so its mutation must be retained and
+      // re-pushed; clearing it would let the next pull overwrite the local edit
+      // with the server version (#110). Non-conflicting rows are still cleared.
+      if (this.conflictStrategy === 'client-wins') {
+        for (const conflict of result.conflicts) {
+          syncedIds.delete(conflict.id)
+        }
+      }
+      binding.queue.clearForRows(syncedIds, boundary)
+      this.emit({ type: 'push-complete', table: tableName, pushedCount: merged.length })
+      return
+    }
+
+    // success:false with no conflicts is a real push failure. Surface it so
+    // sync() aborts before pullTable can clobber the unpushed local state,
+    // rather than swallowing the failure (#110).
+    throw new Error(
+      `Push failed for table "${tableName}": server reported failure without conflicts`
+    )
   }
 
   private resolveConflicts(

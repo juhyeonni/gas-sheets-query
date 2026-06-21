@@ -31,6 +31,8 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
   private mutations: Mutation<T>[] = []
   private readonly storageKey: string
   private readonly storage: MutationStorage | null
+  /** Monotonic counter for assigning mutation sequence numbers */
+  private seqCounter = 0
 
   constructor(options: MutationQueueOptions) {
     this.storageKey = `gsquery:${options.tableName}:mutations`
@@ -57,8 +59,14 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
       data,
       row,
       timestamp: Date.now(),
+      seq: ++this.seqCounter,
     })
     this.persist()
+  }
+
+  /** Highest sequence number assigned so far — the current push boundary. */
+  currentSeq(): number {
+    return this.seqCounter
   }
 
   /** Get all pending mutations after merge */
@@ -170,9 +178,21 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
     this.persist()
   }
 
-  /** Clear mutations for specific row IDs (after successful sync) */
-  clearForRows(ids: Set<string | number>): void {
-    this.mutations = this.mutations.filter(m => !ids.has(m.id))
+  /**
+   * Clear mutations for specific row IDs after a successful sync.
+   *
+   * When `maxSeq` is given, only mutations enqueued up to that boundary are
+   * removed; mutations for the same id added afterwards (e.g. during the push
+   * await) are kept so they are not silently dropped. See SyncEngine.pushTable
+   * (#109).
+   */
+  clearForRows(ids: Set<string | number>, maxSeq?: number): void {
+    this.mutations = this.mutations.filter(m => {
+      if (!ids.has(m.id)) return true
+      // Keep mutations enqueued after the push snapshot boundary.
+      if (maxSeq !== undefined && m.seq > maxSeq) return true
+      return false
+    })
     this.persist()
   }
 
@@ -207,6 +227,19 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
       const raw = this.storage.getItem(this.storageKey)
       if (raw) {
         this.mutations = JSON.parse(raw) as Mutation<T>[]
+        // Restore the sequence counter from the highest persisted seq so push
+        // boundaries stay monotonic across reloads, then backfill any legacy
+        // entries that predate the seq field.
+        for (const m of this.mutations) {
+          if (typeof m.seq === 'number' && m.seq > this.seqCounter) {
+            this.seqCounter = m.seq
+          }
+        }
+        for (const m of this.mutations) {
+          if (typeof m.seq !== 'number') {
+            m.seq = ++this.seqCounter
+          }
+        }
       }
     } catch {
       // Corrupted data - start fresh
