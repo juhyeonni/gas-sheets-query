@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/cli",
-  "version": "1.0.0-rc2",
+  "version": "1.0.0-rc3",
   "description": "CLI for gas-sheets-query schema generation",
   "type": "module",
   "main": "dist/index.js",
