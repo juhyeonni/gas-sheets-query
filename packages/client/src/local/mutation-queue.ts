@@ -12,6 +12,7 @@
  */
 import type { RowWithId } from '@gsquery/core'
 import type { Mutation, MutationType, MergedMutation } from './sync-transport.js'
+import { composeName } from './naming.js'
 
 /** Storage interface for testability (defaults to localStorage) */
 export interface MutationStorage {
@@ -25,6 +26,8 @@ export interface MutationQueueOptions {
   tableName: string
   /** Custom storage (defaults to localStorage if available) */
   storage?: MutationStorage
+  /** Caller-supplied partition key; omitted = rc2-identical storage key */
+  namespace?: string
 }
 
 export class MutationQueue<T extends RowWithId = RowWithId> {
@@ -35,7 +38,7 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
   private seqCounter = 0
 
   constructor(options: MutationQueueOptions) {
-    this.storageKey = `gsquery:${options.tableName}:mutations`
+    this.storageKey = `${composeName('gsquery', options.namespace)}:${options.tableName}:mutations`
     this.storage = options.storage ?? this.detectStorage()
     this.loadFromStorage()
   }
