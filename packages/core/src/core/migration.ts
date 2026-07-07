@@ -175,9 +175,12 @@ class RecordingSchemaBuilder implements SchemaBuilder {
 // ============================================================================
 
 /**
- * Resolver to get DataStore for a table
+ * Resolver to get DataStore for a table.
+ * Defined once in join-query-builder; imported and re-exported here to keep
+ * this module's public surface (and the MigrationStoreResolver alias in index.ts).
  */
-export type StoreResolver = <T extends RowWithId>(tableName: string) => DataStore<T>
+import type { StoreResolver } from './join-query-builder'
+export type { StoreResolver }
 
 /**
  * Migration runner configuration
@@ -299,7 +302,9 @@ export class MigrationRunner {
       case 'addColumn': {
         const defaultValue = operation.options?.default
         for (const row of rows) {
-          if (!(operation.column! in row)) {
+          // Treat missing-or-undefined as "needs default" so a default is
+          // re-applied after a prior removeColumn left the key undefined (#99).
+          if ((row as Record<string, unknown>)[operation.column!] === undefined) {
             store.update(row.id as string | number, {
               [operation.column!]: defaultValue
             })
@@ -309,11 +314,12 @@ export class MigrationRunner {
       }
       
       case 'removeColumn': {
-        // Set column value to undefined via update
-        // In-memory adapters: the column key will have undefined value
-        // In Sheets adapter: the cell will be cleared
+        // Clears the column's value (in-memory: key left undefined; Sheets: cell
+        // cleared). This is a value operation — it does not drop the column from
+        // the sheet header. addColumn's `=== undefined` guard (#99) lets a later
+        // re-add re-apply its default over the cleared value.
         for (const row of rows) {
-          if (operation.column! in row) {
+          if ((row as Record<string, unknown>)[operation.column!] !== undefined) {
             store.update(row.id as string | number, {
               [operation.column!]: undefined
             })
@@ -321,16 +327,20 @@ export class MigrationRunner {
         }
         break
       }
-      
+
       case 'renameColumn': {
         for (const row of rows) {
-          if (operation.oldColumn! in row && !(operation.newColumn! in row)) {
-            const value = (row as Record<string, unknown>)[operation.oldColumn!]
-            const updates: Record<string, unknown> = {
+          const r = row as Record<string, unknown>
+          // Rename when the source has a value and the target is empty
+          // (missing OR left undefined by a prior op) — `=== undefined` rather
+          // than `in`, consistent with the addColumn guard (#99). Using `in`
+          // here would wrongly skip the rename when the target key lingers as
+          // undefined from an earlier removeColumn/rename.
+          if (r[operation.oldColumn!] !== undefined && r[operation.newColumn!] === undefined) {
+            store.update(row.id as string | number, {
               [operation.oldColumn!]: undefined,
-              [operation.newColumn!]: value
-            }
-            store.update(row.id as string | number, updates)
+              [operation.newColumn!]: r[operation.oldColumn!]
+            })
           }
         }
         break

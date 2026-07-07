@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, copyFileSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
 import { createInterface } from 'node:readline'
+import { createRequire } from 'node:module'
 import {
   detectTarget,
   getDefaultDest,
@@ -10,7 +11,9 @@ import {
   type SkillFile,
 } from './index.js'
 
-const VERSION = '0.9.0'
+// Read the version from package.json so it never drifts after `pnpm version`.
+// Resolves to packages/skills/package.json from both src/ (tests) and dist/ (runtime).
+const VERSION: string = createRequire(import.meta.url)('../package.json').version
 
 interface InstallOptions {
   target?: Target
@@ -78,7 +81,7 @@ async function confirm(message: string): Promise<boolean> {
   })
 }
 
-function copyFiles(files: SkillFile[], dest: string): void {
+export function copyFiles(files: SkillFile[], dest: string): void {
   for (const file of files) {
     const targetPath = join(dest, file.relativePath)
     const targetDir = dirname(targetPath)
@@ -90,7 +93,7 @@ function copyFiles(files: SkillFile[], dest: string): void {
   }
 }
 
-function parseArgs(args: string[]): { command: string; options: InstallOptions } {
+export function parseArgs(args: string[]): { command: string; options: InstallOptions } {
   const command = args[0] || 'help'
   const options: InstallOptions = {}
 

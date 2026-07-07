@@ -10,5 +10,20 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary'],
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.d.ts', 'src/index.ts'],
+      // Floor locked just below the current baseline (#86); ratchet up over time.
+      // Baseline dropped when the local-first/sync surface merged in; raise as
+      // its coverage improves.
+      thresholds: {
+        statements: 65,
+        branches: 58,
+        functions: 58,
+        lines: 66
+      }
+    }
   },
 })

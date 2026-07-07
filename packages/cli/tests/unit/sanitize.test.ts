@@ -61,6 +61,13 @@ describe('isValidIdentifier', () => {
     expect(isValidIdentifier('enum')).toBe(false)
   })
 
+  it('should reject JS literal keywords (#102)', () => {
+    expect(isValidIdentifier('null')).toBe(false)
+    expect(isValidIdentifier('undefined')).toBe(false)
+    expect(isValidIdentifier('true')).toBe(false)
+    expect(isValidIdentifier('false')).toBe(false)
+  })
+
   it('should reject code injection attempts', () => {
     expect(isValidIdentifier("'; process.exit(1); '")).toBe(false)
     expect(isValidIdentifier('a\nb')).toBe(false)

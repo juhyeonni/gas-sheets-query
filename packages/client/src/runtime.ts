@@ -9,7 +9,8 @@ import type {
   RowWithId,
   DataStore,
   SheetsDBConfig,
-  IdMode
+  IdMode,
+  ColumnType
 } from '@gsquery/core'
 import { 
   createSheetsDB, 
@@ -46,6 +47,8 @@ export interface GeneratedSchema {
   tables: Record<string, {
     columns: readonly string[]
     sheetName?: string
+    /** Column types for schema-driven (de)serialization (e.g. datetime -> 'date'). */
+    columnTypes?: Record<string, ColumnType>
   }>
 }
 
@@ -82,7 +85,7 @@ export function isNodeEnvironment(): boolean {
  */
 export function createStore<T extends RowWithId>(
   tableName: string,
-  tableSchema: { columns: readonly string[]; sheetName?: string },
+  tableSchema: { columns: readonly string[]; sheetName?: string; columnTypes?: Record<string, ColumnType> },
   options: ClientOptions
 ): DataStore<T> {
   const idMode = options.idMode || 'auto'
@@ -112,12 +115,18 @@ export function createStore<T extends RowWithId>(
       spreadsheetId: options.spreadsheetId,
       sheetName,
       columns: [...tableSchema.columns],
+      columnTypes: tableSchema.columnTypes,
       idMode
     }) as DataStore<T>
   }
 
-  // Fallback to MockAdapter for Node.js (dev/test)
-  return new MockAdapter<T>({ idMode })
+  // No spreadsheetId, not in GAS, and mock not requested. Refuse to silently
+  // use an in-memory MockAdapter — production writes would vanish. Require an
+  // explicit opt-in (#84).
+  throw new Error(
+    `Cannot create a store for table '${tableName}': no spreadsheetId provided and not running in Google Apps Script. ` +
+    `Pass a spreadsheetId, or set mock: true to use the in-memory adapter for development/testing.`
+  )
 }
 
 // =============================================================================

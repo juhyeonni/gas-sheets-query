@@ -305,7 +305,44 @@ describe('MigrationRunner', () => {
       
       await expect(runner.migrate()).rejects.toThrow(MigrationExecutionError)
     })
-    
+
+    it('keeps earlier migrations applied on a mid-batch failure (no auto-rollback) (#86)', async () => {
+      usersStore.insert({ name: 'John', email: 'john@test.com' })
+
+      const migrations: Migration[] = [
+        {
+          version: 1,
+          name: 'add_role',
+          up: (db) => { db.addColumn('users', 'role', { default: 'user' }) },
+          down: (db) => { db.removeColumn('users', 'role') }
+        },
+        {
+          version: 2,
+          name: 'boom',
+          up: () => { throw new Error('boom') },
+          down: () => {}
+        }
+      ]
+
+      const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+
+      await expect(runner.migrate()).rejects.toThrow(MigrationExecutionError)
+
+      // v1 stayed applied (no automatic rollback); v2 was not recorded.
+      expect(await runner.getCurrentVersion()).toBe(1)
+      expect(migrationsStore.findAll().map(r => r.version)).toEqual([1])
+      expect(usersStore.findAll()[0].role).toBe('user')
+    })
+
+    it('names the failing migration in MigrationExecutionError (#86)', async () => {
+      const migrations: Migration[] = [
+        { version: 1, name: 'will_fail', up: () => { throw new Error('nope') }, down: () => {} }
+      ]
+      const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+
+      await expect(runner.migrate()).rejects.toThrow(/will_fail/)
+    })
+
     it('should return empty array when no pending migrations', async () => {
       migrationsStore.insert({ version: 1, name: 'first', appliedAt: '2024-01-01' })
       
@@ -361,13 +398,39 @@ describe('MigrationRunner', () => {
       expect(migrationsStore.findAll().length).toBe(0)
     })
     
+    it('re-applies addColumn default after a prior removeColumn (#99)', async () => {
+      // Row starts with a status value; v1.up removes it (leaving the key
+      // undefined), v1.down re-adds it with a default on rollback.
+      usersStore.insert({ name: 'John', email: 'john@test.com', status: 'old' })
+
+      const migrations: Migration[] = [
+        {
+          version: 1,
+          name: 'drop_status',
+          up: (db) => {
+            db.removeColumn('users', 'status')
+          },
+          down: (db) => {
+            db.addColumn('users', 'status', { default: 'unknown' })
+          }
+        }
+      ]
+
+      const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+      await runner.migrate() // up: status -> undefined
+      expect(usersStore.findAll()[0].status).toBeUndefined()
+
+      await runner.rollback() // down: addColumn default must re-apply
+      expect(usersStore.findAll()[0].status).toBe('unknown')
+    })
+
     it('should throw when no migrations to rollback', async () => {
       const runner = createMigrationRunner({
         migrationsStore,
         storeResolver,
         migrations: []
       })
-      
+
       await expect(runner.rollback()).rejects.toThrow(NoMigrationsToRollbackError)
     })
     
@@ -518,9 +581,34 @@ describe('MigrationRunner', () => {
         })
         
         await runner.migrate()
-        
+
         const users = usersStore.findAll()
         expect(users[0].newName).toBe('John')
+      })
+
+      it('renames even when the target key lingers as undefined from a prior op (#99/OQ-5)', async () => {
+        usersStore.insert({ name: 'John', email: 'john@test.com' })
+
+        const migrations: Migration[] = [
+          {
+            version: 1,
+            // v1.up removes newName (leaves it as an undefined key), then renames
+            // name -> newName. The rename must NOT be skipped by an `in` check.
+            name: 'clear_then_rename',
+            up: (db) => {
+              db.removeColumn('users', 'newName')
+              db.renameColumn('users', 'name', 'newName')
+            },
+            down: () => {}
+          }
+        ]
+
+        const runner = createMigrationRunner({ migrationsStore, storeResolver, migrations })
+        await runner.migrate()
+
+        const user = usersStore.findAll()[0]
+        expect(user.newName).toBe('John')
+        expect(user.name).toBeUndefined()
       })
     })
 

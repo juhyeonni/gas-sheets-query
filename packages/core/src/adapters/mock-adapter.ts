@@ -1,7 +1,7 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode } from '../core/types'
+import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
 import { IndexStore, IndexDefinition } from '../core/index-store'
 import { evaluateCondition, compareRows } from '../core/query-utils'
 
@@ -243,14 +243,16 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   /**
    * Update a row by ID - O(1) using index
    */
-  update(id: string | number, data: Partial<T>): T | undefined {
+  update(id: string | number, data: UpdateData<T>): T | undefined {
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
     
     const oldRow = this.data[index]
-    const newRow = { ...oldRow, ...data }
+    // id is immutable via update; ignore any attempt to change it so the
+    // idIndex stays consistent and behavior matches SheetsAdapter (#98).
+    const newRow = { ...oldRow, ...data, id: oldRow.id }
     this.data[index] = newRow
-    
+
     // Update column indexes
     this.indexStore.updateIndex(index, oldRow, newRow)
     

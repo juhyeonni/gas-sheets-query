@@ -17,6 +17,7 @@ export type {
   QueryOptions,
   DataStore,
   BatchUpdateItem,
+  UpdateData,
   TableSchema,
   SheetsDBConfig,
   // Schema-based type inference
@@ -47,21 +48,6 @@ export { evaluateCondition, compareRows } from './core/query-utils'
 
 // Index Store
 export { IndexStore, IndexDefinition, createIndexKey, serializeValues } from './core/index-store'
-
-// Visualization API Query
-export {
-  buildVizQuery,
-  buildVizUrl,
-  buildVizQueryResult,
-  parseVizResponse,
-  createVizFetcher
-} from './core/viz-query'
-export type {
-  VizQueryOptions,
-  VizQueryResult,
-  VizApiResponse,
-  VizColumn
-} from './core/viz-query'
 
 // Errors
 export {

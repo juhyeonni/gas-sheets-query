@@ -131,6 +131,33 @@ describe('generateClientCode', () => {
     expect(result).toContain('export function createTestClient()')
     expect(result).toContain('return createClient({ mock: true })')
   })
+
+  it('emits columnTypes for datetime and array columns (#97)', () => {
+    const schemaWithTypes: SchemaAST = {
+      enums: {},
+      tables: {
+        Event: {
+          name: 'Event',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'title', type: 'string', optional: false, attributes: [] },
+            { name: 'createdAt', type: 'datetime', optional: false, attributes: [] },
+            { name: 'tags', type: 'string[]', optional: false, attributes: [] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    }
+    const result = generateClientCode(schemaWithTypes)
+
+    expect(result).toContain("columnTypes: { 'createdAt': 'date', 'tags': 'string[]' }")
+  })
+
+  it('omits columnTypes when no column needs schema-driven (de)serialization', () => {
+    const result = generateClientCode(simpleSchema)
+
+    expect(result).not.toContain('columnTypes:')
+  })
 })
 
 describe('generateClientIndex', () => {

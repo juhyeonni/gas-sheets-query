@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/cli",
-  "version": "0.9.0",
+  "version": "1.0.0-rc2",
   "description": "CLI for gas-sheets-query schema generation",
   "type": "module",
   "main": "dist/index.js",
@@ -13,6 +13,7 @@
     "bin"
   ],
   "scripts": {
+    "prepublishOnly": "pnpm clean && pnpm build",
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",

@@ -560,6 +560,68 @@ describe('SheetsAdapter', () => {
     })
   })
 
+  describe('concurrency: lock spans ID allocation and write (#80)', () => {
+    function setupWithCapturedLock(sheet: StubSheet) {
+      const lock = { waitLock: vi.fn(), releaseLock: vi.fn() }
+      const ss = {
+        getSheetByName: vi.fn(() => sheet),
+        insertSheet: vi.fn(() => sheet)
+      }
+      ;(globalThis as Record<string, unknown>).SpreadsheetApp = {
+        openById: vi.fn(() => ss),
+        getActiveSpreadsheet: vi.fn(() => ss)
+      }
+      ;(globalThis as Record<string, unknown>).LockService = {
+        getScriptLock: vi.fn(() => lock)
+      }
+      return lock
+    }
+
+    it('insert (auto mode) releases the lock only AFTER the row is written', () => {
+      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const lock = setupWithCapturedLock(sheet)
+
+      const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
+      adapter.insert({ name: 'Alice', age: 30, active: true })
+
+      expect(lock.waitLock).toHaveBeenCalled()
+      expect(lock.releaseLock).toHaveBeenCalled()
+      expect(sheet.appendRow).toHaveBeenCalled()
+
+      const acquireOrder = lock.waitLock.mock.invocationCallOrder[0]
+      const writeOrder = sheet.appendRow.mock.invocationCallOrder[0]
+      const releaseOrder = lock.releaseLock.mock.invocationCallOrder[0]
+
+      // Lock must be held across the write: acquire < write < release
+      expect(acquireOrder).toBeLessThan(writeOrder)
+      expect(releaseOrder).toBeGreaterThan(writeOrder)
+    })
+
+    it('batchInsert (auto mode) releases the lock only AFTER the batch write', () => {
+      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const lock = setupWithCapturedLock(sheet)
+
+      const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
+      adapter.batchInsert([
+        { name: 'A', age: 1, active: true },
+        { name: 'B', age: 2, active: false }
+      ])
+
+      expect(lock.releaseLock).toHaveBeenCalled()
+
+      // The final getRange(...).setValues(...) is the batch write.
+      const results = sheet.getRange.mock.results
+      const writeRange = results[results.length - 1].value as StubRange
+      expect(writeRange.setValues).toHaveBeenCalled()
+
+      const writeOrder = writeRange.setValues.mock.invocationCallOrder[0]
+      const releaseOrder = lock.releaseLock.mock.invocationCallOrder[0]
+
+      // Write must happen before the lock is released.
+      expect(releaseOrder).toBeGreaterThan(writeOrder)
+    })
+  })
+
   describe('update', () => {
     it('should update existing row', () => {
       const sheet = createStubSheet([
@@ -1160,7 +1222,7 @@ describe('SheetsAdapter', () => {
       expect(result[1].count).toBe(0) // empty → 0
     })
 
-    it('should handle date type', () => {
+    it('should deserialize date type to a real Date (#97)', () => {
       const date = new Date('2024-01-15T10:30:00Z')
       const sheet = createStubSheet([
         ['id', 'created'],
@@ -1168,31 +1230,33 @@ describe('SheetsAdapter', () => {
       ])
       setupGASGlobals(sheet)
 
-      const adapter = new SheetsAdapter<{ id: number; created: string }>({
+      const adapter = new SheetsAdapter<{ id: number; created: Date }>({
         spreadsheetId: 'test',
         sheetName: 'Test',
         columns: ['id', 'created'],
         columnTypes: { created: 'date' }
       })
       const result = adapter.findAll()
-      expect(result[0].created).toBe(date.toISOString())
+      expect(result[0].created).toBeInstanceOf(Date)
+      expect((result[0].created as Date).getTime()).toBe(date.getTime())
     })
 
-    it('should pass through non-Date values for date type', () => {
+    it('should parse date-string values for date type into a Date (#97)', () => {
       const sheet = createStubSheet([
         ['id', 'created'],
         [1, '2024-01-15']
       ])
       setupGASGlobals(sheet)
 
-      const adapter = new SheetsAdapter<{ id: number; created: string }>({
+      const adapter = new SheetsAdapter<{ id: number; created: Date }>({
         spreadsheetId: 'test',
         sheetName: 'Test',
         columns: ['id', 'created'],
         columnTypes: { created: 'date' }
       })
       const result = adapter.findAll()
-      expect(result[0].created).toBe('2024-01-15')
+      expect(result[0].created).toBeInstanceOf(Date)
+      expect((result[0].created as Date).getTime()).toBe(new Date('2024-01-15').getTime())
     })
 
     it('should pass through already-parsed values for array/object types', () => {

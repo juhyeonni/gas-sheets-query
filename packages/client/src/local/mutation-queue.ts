@@ -1,0 +1,249 @@
+/**
+ * MutationQueue - Tracks local mutations with merge logic and localStorage persistence
+ *
+ * Merge rules:
+ * | prev    | next    | result                     |
+ * |---------|---------|----------------------------|
+ * | insert  | update  | insert (data merged)       |
+ * | insert  | delete  | noop (cancel out)          |
+ * | update  | update  | update (last wins)         |
+ * | update  | delete  | delete                     |
+ * | delete  | insert  | update (re-creation)       |
+ */
+import type { RowWithId } from '@gsquery/core'
+import type { Mutation, MutationType, MergedMutation } from './sync-transport.js'
+
+/** Storage interface for testability (defaults to localStorage) */
+export interface MutationStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+  removeItem(key: string): void
+}
+
+export interface MutationQueueOptions {
+  /** Table name (used as storage key namespace) */
+  tableName: string
+  /** Custom storage (defaults to localStorage if available) */
+  storage?: MutationStorage
+}
+
+export class MutationQueue<T extends RowWithId = RowWithId> {
+  private mutations: Mutation<T>[] = []
+  private readonly storageKey: string
+  private readonly storage: MutationStorage | null
+  /** Monotonic counter for assigning mutation sequence numbers */
+  private seqCounter = 0
+
+  constructor(options: MutationQueueOptions) {
+    this.storageKey = `gsquery:${options.tableName}:mutations`
+    this.storage = options.storage ?? this.detectStorage()
+    this.loadFromStorage()
+  }
+
+  private detectStorage(): MutationStorage | null {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return localStorage
+      }
+    } catch {
+      // localStorage not available (SSR, workers, etc.)
+    }
+    return null
+  }
+
+  /** Push a new mutation into the queue */
+  push(type: MutationType, id: string | number, data?: Partial<T>, row?: T): void {
+    this.mutations.push({
+      id,
+      type,
+      data,
+      row,
+      timestamp: Date.now(),
+      seq: ++this.seqCounter,
+    })
+    this.persist()
+  }
+
+  /** Highest sequence number assigned so far — the current push boundary. */
+  currentSeq(): number {
+    return this.seqCounter
+  }
+
+  /** Get all pending mutations after merge */
+  getMerged(): MergedMutation<T>[] {
+    // Group by ID, then merge sequentially
+    const byId = new Map<string | number, MergedMutation<T> | null>()
+
+    for (const m of this.mutations) {
+      const existing = byId.get(m.id)
+
+      if (existing === undefined) {
+        // First mutation for this ID
+        byId.set(m.id, {
+          id: m.id,
+          type: m.type,
+          data: m.type === 'delete' ? undefined : { ...(m.row ?? m.data) } as Partial<T>,
+        })
+        continue
+      }
+
+      if (existing === null) {
+        // Previously cancelled out, start fresh
+        byId.set(m.id, {
+          id: m.id,
+          type: m.type,
+          data: m.type === 'delete' ? undefined : { ...(m.row ?? m.data) } as Partial<T>,
+        })
+        continue
+      }
+
+      // Merge with existing
+      const merged = this.mergePair(existing, m)
+      byId.set(m.id, merged)
+    }
+
+    // Collect non-null results
+    const result: MergedMutation<T>[] = []
+    for (const entry of byId.values()) {
+      if (entry !== null) {
+        result.push(entry)
+      }
+    }
+    return result
+  }
+
+  /** Merge two mutations for the same row */
+  private mergePair(
+    prev: MergedMutation<T>,
+    next: Mutation<T>
+  ): MergedMutation<T> | null {
+    const prevType = prev.type
+    const nextType = next.type
+
+    // insert + update → insert (data merged)
+    if (prevType === 'insert' && nextType === 'update') {
+      return {
+        id: prev.id,
+        type: 'insert',
+        data: { ...prev.data, ...next.data } as Partial<T>,
+      }
+    }
+
+    // insert + delete → noop (cancel out)
+    if (prevType === 'insert' && nextType === 'delete') {
+      return null
+    }
+
+    // update + update → update (last wins, data merged)
+    if (prevType === 'update' && nextType === 'update') {
+      return {
+        id: prev.id,
+        type: 'update',
+        data: { ...prev.data, ...next.data } as Partial<T>,
+      }
+    }
+
+    // update + delete → delete
+    if (prevType === 'update' && nextType === 'delete') {
+      return {
+        id: prev.id,
+        type: 'delete',
+      }
+    }
+
+    // delete + insert → insert (re-creation as an upsert).
+    // Emitting 'insert' (not 'update') keeps re-creation safe against servers
+    // that treat update strictly — i.e. throw or no-op when the row is missing.
+    // The net effect (row exists with the new data) is identical, and insert is
+    // the upsert operation in the sync contract. See mutation-queue tests.
+    if (prevType === 'delete' && nextType === 'insert') {
+      return {
+        id: prev.id,
+        type: 'insert',
+        data: { ...(next.row ?? next.data) } as Partial<T>,
+      }
+    }
+
+    // Fallback: next overrides
+    return {
+      id: next.id,
+      type: next.type,
+      data: next.type === 'delete' ? undefined : { ...(next.row ?? next.data) } as Partial<T>,
+    }
+  }
+
+  /** Clear all mutations */
+  clear(): void {
+    this.mutations = []
+    this.persist()
+  }
+
+  /**
+   * Clear mutations for specific row IDs after a successful sync.
+   *
+   * When `maxSeq` is given, only mutations enqueued up to that boundary are
+   * removed; mutations for the same id added afterwards (e.g. during the push
+   * await) are kept so they are not silently dropped. See SyncEngine.pushTable
+   * (#109).
+   */
+  clearForRows(ids: Set<string | number>, maxSeq?: number): void {
+    this.mutations = this.mutations.filter(m => {
+      if (!ids.has(m.id)) return true
+      // Keep mutations enqueued after the push snapshot boundary.
+      if (maxSeq !== undefined && m.seq > maxSeq) return true
+      return false
+    })
+    this.persist()
+  }
+
+  /** Get raw mutation count (before merge) */
+  get length(): number {
+    return this.mutations.length
+  }
+
+  /** Check if queue has pending mutations */
+  get hasPending(): boolean {
+    return this.mutations.length > 0
+  }
+
+  /** Persist to storage */
+  private persist(): void {
+    if (!this.storage) return
+    try {
+      if (this.mutations.length === 0) {
+        this.storage.removeItem(this.storageKey)
+      } else {
+        this.storage.setItem(this.storageKey, JSON.stringify(this.mutations))
+      }
+    } catch {
+      // Storage full or unavailable - continue in-memory only
+    }
+  }
+
+  /** Load from storage */
+  private loadFromStorage(): void {
+    if (!this.storage) return
+    try {
+      const raw = this.storage.getItem(this.storageKey)
+      if (raw) {
+        this.mutations = JSON.parse(raw) as Mutation<T>[]
+        // Restore the sequence counter from the highest persisted seq so push
+        // boundaries stay monotonic across reloads, then backfill any legacy
+        // entries that predate the seq field.
+        for (const m of this.mutations) {
+          if (typeof m.seq === 'number' && m.seq > this.seqCounter) {
+            this.seqCounter = m.seq
+          }
+        }
+        for (const m of this.mutations) {
+          if (typeof m.seq !== 'number') {
+            m.seq = ++this.seqCounter
+          }
+        }
+      }
+    } catch {
+      // Corrupted data - start fresh
+      this.mutations = []
+    }
+  }
+}

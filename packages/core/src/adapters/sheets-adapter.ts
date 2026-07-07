@@ -2,7 +2,7 @@
  * SheetsAdapter - Real Google Sheets DataStore implementation
  * Uses Google Apps Script SpreadsheetApp API
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode } from '../core/types'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
 import { evaluateCondition, compareRows } from '../core/query-utils'
 
 /** Column type definition for schema-based serialization */
@@ -80,9 +80,17 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   /** Get the spreadsheet instance */
   private getSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
     if (!this._spreadsheet) {
-      this._spreadsheet = this.spreadsheetId
+      const ss = this.spreadsheetId
         ? SpreadsheetApp.openById(this.spreadsheetId)
         : SpreadsheetApp.getActiveSpreadsheet()
+      if (!ss) {
+        throw new Error(
+          `No spreadsheet available for sheet '${this.sheetName}'. ` +
+          'Bind this script to a Sheet, or pass spreadsheetId to SheetsAdapter, ' +
+          'or set Script Property SPREADSHEET_ID.'
+        )
+      }
+      this._spreadsheet = ss
     }
     return this._spreadsheet
   }
@@ -130,12 +138,14 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       const col = this.columns[i]
       let value = values[i]
       const colType = this.columnTypes[col]
-      
-      // Convert Date objects to ISO strings for consistency
-      if (value instanceof Date) {
+
+      // Normalize GAS Dates to ISO strings for consistency — except for
+      // date-typed columns, which deserialize back to a real Date below
+      // (skip the wasteful Date -> string -> Date round trip).
+      if (value instanceof Date && colType !== 'date') {
         value = value.toISOString()
       }
-      
+
       // Schema-based deserialization
       if (colType) {
         value = this.deserializeByType(value, colType)
@@ -190,15 +200,23 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         return Boolean(value)
       case 'number':
         return Number(value)
-      case 'date':
-        if (value instanceof Date) return value.toISOString()
+      case 'date': {
+        // Date columns deserialize to a real Date so the runtime value matches
+        // the generated `Date` type (#97). rowToObject may have pre-converted a
+        // GAS Date to an ISO string, so parse strings/numbers back to a Date.
+        if (value instanceof Date) return value
+        if (typeof value === 'string' || typeof value === 'number') {
+          const parsed = new Date(value)
+          if (!isNaN(parsed.getTime())) return parsed
+        }
         return value
+      }
       default:
         return value
     }
   }
 
-  /** 
+  /**
    * Convert object to sheet row (array)
    * Uses schema-based types if available, falls back to auto-detection
    */
@@ -248,22 +266,32 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   /**
-   * Get the next available ID.
-   * Uses LockService for concurrency safety when available.
+   * Run a function while holding the script lock (when LockService is available).
+   * The lock is held for the entire duration of fn so that read-allocate-write
+   * sequences stay atomic across concurrent executions.
    */
-  private getNextId(): number {
+  private withLock<R>(fn: () => R): R {
     let lock: GoogleAppsScript.Lock.Lock | null = null
     try {
       if (typeof LockService !== 'undefined') {
         lock = LockService.getScriptLock()
         lock.waitLock(10000)
       }
-      return this.readMaxId() + 1
+      return fn()
     } finally {
       if (lock) {
         lock.releaseLock()
       }
     }
+  }
+
+  /**
+   * Get the next available ID by scanning the current max.
+   * Must be called inside withLock() together with the row write so that
+   * ID allocation and the write are atomic.
+   */
+  private getNextId(): number {
+    return this.readMaxId() + 1
   }
 
   /** Read the current max ID from the sheet */
@@ -372,16 +400,19 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       sheet.appendRow(rowValues)
       return newRow
     } else {
-      // Auto mode: server generates numeric ID (default, backward compatible)
-      const id = this.getNextId()
-      const newRow = { ...data, [this.idColumn]: id } as T
-      const rowValues = this.objectToRow(newRow)
-      sheet.appendRow(rowValues)
-      return newRow
+      // Auto mode: allocate the ID and write the row atomically under the lock,
+      // otherwise concurrent executions can allocate the same ID.
+      return this.withLock(() => {
+        const id = this.getNextId()
+        const newRow = { ...data, [this.idColumn]: id } as T
+        const rowValues = this.objectToRow(newRow)
+        sheet.appendRow(rowValues)
+        return newRow
+      })
     }
   }
 
-  update(id: string | number, data: Partial<T>): T | undefined {
+  update(id: string | number, data: UpdateData<T>): T | undefined {
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
 
@@ -389,8 +420,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const sheet = this.getSheet()
     const currentValues = sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()[0]
     const currentRow = this.rowToObject(currentValues)
-    
+
     const updatedRow = { ...currentRow, ...data } as T
+    // id is immutable via update; ignore any attempt to change it (#98).
+    ;(updatedRow as Record<string, unknown>)[this.idColumn] =
+      (currentRow as Record<string, unknown>)[this.idColumn]
     const rowValues = this.objectToRow(updatedRow)
     
     sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([rowValues])
@@ -414,11 +448,18 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
     this.invalidateDataCache()
     const sheet = this.getSheet()
-    const results: T[] = []
-    const rowsToInsert: unknown[][] = []
-    
+
+    // Batch write all rows at once, appending after the current last row.
+    const writeRows = (rows: unknown[][]) => {
+      const lastRow = sheet.getLastRow()
+      sheet.getRange(lastRow + 1, 1, rows.length, this.columns.length)
+        .setValues(rows)
+    }
+
     if (this.idMode === 'client') {
-      // Client mode: use client-provided IDs
+      // Client mode: use client-provided IDs (no server-side allocation)
+      const results: T[] = []
+      const rowsToInsert: unknown[][] = []
       for (const data of items) {
         if (!(this.idColumn in (data as Record<string, unknown>))) {
           throw new Error(`ID is required in client mode (idMode: 'client')`)
@@ -427,8 +468,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         results.push(newRow)
         rowsToInsert.push(this.objectToRow(newRow))
       }
-    } else {
-      // Auto mode: server generates numeric IDs
+      writeRows(rowsToInsert)
+      return results
+    }
+
+    // Auto mode: allocate IDs (incl. the getLastRow used for the write
+    // position) and write atomically under the lock to avoid duplicate IDs.
+    return this.withLock(() => {
+      const results: T[] = []
+      const rowsToInsert: unknown[][] = []
       let nextId = this.getNextId()
       for (const data of items) {
         const newRow = { ...data, [this.idColumn]: nextId } as T
@@ -436,14 +484,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         rowsToInsert.push(this.objectToRow(newRow))
         nextId++
       }
-    }
-    
-    // Batch write all rows at once
-    const lastRow = sheet.getLastRow()
-    sheet.getRange(lastRow + 1, 1, rowsToInsert.length, this.columns.length)
-      .setValues(rowsToInsert)
-    
-    return results
+      writeRows(rowsToInsert)
+      return results
+    })
   }
 
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {

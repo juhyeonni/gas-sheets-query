@@ -116,6 +116,11 @@ export function runMigrationCreate(name: string, options: MigrationCreateOptions
   if (name.includes('*/')) {
     return { success: false, error: "Migration name must not contain '*/' sequence" }
   }
+  if (/[/\\.]/.test(name)) {
+    // Reject path separators and dots so the name can't traverse out of the
+    // migrations directory (e.g. '../../../evil') (#100).
+    return { success: false, error: "Migration name must not contain '/', '\\', or '.'" }
+  }
 
   // Get migrations directory
   const config = loadConfig()

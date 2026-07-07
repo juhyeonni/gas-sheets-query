@@ -188,7 +188,7 @@ export const migration = {
 
 - [x] v0.1 - Core (MVP): Basic CRUD + Query Builder
 - [x] v0.2 - Performance: Optimization, Batch, Indexing
-- [x] v0.3 - Advanced Query: Visualization API, JOIN, Aggregation
+- [x] v0.3 - Advanced Query: JOIN, Aggregation
 - [x] v0.4 - DX: Migration, Schema Generator, CLI
 - [ ] v1.0 - Production: npm publish, integration testing, release
 

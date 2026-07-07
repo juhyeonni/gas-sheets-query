@@ -405,6 +405,14 @@ export function validateSchema(schema: SchemaAST): ParseError[] {
         message: `Table '${tableName}' has ${idFields.length} @id fields, expected exactly one`,
         table: tableName,
       })
+    } else if (idFields[0].name !== 'id') {
+      // Rule 2b (1.0 contract): the @id field must be named 'id'.
+      // Custom primary-key column names are deferred to 1.1. See #101.
+      errors.push({
+        message: `Table '${tableName}' @id field must be named 'id' (got '${idFields[0].name}'). Custom id column names are not supported in 1.0.`,
+        table: tableName,
+        field: idFields[0].name,
+      })
     }
 
     for (const field of table.fields) {
