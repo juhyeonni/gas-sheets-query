@@ -12,6 +12,7 @@ import type { SyncEngineOptions } from './sync-engine.js'
 import type { SyncTransport, ConflictStrategy } from './sync-transport.js'
 import type { MutationStorage } from './mutation-queue.js'
 import type { IndexDefinition } from '@gsquery/core'
+import { composeName } from './naming.js'
 
 /** Schema definition for createClientDB */
 export interface ClientDBSchema {
@@ -33,6 +34,12 @@ export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>>
   disableIDB?: boolean
   /** Pre-populated data per table (for testing) */
   initialData?: { [K in keyof Tables]?: Tables[K][] }
+  /**
+   * Caller-supplied partition key isolating this instance's IndexedDB
+   * database and mutation-queue storage from other instances on the same
+   * origin (e.g. one per team). Omitted = identical naming to rc2.
+   */
+  namespace?: string
 }
 
 export interface ClientDBResult<Tables extends Record<string, RowWithId>> {
@@ -40,13 +47,20 @@ export interface ClientDBResult<Tables extends Record<string, RowWithId>> {
   sync: SyncEngine
   /** Access adapters directly (for testing/advanced use) */
   adapters: { [K in keyof Tables & string]: LocalAdapter<Tables[K]> }
+  /**
+   * Tear down this instance: cancels SyncEngine auto-sync/debounce timers and
+   * closes the shared IndexedDB connection. Idempotent — safe to call more
+   * than once. Pending mutations are left persisted in storage rather than
+   * flushed, so no transport call fires after this resolves.
+   */
+  close: () => Promise<void>
 }
 
 /** Create a local-first client DB (async init for IndexedDB hydration) */
 export async function createClientDB<Tables extends Record<string, RowWithId>>(
   options: CreateClientDBOptions<Tables>
 ): Promise<ClientDBResult<Tables>> {
-  const { schema, transport, conflictStrategy, pushDebounceMs, mutationStorage, disableIDB } = options
+  const { schema, transport, conflictStrategy, pushDebounceMs, mutationStorage, disableIDB, namespace } = options
 
   const syncEngine = new SyncEngine({
     transport,
@@ -63,7 +77,7 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
   if (idbEnabled) {
     try {
       const allTableNames = Object.keys(schema.tables)
-      sharedDb = await openSharedIDB(allTableNames)
+      sharedDb = await openSharedIDB(allTableNames, composeName('gsquery', namespace))
     } catch {
       // IndexedDB unavailable - adapters will run in-memory only
     }
@@ -79,6 +93,7 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
       disableIDB: disableIDB ?? false,
       initialData: options.initialData?.[tableName as keyof Tables] as any[],
       idbDb: sharedDb,
+      namespace,
     }
 
     const adapter = new LocalAdapter(adapterOpts)
@@ -106,9 +121,18 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     stores: stores as { [K in keyof Tables]: DataStore<Tables[K]> },
   })
 
+  let closed = false
+  const close = async (): Promise<void> => {
+    if (closed) return
+    closed = true
+    syncEngine.dispose()
+    sharedDb?.close()
+  }
+
   return {
     db,
     sync: syncEngine,
     adapters: adapters as { [K in keyof Tables & string]: LocalAdapter<Tables[K]> },
+    close,
   }
 }

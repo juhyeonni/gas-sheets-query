@@ -22,16 +22,20 @@ import { IndexStore, evaluateCondition, compareRows } from '@gsquery/core'
 import type { IndexDefinition } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
 import type { MutationStorage } from './mutation-queue.js'
+import { composeName } from './naming.js'
 
 /**
  * Open the gsquery IndexedDB with all required object stores in a single
  * upgrade transaction. This avoids the race condition where multiple
  * adapters independently try to open/upgrade the same database.
+ *
+ * `dbName` defaults to `'gsquery'` (the rc2 name) so omitting it is
+ * byte-identical to the pre-namespace behavior.
  */
-export function openSharedIDB(tableNames: string[]): Promise<IDBDatabase> {
+export function openSharedIDB(tableNames: string[], dbName = 'gsquery'): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     // First, open without a version to discover the current version
-    const probe = indexedDB.open('gsquery')
+    const probe = indexedDB.open(dbName)
     probe.onsuccess = () => {
       const existing = probe.result
       const currentVersion = existing.version
@@ -51,7 +55,7 @@ export function openSharedIDB(tableNames: string[]): Promise<IDBDatabase> {
       // Need an upgrade — close this connection and reopen with bumped version
       existing.close()
       const nextVersion = currentVersion + 1
-      const upgrade = indexedDB.open('gsquery', nextVersion)
+      const upgrade = indexedDB.open(dbName, nextVersion)
       upgrade.onupgradeneeded = () => {
         const db = upgrade.result
         for (const name of tableNames) {
@@ -68,7 +72,7 @@ export function openSharedIDB(tableNames: string[]): Promise<IDBDatabase> {
     }
     probe.onerror = () => {
       // DB doesn't exist yet — create fresh with version 1
-      const fresh = indexedDB.open('gsquery', 1)
+      const fresh = indexedDB.open(dbName, 1)
       fresh.onupgradeneeded = () => {
         const db = fresh.result
         for (const name of tableNames) {
@@ -93,6 +97,8 @@ export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
   disableIDB?: boolean
   /** Pre-opened shared IDBDatabase handle (from openSharedIDB) */
   idbDb?: IDBDatabase
+  /** Caller-supplied partition key, threaded into the MutationQueue storage key */
+  namespace?: string
 }
 
 export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
@@ -108,12 +114,14 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private idbEnabled: boolean
   private idbDb: IDBDatabase | null = null
   private persistScheduled = false
+  private readonly namespace: string | undefined
 
   constructor(options: LocalAdapterOptions<T>) {
     this.tableName = options.tableName
     this.idMode = options.idMode ?? 'client'
     this.idbEnabled = !options.disableIDB && typeof indexedDB !== 'undefined'
     this.indexStore = new IndexStore<T>(options.indexes ?? [])
+    this.namespace = options.namespace
 
     // Accept pre-opened shared IDB handle
     if (options.idbDb) {
@@ -123,6 +131,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.queue = new MutationQueue<T>({
       tableName: options.tableName,
       storage: options.mutationStorage,
+      namespace: options.namespace,
     })
 
     if (options.initialData) {
@@ -138,7 +147,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     try {
       // If a shared DB handle was provided, just hydrate from it
       if (!this.idbDb) {
-        this.idbDb = await openSharedIDB([this.tableName])
+        this.idbDb = await openSharedIDB([this.tableName], composeName('gsquery', this.namespace))
       }
 
       const rows = await this.readAllFromIDB()
