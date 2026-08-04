@@ -1,7 +1,11 @@
 # gsquery Cheatsheet — Google Sheets as a Database
 
 > TypeScript library for using Google Sheets as a typed database in GAS projects.
-> Packages: `@gsquery/core`, `@gsquery/client`, `@gsquery/cli` (v0.9.0)
+> Packages: `@gsquery/core`, `@gsquery/client`, `@gsquery/cli` (v1.0.0-rc3)
+
+> **Hand-maintained context, synced to v1.0.0-rc3.** These files are written by hand, not generated
+> from source, so they can lag behind the released packages. If a symbol documented here is missing
+> at runtime, trust the installed package's type definitions over this file.
 
 ## Setup
 
@@ -144,14 +148,6 @@ gsquery migration:create add-role                # new migration file
 
 All extend `SheetsQueryError`. Use `instanceof` or check `.code`.
 
-## Viz API (GAS)
-
-```ts
-import { buildVizQuery, createVizFetcher } from '@gsquery/core'
-const fetcher = createVizFetcher('sheet-id', { sheet: 'Users', columnMap: { id: 'A', name: 'B' } })
-const result = fetcher(queryOpts, ['id', 'name'])
-```
-
 ## Common Mistakes
 
 - Always use `as const` on columns array
@@ -161,4 +157,3 @@ const result = fetcher(queryOpts, ['id', 'name'])
 - Join results are nested: `result.author.name`, not `result.authorName`
 - `agg()` requires `groupBy()` — use `.sum()` etc. for ungrouped
 - `SheetsAdapter` only works in GAS runtime
-- `createVizFetcher` only works in GAS — use `buildVizUrl` in Node.js
