@@ -8,7 +8,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json', 'json-summary', 'html'],
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.d.ts', 'src/index.ts', 'src/core/types.ts'],
+      exclude: ['src/**/*.d.ts', 'src/index.ts', 'src/core/types.ts', 'src/testing/index.ts'],
       // Floor locked just below the current baseline (#86); ratchet up over time.
       thresholds: {
         statements: 92,
