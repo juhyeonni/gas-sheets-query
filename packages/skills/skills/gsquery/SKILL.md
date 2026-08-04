@@ -1,6 +1,6 @@
 ---
 skill: gsquery
-version: 1.0.0-rc3
+version: 1.0.0-rc3 # x-release-please-version
 triggers:
   - "Google Sheets database"
   - "gas-sheets-query"
@@ -19,9 +19,10 @@ references:
 
 TypeScript library for using Google Sheets as a typed database in Google Apps Script projects.
 
-> **Hand-maintained context, synced to v1.0.0-rc3.** These files are written by hand, not generated
-> from source, so they can lag behind the released packages. If a symbol documented here is missing
-> at runtime, trust the installed package's type definitions over this file.
+> **Hand-maintained context, synced to v1.0.0-rc3.** <!-- x-release-please-version -->
+> These files are written by hand, not generated from source, so they can lag behind the released
+> packages. If a symbol documented here is missing at runtime, trust the installed package's type
+> definitions over this file.
 
 ## Packages
 

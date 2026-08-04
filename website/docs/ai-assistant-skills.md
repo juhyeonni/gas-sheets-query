@@ -4,7 +4,7 @@ The `@gsquery/skills` package ships context files so AI coding tools (Claude Cod
 
 It is **not** a runtime dependency; it only installs documentation/skill files into your project.
 
-> **Hand-maintained, synced to v1.0.0-rc3.** These context files are written by hand rather than
+> **Hand-maintained.** These context files are written by hand rather than
 > generated from source, so they can lag behind the released packages. Treat them as a head start,
 > not as the source of truth — the [API Reference](./api-reference.md) and the installed package's
 > type definitions win on any conflict.

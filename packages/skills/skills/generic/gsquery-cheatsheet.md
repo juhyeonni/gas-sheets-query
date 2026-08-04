@@ -1,11 +1,12 @@
 # gsquery Cheatsheet — Google Sheets as a Database
 
 > TypeScript library for using Google Sheets as a typed database in GAS projects.
-> Packages: `@gsquery/core`, `@gsquery/client`, `@gsquery/cli` (v1.0.0-rc3)
+> Packages: `@gsquery/core`, `@gsquery/client`, `@gsquery/cli` (v1.0.0-rc3) <!-- x-release-please-version -->
 
-> **Hand-maintained context, synced to v1.0.0-rc3.** These files are written by hand, not generated
-> from source, so they can lag behind the released packages. If a symbol documented here is missing
-> at runtime, trust the installed package's type definitions over this file.
+> **Hand-maintained context, synced to v1.0.0-rc3.** <!-- x-release-please-version -->
+> These files are written by hand, not generated from source, so they can lag behind the released
+> packages. If a symbol documented here is missing at runtime, trust the installed package's type
+> definitions over this file.
 
 ## Setup
 

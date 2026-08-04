@@ -4,7 +4,8 @@ AI coding assistant context files for [gas-sheets-query](https://github.com/juhy
 
 Provides skill/context files so AI tools (Claude Code, Cursor, Copilot, etc.) can write correct gsquery code with proper types, patterns, and anti-patterns.
 
-> **Hand-maintained, synced to v1.0.0-rc3.** These files are written by hand rather than generated
+> **Hand-maintained, synced to v1.0.0-rc3.** <!-- x-release-please-version -->
+> These files are written by hand rather than generated
 > from source, so they can lag behind the released packages. Treat them as a head start, not as the
 > source of truth — the [API Reference](https://juhyeonni.github.io/gas-sheets-query/api-reference)
 > and the installed package's type definitions win on any conflict.
