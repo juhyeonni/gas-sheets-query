@@ -35,6 +35,7 @@ export class SyncEngine {
   private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null
   private readonly pushDebounceMs: number
   private syncing = false
+  private opChain: Promise<unknown> = Promise.resolve()
 
   constructor(options: SyncEngineOptions) {
     this.transport = options.transport
@@ -70,56 +71,83 @@ export class SyncEngine {
     }
   }
 
+  /**
+   * Run an operation after every previously started one has settled, so
+   * sync/push/pull never interleave.
+   *
+   * pullTable reads the mutation queue *after* awaiting the server snapshot.
+   * A push landing in that window clears the queue, and the now-stale snapshot
+   * overwrites the local edit with nothing left to re-apply it (#104).
+   * Serializing also stops two pushes from snapshotting the same mutations
+   * (#111).
+   */
+  private serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.opChain.then(fn, fn)
+    this.opChain = run.then(
+      () => {},
+      () => {}
+    )
+    return run
+  }
+
   /** Full sync: push first (preserve local changes), then pull */
   async sync(tableName?: string): Promise<void> {
+    // Flag is set synchronously so overlapping sync() calls still drop rather
+    // than queue up — auto-sync ticks must not pile up behind a slow transport.
     if (this.syncing) return
     this.syncing = true
 
-    try {
-      this.emit({ type: 'sync-start', table: tableName })
+    return this.serialize(async () => {
+      try {
+        this.emit({ type: 'sync-start', table: tableName })
 
+        const tableNames = tableName
+          ? [tableName]
+          : Array.from(this.tables.keys())
+
+        for (const name of tableNames) {
+          await this.pushTable(name)
+          await this.pullTable(name)
+        }
+
+        this.emit({ type: 'sync-complete', table: tableName })
+      } catch (err) {
+        this.emit({
+          type: 'error',
+          table: tableName,
+          error: err instanceof Error ? err : new Error(String(err)),
+        })
+        throw err
+      } finally {
+        this.syncing = false
+      }
+    })
+  }
+
+  /** Push local mutations to server */
+  async push(tableName?: string): Promise<void> {
+    return this.serialize(async () => {
       const tableNames = tableName
         ? [tableName]
         : Array.from(this.tables.keys())
 
       for (const name of tableNames) {
         await this.pushTable(name)
-        await this.pullTable(name)
       }
-
-      this.emit({ type: 'sync-complete', table: tableName })
-    } catch (err) {
-      this.emit({
-        type: 'error',
-        table: tableName,
-        error: err instanceof Error ? err : new Error(String(err)),
-      })
-      throw err
-    } finally {
-      this.syncing = false
-    }
-  }
-
-  /** Push local mutations to server */
-  async push(tableName?: string): Promise<void> {
-    const tableNames = tableName
-      ? [tableName]
-      : Array.from(this.tables.keys())
-
-    for (const name of tableNames) {
-      await this.pushTable(name)
-    }
+    })
   }
 
   /** Pull server data to local */
   async pull(tableName?: string): Promise<void> {
-    const tableNames = tableName
-      ? [tableName]
-      : Array.from(this.tables.keys())
+    return this.serialize(async () => {
+      const tableNames = tableName
+        ? [tableName]
+        : Array.from(this.tables.keys())
 
-    for (const name of tableNames) {
-      await this.pullTable(name)
-    }
+      for (const name of tableNames) {
+        await this.pullTable(name)
+      }
+    })
   }
 
   private async pushTable(tableName: string): Promise<void> {

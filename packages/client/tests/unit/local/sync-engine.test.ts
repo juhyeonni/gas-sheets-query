@@ -100,6 +100,9 @@ describe('SyncEngine', () => {
           return { rows: [] as Todo[] }
         },
         async push() {
+          // Enqueue while the push is genuinely in flight — the queue has
+          // already been snapshotted, so this is the window that can lose data.
+          a.update('t1', { title: 'v2' })
           await pushGate
           return { success: true }
         },
@@ -116,7 +119,6 @@ describe('SyncEngine', () => {
       a.insert({ id: 't1', title: 'v1', done: false })
 
       const pushPromise = s.push() // snapshots queue, blocks at the gate
-      a.update('t1', { title: 'v2' }) // enqueued during the await
       releasePush()
       await pushPromise
 
@@ -126,6 +128,95 @@ describe('SyncEngine', () => {
       expect(remaining).toHaveLength(1)
       expect(remaining[0].id).toBe('t1')
       expect(remaining[0].data).toMatchObject({ title: 'v2' })
+    })
+
+    it('does not double-send when two pushes overlap [#111]', async () => {
+      let releasePush!: () => void
+      const pushGate = new Promise<void>(r => {
+        releasePush = r
+      })
+      const slowTransport = {
+        pushHistory: [] as unknown[][],
+        async pull() {
+          return { rows: [] as Todo[] }
+        },
+        async push(_table: string, mutations: unknown[]) {
+          this.pushHistory.push(mutations)
+          await pushGate
+          return { success: true }
+        },
+      }
+      const a = new LocalAdapter<Todo>({
+        tableName: 'Todo',
+        idMode: 'client',
+        disableIDB: true,
+        mutationStorage: createMemoryStorage(),
+      })
+      const s = new SyncEngine({ transport: slowTransport as any })
+      s.registerTable('Todo', a, a.queue)
+
+      a.insert({ id: 't1', title: 'v1', done: false })
+
+      const p1 = s.push()
+      const p2 = s.push()
+      releasePush()
+      await Promise.all([p1, p2])
+
+      // The second push runs after the first cleared the queue, so it finds
+      // nothing to send instead of re-sending the same mutations.
+      expect(slowTransport.pushHistory).toHaveLength(1)
+    })
+
+    it('does not revert a local edit when a pull overlaps a push [#104]', async () => {
+      // pull() reads server state immediately but resolves at the gate, so a
+      // push can land (and clear the queue) inside the pull's await window.
+      let releasePull!: () => void
+      const pullGate = new Promise<void>(r => {
+        releasePull = r
+      })
+      const inner = new MockTransport()
+      const gated = {
+        async pull<T>(table: string): Promise<{ rows: T[] }> {
+          const snapshot = await inner.pull<any>(table)
+          await pullGate
+          return snapshot as { rows: T[] }
+        },
+        push(table: string, mutations: any) {
+          return inner.push<any>(table, mutations)
+        },
+      }
+      const a = new LocalAdapter<Todo>({
+        tableName: 'Todo',
+        idMode: 'client',
+        disableIDB: true,
+        mutationStorage: createMemoryStorage(),
+      })
+      const s = new SyncEngine({ transport: gated as any })
+      s.registerTable('Todo', a, a.queue)
+
+      inner.setServerData<Todo>('Todo', [{ id: 't1', title: 'server-v1', done: false }])
+      releasePull()
+      await s.pull()
+
+      // Re-arm the gate, then race a pull against a push of a local edit.
+      let releaseSecond!: () => void
+      const secondGate = new Promise<void>(r => {
+        releaseSecond = r
+      })
+      ;(gated as any).pull = async (table: string) => {
+        const snapshot = await inner.pull<any>(table)
+        await secondGate
+        return snapshot
+      }
+
+      a.update('t1', { title: 'local-v2' })
+      const pullPromise = s.pull()
+      const pushPromise = s.push()
+      releaseSecond()
+      await Promise.all([pullPromise, pushPromise])
+
+      expect((inner.serverData.get('Todo') as Todo[])[0].title).toBe('local-v2')
+      expect(a.findById('t1')?.title).toBe('local-v2')
     })
 
     it('surfaces a push failure with no conflicts instead of swallowing it [#110]', async () => {
