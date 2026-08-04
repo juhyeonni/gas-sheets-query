@@ -138,6 +138,19 @@ export class NoMigrationsToRollbackError extends SheetsQueryError {
 // ============================================================================
 
 /**
+ * Whether a column value counts as "not set" for schema operations.
+ *
+ * `undefined` is not storable in a Sheets cell — SheetsAdapter writes it as
+ * `''` and reads it back as `''` — so guards that test only for `undefined`
+ * hold in memory but silently no-op against a real sheet (#112). Treating
+ * empty-string as empty is the only definition implementable identically
+ * across MockAdapter, LocalAdapter and SheetsAdapter.
+ */
+function isEmptyCell(value: unknown): boolean {
+  return value === undefined || value === null || value === ''
+}
+
+/**
  * SchemaBuilder that records operations
  */
 class RecordingSchemaBuilder implements SchemaBuilder {
@@ -302,9 +315,9 @@ export class MigrationRunner {
       case 'addColumn': {
         const defaultValue = operation.options?.default
         for (const row of rows) {
-          // Treat missing-or-undefined as "needs default" so a default is
-          // re-applied after a prior removeColumn left the key undefined (#99).
-          if ((row as Record<string, unknown>)[operation.column!] === undefined) {
+          // Treat an empty cell as "needs default" so a default is re-applied
+          // after a prior removeColumn cleared the value (#99, #112).
+          if (isEmptyCell((row as Record<string, unknown>)[operation.column!])) {
             store.update(row.id as string | number, {
               [operation.column!]: defaultValue
             })
@@ -316,10 +329,10 @@ export class MigrationRunner {
       case 'removeColumn': {
         // Clears the column's value (in-memory: key left undefined; Sheets: cell
         // cleared). This is a value operation — it does not drop the column from
-        // the sheet header. addColumn's `=== undefined` guard (#99) lets a later
+        // the sheet header. addColumn's empty-cell guard (#99) lets a later
         // re-add re-apply its default over the cleared value.
         for (const row of rows) {
-          if ((row as Record<string, unknown>)[operation.column!] !== undefined) {
+          if (!isEmptyCell((row as Record<string, unknown>)[operation.column!])) {
             store.update(row.id as string | number, {
               [operation.column!]: undefined
             })
@@ -332,11 +345,11 @@ export class MigrationRunner {
         for (const row of rows) {
           const r = row as Record<string, unknown>
           // Rename when the source has a value and the target is empty
-          // (missing OR left undefined by a prior op) — `=== undefined` rather
-          // than `in`, consistent with the addColumn guard (#99). Using `in`
-          // here would wrongly skip the rename when the target key lingers as
-          // undefined from an earlier removeColumn/rename.
-          if (r[operation.oldColumn!] !== undefined && r[operation.newColumn!] === undefined) {
+          // (missing, or cleared by a prior op) — an emptiness test rather than
+          // `in`, consistent with the addColumn guard (#99). Using `in` here
+          // would wrongly skip the rename when the target key lingers from an
+          // earlier removeColumn/rename.
+          if (!isEmptyCell(r[operation.oldColumn!]) && isEmptyCell(r[operation.newColumn!])) {
             store.update(row.id as string | number, {
               [operation.oldColumn!]: undefined,
               [operation.newColumn!]: r[operation.oldColumn!]
