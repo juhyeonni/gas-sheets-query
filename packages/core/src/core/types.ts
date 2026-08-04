@@ -141,7 +141,14 @@ export interface TableSchemaTyped<
   columns: C
   /** Type hints using sample values */
   types?: T
-  /** ID column name (default: 'id') */
+  /**
+   * ID column name (default: 'id')
+   *
+   * @deprecated 1.0 fixes the primary key at `'id'` (#101). This value is
+   * stored on the config but never read — `defineSheetsDB` ignores it, and
+   * `InferRowFromSchema` always types the row as `& { id }`. Custom primary-key
+   * names are planned for a later release.
+   */
   idColumn?: string
 }
 
@@ -174,7 +181,12 @@ export type InferTablesFromConfig<
 export interface TableSchema<T extends RowWithId = RowWithId> {
   /** Column names in order */
   columns: readonly (keyof T & string)[]
-  /** ID column name (default: 'id') */
+  /**
+   * ID column name (default: 'id')
+   *
+   * @deprecated 1.0 fixes the primary key at `'id'` (#101). Stored but never
+   * read. Custom primary-key names are planned for a later release.
+   */
   idColumn?: string
   /** Sheet name (defaults to table name if not specified) */
   sheetName?: string

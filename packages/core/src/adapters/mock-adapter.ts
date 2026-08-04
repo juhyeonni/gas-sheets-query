@@ -328,12 +328,15 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
       if (index === undefined) continue
       
       const oldRow = this.data[index]
-      const newRow = { ...oldRow, ...data }
+      // Same immutability guard update() has (#98/#113) — without it the row
+      // keeps its old idIndex entry and becomes a ghost: findById(oldId)
+      // returns it, findById(newId) does not.
+      const newRow = { ...oldRow, ...data, id: oldRow.id }
       this.data[index] = newRow
-      
+
       // Update column indexes
       this.indexStore.updateIndex(index, oldRow, newRow)
-      
+
       results.push(newRow)
     }
     

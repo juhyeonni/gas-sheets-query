@@ -26,7 +26,16 @@ export interface SheetsAdapterOptions {
   columns: string[]
   /** Whether to create sheet if it doesn't exist (default: true) */
   createIfNotExists?: boolean
-  /** ID column name (default: 'id') */
+  /**
+   * ID column name (default: 'id')
+   *
+   * @deprecated 1.0 fixes the primary key at `'id'` (#101). SheetsAdapter is
+   * the only layer that honors this — MockAdapter and LocalAdapter have no
+   * such option, the CLI rejects a non-`id` `@id` field, and
+   * `InferRowFromSchema` always types the row as `& { id }`. Setting it yields
+   * rows whose declared type does not match their runtime shape. Custom
+   * primary-key names are planned for a later release.
+   */
   idColumn?: string
   /** 
    * ID generation mode (default: 'auto')
@@ -518,6 +527,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       if (updateData) {
         const currentRow = this.rowToObject(allData[i])
         const updatedRow = { ...currentRow, ...updateData } as T
+        // id is immutable via batchUpdate too — mirrors the guard update()
+        // already has (#98/#113). Without this, `data` carrying an id rewrites
+        // the key cell and the row becomes reachable only at its new id.
+        ;(updatedRow as Record<string, unknown>)[this.idColumn] =
+          (currentRow as Record<string, unknown>)[this.idColumn]
         results.push(updatedRow)
         updatedRows.push({
           rowIndex: i + 2, // +2 for header and 1-indexing
