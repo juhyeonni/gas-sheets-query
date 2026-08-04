@@ -4,6 +4,12 @@ AI coding assistant context files for [gas-sheets-query](https://github.com/juhy
 
 Provides skill/context files so AI tools (Claude Code, Cursor, Copilot, etc.) can write correct gsquery code with proper types, patterns, and anti-patterns.
 
+> **Hand-maintained, synced to v1.0.0-rc3.** <!-- x-release-please-version -->
+> These files are written by hand rather than generated
+> from source, so they can lag behind the released packages. Treat them as a head start, not as the
+> source of truth — the [API Reference](https://juhyeonni.github.io/gas-sheets-query/api-reference)
+> and the installed package's type definitions win on any conflict.
+
 ## Install
 
 ### Claude Code (via openskills — recommended)
@@ -45,7 +51,7 @@ Installed to `.claude/skills/gsquery/`:
 | `references/joins-and-aggregation.md` | JoinQueryBuilder, groupBy, agg |
 | `references/adapters-and-config.md` | DataStore, MockAdapter, SheetsAdapter, Indexes |
 | `references/migration-and-cli.md` | MigrationRunner, SchemaBuilder, CLI commands |
-| `references/errors-and-viz.md` | Error hierarchy, Visualization API |
+| `references/errors.md` | Error hierarchy, codes, null-safe alternatives |
 
 ### Generic Format (6 files)
 
@@ -58,7 +64,7 @@ For Cursor (`.cursor/rules/`), Copilot, or any tool (`.ai/gsquery/`):
 | `gsquery-queries.md` | Joins & aggregation |
 | `gsquery-config.md` | Adapters & configuration |
 | `gsquery-advanced.md` | Migrations, CLI, client |
-| `gsquery-errors.md` | Error handling & Viz API |
+| `gsquery-errors.md` | Error handling |
 
 ## CLI
 

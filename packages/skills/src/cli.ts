@@ -59,7 +59,7 @@ Claude Code / openskills skill (6 files):
   skills/gsquery/references/joins-and-aggregation.md
   skills/gsquery/references/adapters-and-config.md
   skills/gsquery/references/migration-and-cli.md
-  skills/gsquery/references/errors-and-viz.md
+  skills/gsquery/references/errors.md
 
 Generic files — Cursor, Copilot, etc. (6 files):
   skills/generic/gsquery-cheatsheet.md

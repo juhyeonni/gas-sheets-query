@@ -1,0 +1,73 @@
+name: Release
+
+# Draft -> notes -> review -> publish.
+#
+# release-please watches conventional commits on main and keeps a "Release PR"
+# open. That PR is the draft: it bumps every package.json, restamps the version
+# in the hand-maintained skill files, and writes CHANGELOG.md from the commits.
+# Merging it is the approval step; only then does anything reach npm.
+#
+# Publishing lives in this same workflow on purpose. A tag pushed by
+# release-please with GITHUB_TOKEN does not trigger other workflows, so a
+# separate tag-triggered publish job would silently never run.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm test
+
+      - name: Publish to npm
+        # Prereleases (rc/alpha/beta) go under the "rc" dist-tag so they never
+        # clobber the "latest" tag that a plain `npm install` resolves to.
+        run: |
+          case "${VERSION}" in
+            *-rc*|*alpha*|*beta*)
+              pnpm -r publish --access public --no-git-checks --tag rc ;;
+            *)
+              pnpm -r publish --access public --no-git-checks ;;
+          esac
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
