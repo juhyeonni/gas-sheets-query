@@ -132,6 +132,48 @@ Automatically updates to current time when record is modified.
 updatedAt: datetime @updatedAt
 ```
 
+### @relation(Table)
+
+Marks a field as a foreign key referencing another table's `id`. The generator
+emits a type alias per referenced table and uses it as the field's type.
+
+```yaml
+tables:
+  User:
+    fields:
+      id: number @id @default(autoincrement)
+
+  Task:
+    fields:
+      id: number @id @default(autoincrement)
+      assigneeId: number? @relation(User)
+      watcherIds: number[]? @relation(User)
+```
+
+```typescript
+export type UserId = User['id']
+
+export interface Task {
+  id: number
+  assigneeId?: UserId
+  watcherIds?: UserId[]
+}
+```
+
+**The field's type must match the referenced table's `id` type.** `User.id` is
+`number` above, so the foreign keys are `number` / `number[]`; declaring
+`assigneeId: string @relation(User)` is rejected by schema validation, because
+the emitted `UserId` would resolve to `number` and contradict the declaration.
+
+> **Scope:** `@relation` is a **typing and documentation** aid. It does not add
+> runtime behaviour — no automatic JOIN, no foreign-key integrity check on
+> write, no cascade delete. Use `joinQuery()` to join explicitly.
+>
+> `UserId` is a plain type alias, not a branded type, so it is structurally
+> identical to `number` — nothing prevents assigning a raw `number` or a
+> `ProjectId` to a `UserId`. This is a deliberate 1.0 choice: branded types
+> would enforce the distinction but require a cast at every assignment site.
+
 ## Block Attributes
 
 Attributes applied at the table level.

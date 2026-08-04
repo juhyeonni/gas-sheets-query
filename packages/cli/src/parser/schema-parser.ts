@@ -447,7 +447,7 @@ export function validateSchema(schema: SchemaAST): ParseError[] {
     }
 
     // Rule 7: @relation target must be a defined table
-    // Rule 8: @relation is only allowed on string-based fields
+    // Rule 8: the foreign key's type must match the target's id type
     for (const field of table.fields) {
       const relationAttr = field.attributes.find(a => a.name === 'relation')
       if (relationAttr) {
@@ -458,20 +458,30 @@ export function validateSchema(schema: SchemaAST): ParseError[] {
             table: tableName,
             field: field.name,
           })
-        } else {
-          if (!schema.tables[target]) {
-            errors.push({
-              message: `@relation target '${target}' in field '${tableName}.${field.name}' is not a defined table`,
-              table: tableName,
-              field: field.name,
-            })
-          }
+          continue
         }
 
-        const stringTypes = ['string', 'string[]']
-        if (!stringTypes.includes(field.type)) {
+        const targetTable = schema.tables[target]
+        if (!targetTable) {
           errors.push({
-            message: `@relation in field '${tableName}.${field.name}' is only allowed on string-based fields, got '${field.type}'`,
+            message: `@relation target '${target}' in field '${tableName}.${field.name}' is not a defined table`,
+            table: tableName,
+            field: field.name,
+          })
+          continue
+        }
+
+        // The generated alias resolves to the target's id type
+        // (`export type UserId = User['id']`), so a mismatch here would emit a
+        // field type that contradicts the one declared in the schema (#117).
+        // Rule 2b guarantees the @id field is named 'id'.
+        const targetId = targetTable.fields.find(f => f.name === 'id')
+        if (!targetId) continue
+
+        const fkBaseType = field.type.replace(/\[\]$/, '')
+        if (fkBaseType !== targetId.type) {
+          errors.push({
+            message: `@relation in field '${tableName}.${field.name}' has type '${field.type}' but '${target}.id' is '${targetId.type}' — a foreign key must match the type of the id it references`,
             table: tableName,
             field: field.name,
           })
