@@ -114,6 +114,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private idbEnabled: boolean
   private idbDb: IDBDatabase | null = null
   private persistScheduled = false
+  private persistChain: Promise<void> = Promise.resolve()
   private readonly namespace: string | undefined
 
   constructor(options: LocalAdapterOptions<T>) {
@@ -468,14 +469,29 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   // ── IndexedDB persistence ──────────────────────────────────────────
 
+  /**
+   * Await the pending and in-flight persist, if any. Rejects if the last
+   * persist failed — the fire-and-forget path swallows that error, so this is
+   * the only way a caller can see it. Teardown must await this before closing
+   * the IDB connection, or a queued write is destroyed (#105).
+   */
+  flush(): Promise<void> {
+    return this.persistChain
+  }
+
   private schedulePersist(): void {
     if (!this.idbEnabled || this.persistScheduled) return
     this.persistScheduled = true
-    queueMicrotask(() => {
+    // Assigned synchronously (the chained .then() *is* the debounce microtask)
+    // so close() can see a persist that has been scheduled but not yet started.
+    const next = this.persistChain.catch(() => {}).then(() => {
       this.persistScheduled = false
-      this.persistToIDB().catch(() => {
-        // Silently fail - data is still in memory
-      })
+      return this.persistToIDB()
+    })
+    this.persistChain = next
+    next.catch(() => {
+      // Silently fail - data is still in memory. Callers wanting the error
+      // await flush().
     })
   }
 
