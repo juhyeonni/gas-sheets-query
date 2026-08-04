@@ -150,11 +150,32 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
         this.idbDb = await openSharedIDB([this.tableName], composeName('gsquery', this.namespace))
       }
 
+      const seqBefore = this.queue.currentSeq()
       const rows = await this.readAllFromIDB()
-      if (rows.length > 0) {
+      if (rows.length === 0) return
+
+      const wroteDuringRead = this.queue.currentSeq() > seqBefore
+      if (!wroteDuringRead && this.data.length === 0) {
         this.data = rows
         this.rebuildIndex()
+        return
       }
+
+      // Anything already in memory — initialData, or a write that landed while
+      // the read was in flight — is newer than this snapshot, so hydrate
+      // underneath it rather than over it (#106). Note replaceAll() bypasses
+      // the queue, so a pull landing mid-init() would not trip wroteDuringRead;
+      // unreachable today since registerTable runs after init().
+      const merged = new Map<string | number, T>(rows.map(r => [r.id, r]))
+      for (const row of this.data) merged.set(row.id, row)
+      if (wroteDuringRead) {
+        for (const m of this.queue.getMerged()) {
+          if (m.type === 'delete') merged.delete(m.id)
+        }
+      }
+      this.data = [...merged.values()]
+      this.rebuildIndex()
+      this.schedulePersist()
     } catch {
       // IndexedDB unavailable - continue in-memory only
       this.idbEnabled = false
