@@ -444,6 +444,34 @@ describe('generateTypes', () => {
       expect(result).toContain("export type UserId = User['id']")
     })
 
+    it('should emit an array alias for a number[] relation [#117]', () => {
+      const ast: SchemaAST = {
+        enums: {},
+        tables: {
+          User: {
+            name: 'User',
+            fields: [
+              { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            ],
+            blockAttributes: []
+          },
+          Task: {
+            name: 'Task',
+            fields: [
+              { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+              { name: 'watcherIds', type: 'number[]', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+            ],
+            blockAttributes: []
+          }
+        }
+      }
+
+      const result = generateTypes(ast)
+
+      expect(result).toContain("export type UserId = User['id']")
+      expect(result).toContain('watcherIds?: UserId[]')
+    })
+
     it('should replace field type with relation alias', () => {
       const ast: SchemaAST = {
         enums: {},

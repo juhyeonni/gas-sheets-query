@@ -27,7 +27,7 @@ function getClientFieldType(field: FieldAST): string {
   const relationAttr = field.attributes.find(a => a.name === 'relation')
   if (relationAttr && typeof relationAttr.args[0] === 'string') {
     const alias = `${relationAttr.args[0]}Id`
-    if (field.type === 'string[]') return `${alias}[]`
+    if (field.type.endsWith('[]')) return `${alias}[]`
     return alias
   }
   return mapType(field.type)
