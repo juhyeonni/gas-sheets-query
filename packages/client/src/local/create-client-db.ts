@@ -126,6 +126,10 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     if (closed) return
     closed = true
     syncEngine.dispose()
+    // Let queued writes reach IDB before the connection goes away — closing
+    // first makes their transaction throw, and the fire-and-forget catch in
+    // schedulePersist() swallows it, losing the write silently (#105).
+    await Promise.allSettled(Object.values(adapters).map(a => a.flush()))
     sharedDb?.close()
   }
 
