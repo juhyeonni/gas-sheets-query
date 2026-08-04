@@ -1,99 +1,71 @@
 /**
- * SheetsAdapter unit tests with GAS API stubs
+ * SheetsAdapter unit tests, running against @gsquery/core/testing fakes
  *
  * Since SheetsAdapter depends on Google Apps Script APIs (SpreadsheetApp,
- * LockService) which are unavailable in Node.js, we stub them to test
- * all adapter logic in isolation.
+ * LockService) which are unavailable in Node.js, we install FakeSheet/
+ * FakeSpreadsheet via installGasFakes() to test all adapter logic against a
+ * real (fake) grid instead of hand-rolled stubs — this is the suite's own
+ * fidelity proof for the fake (#007-dogfood-adapter-tests).
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { SheetsAdapter } from '../../src/adapters/sheets-adapter'
 import type { SheetsAdapterOptions } from '../../src/adapters/sheets-adapter'
+import { FakeSheet, FakeRange } from '../../src/testing/fake-sheet'
+import { FakeSpreadsheet } from '../../src/testing/fake-spreadsheet'
+import { installGasFakes } from '../../src/testing/install'
+import { fromArrays } from '../../src/testing/loaders'
 
 // ---------------------------------------------------------------------------
-// GAS API Stubs
+// Fake-backed GAS globals setup
 // ---------------------------------------------------------------------------
 
-interface StubRange {
-  getValues: ReturnType<typeof vi.fn>
-  setValues: ReturnType<typeof vi.fn>
+const SPREADSHEET_ID = 'test-spreadsheet-id'
+
+/** Builds a FakeSheet with `data` written verbatim (data[0] = header row). */
+function createFakeSheet(data: unknown[][] = [], name = 'TestSheet'): FakeSheet {
+  return fromArrays({ [name]: data }).getSheetByName(name)!
 }
 
-interface StubSheet {
-  getLastRow: ReturnType<typeof vi.fn>
-  getRange: ReturnType<typeof vi.fn>
-  appendRow: ReturnType<typeof vi.fn>
-  deleteRow: ReturnType<typeof vi.fn>
-  clear: ReturnType<typeof vi.fn>
-  getDataRange: ReturnType<typeof vi.fn>
-}
+/**
+ * Installs the fake spreadsheet under both spreadsheetId literals this file
+ * uses ('test-spreadsheet-id' and 'test') and as the active spreadsheet, then
+ * spies the instance/global methods individual tests assert on. Mirrors the
+ * old stub's setupGASGlobals(sheet, opts) signature and default (no lock).
+ */
+function setupGASGlobals(sheet: FakeSheet, opts: { withLock?: boolean } = {}): FakeSpreadsheet {
+  const ss = new FakeSpreadsheet('TestSpreadsheet', [sheet])
+  installGasFakes({
+    spreadsheets: { [SPREADSHEET_ID]: ss, test: ss },
+    activeId: SPREADSHEET_ID
+  })
 
-function createStubRange(values: unknown[][] = [[]]): StubRange {
-  return {
-    getValues: vi.fn(() => values),
-    setValues: vi.fn()
-  }
-}
-
-function createStubSheet(data: unknown[][] = []): StubSheet {
-  // data[0] = header row, data[1..] = data rows
-  const allData = data
-  let lastRow = allData.length
-
-  const sheet: StubSheet = {
-    getLastRow: vi.fn(() => lastRow),
-    getRange: vi.fn((row: number, col: number, numRows?: number, numCols?: number) => {
-      if (numRows !== undefined) {
-        const sliced = allData.slice(row - 1, row - 1 + numRows)
-        // If requesting a subset of columns, extract only those columns
-        const cols = numCols ?? sliced[0]?.length ?? 0
-        const result = sliced.map(r => r.slice(col - 1, col - 1 + cols))
-        return createStubRange(result)
-      }
-      return createStubRange([allData[row - 1] || []])
-    }),
-    appendRow: vi.fn((values: unknown[]) => {
-      allData.push(values)
-      lastRow = allData.length
-    }),
-    deleteRow: vi.fn((rowIndex: number) => {
-      allData.splice(rowIndex - 1, 1)
-      lastRow = allData.length
-    }),
-    clear: vi.fn(() => {
-      allData.length = 0
-      lastRow = 0
-    }),
-    getDataRange: vi.fn(() => createStubRange(allData))
-  }
-
-  return sheet
-}
-
-function setupGASGlobals(sheet: StubSheet, opts: { withLock?: boolean } = {}) {
-  const ss = {
-    getSheetByName: vi.fn(() => sheet),
-    insertSheet: vi.fn(() => sheet)
-  }
-
-  ;(globalThis as Record<string, unknown>).SpreadsheetApp = {
-    openById: vi.fn(() => ss),
-    getActiveSpreadsheet: vi.fn(() => ss)
-  }
+  vi.spyOn((globalThis as any).SpreadsheetApp, 'openById')
+  vi.spyOn((globalThis as any).SpreadsheetApp, 'getActiveSpreadsheet')
+  vi.spyOn(ss, 'getSheetByName')
+  vi.spyOn(ss, 'insertSheet')
+  vi.spyOn(sheet, 'getRange')
+  vi.spyOn(sheet, 'appendRow')
+  vi.spyOn(sheet, 'deleteRow')
+  vi.spyOn(sheet, 'clear')
+  vi.spyOn(sheet, 'getLastRow')
 
   if (opts.withLock) {
-    const lock = {
-      waitLock: vi.fn(),
-      releaseLock: vi.fn()
-    }
-    ;(globalThis as Record<string, unknown>).LockService = {
-      getScriptLock: vi.fn(() => lock)
-    }
+    vi.spyOn((globalThis as any).LockService, 'getScriptLock')
   } else {
     delete (globalThis as Record<string, unknown>).LockService
   }
+
+  return ss
 }
 
-function teardownGASGlobals() {
+/** Builds+registers a 'Test'-named fixture for the serialization/schema-type blocks below. */
+function setupSerializationTest(data: unknown[][]): FakeSheet {
+  const sheet = createFakeSheet(data, 'Test')
+  setupGASGlobals(sheet)
+  return sheet
+}
+
+function teardownGASGlobals(): void {
   delete (globalThis as Record<string, unknown>).SpreadsheetApp
   delete (globalThis as Record<string, unknown>).LockService
 }
@@ -120,13 +92,20 @@ const DEFAULT_OPTIONS: SheetsAdapterOptions = {
 // ---------------------------------------------------------------------------
 
 describe('SheetsAdapter', () => {
+  beforeEach(() => {
+    // Shared across every test: lets assertions inspect a specific FakeRange's
+    // setValues() the way the old stub's per-range vi.fn() let them.
+    vi.spyOn(FakeRange.prototype, 'setValues')
+  })
+
   afterEach(() => {
     teardownGASGlobals()
+    vi.restoreAllMocks()
   })
 
   describe('constructor', () => {
     it('should create adapter with valid options', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -144,7 +123,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should use default idColumn and idMode', () => {
-      const sheet = createStubSheet([['id', 'name']])
+      const sheet = createFakeSheet([['id', 'name']])
       setupGASGlobals(sheet)
 
       // id is default idColumn, auto is default idMode — should not throw
@@ -157,7 +136,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should accept custom idColumn', () => {
-      const sheet = createStubSheet([['uid', 'name']])
+      const sheet = createFakeSheet([['uid', 'name']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ uid: number; name: string } & { id: number }>({
@@ -172,7 +151,7 @@ describe('SheetsAdapter', () => {
 
   describe('getSheet (via findAll)', () => {
     it('should use SpreadsheetApp.openById when spreadsheetId is provided', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -182,7 +161,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should use getActiveSpreadsheet when no spreadsheetId', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>({
@@ -195,14 +174,9 @@ describe('SheetsAdapter', () => {
     })
 
     it('should create sheet if createIfNotExists and sheet not found', () => {
-      const newSheet = createStubSheet([])
-      const ss = {
-        getSheetByName: vi.fn(() => null),
-        insertSheet: vi.fn(() => newSheet)
-      }
-      ;(globalThis as any).SpreadsheetApp = {
-        openById: vi.fn(() => ss)
-      }
+      const ss = new FakeSpreadsheet('TestSpreadsheet')
+      installGasFakes({ spreadsheets: { 'test-spreadsheet-id': ss } })
+      const insertSheetSpy = vi.spyOn(ss, 'insertSheet')
 
       const adapter = new SheetsAdapter<TestRow>({
         ...DEFAULT_OPTIONS,
@@ -210,19 +184,15 @@ describe('SheetsAdapter', () => {
       })
       adapter.findAll()
 
-      expect(ss.insertSheet).toHaveBeenCalledWith('TestSheet')
+      expect(insertSheetSpy).toHaveBeenCalledWith('TestSheet')
       // Should write header row
-      expect(newSheet.getRange).toHaveBeenCalledWith(1, 1, 1, 4)
+      const newSheet = ss.getSheetByName('TestSheet')!
+      expect(newSheet.getRange(1, 1, 1, 4).getValues()).toEqual([DEFAULT_OPTIONS.columns])
     })
 
     it('should throw when sheet not found and createIfNotExists is false', () => {
-      const ss = {
-        getSheetByName: vi.fn(() => null),
-        insertSheet: vi.fn()
-      }
-      ;(globalThis as any).SpreadsheetApp = {
-        openById: vi.fn(() => ss)
-      }
+      const ss = new FakeSpreadsheet('TestSpreadsheet')
+      installGasFakes({ spreadsheets: { 'test-spreadsheet-id': ss } })
 
       const adapter = new SheetsAdapter<TestRow>({
         ...DEFAULT_OPTIONS,
@@ -233,7 +203,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should cache sheet reference on subsequent calls', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -247,7 +217,7 @@ describe('SheetsAdapter', () => {
 
   describe('findAll', () => {
     it('should return empty array when sheet has only header', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -257,7 +227,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return all data rows as objects', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false]
@@ -273,7 +243,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should filter out empty rows', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         ['', '', '', ''],
@@ -288,7 +258,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should use data cache on second call', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -299,9 +269,7 @@ describe('SheetsAdapter', () => {
       adapter.findAll()
 
       // getRange for data should be called only once (first call fetches, second uses cache)
-      // getLastRow is called for both the getSheet check and findAll check
-      // but data range fetch should only happen once
-      const getRangeCalls = sheet.getRange.mock.calls
+      const getRangeCalls = (sheet.getRange as any).mock.calls
       const dataFetchCalls = getRangeCalls.filter(
         (args: unknown[]) => args[0] === 2 // row 2 = data start
       )
@@ -309,7 +277,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return copy of cached data (not reference)', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -326,7 +294,7 @@ describe('SheetsAdapter', () => {
 
   describe('findById', () => {
     it('should find row by numeric id', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false]
@@ -340,7 +308,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should find row by string id', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         ['abc-1', 'Alice', 30, true],
         ['abc-2', 'Bob', 25, false]
@@ -357,7 +325,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return undefined for non-existent id', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -370,7 +338,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return undefined when sheet is empty', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -381,7 +349,7 @@ describe('SheetsAdapter', () => {
 
     it('should support string-number cross-comparison', () => {
       // Sheet stores number 1, we query with string "1"
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -396,7 +364,7 @@ describe('SheetsAdapter', () => {
 
   describe('find (query)', () => {
     it('should apply where conditions', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false],
@@ -414,7 +382,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should apply ordering', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false],
@@ -433,7 +401,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should apply offset and limit', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false],
@@ -456,7 +424,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return empty for limit(0)', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -475,7 +443,7 @@ describe('SheetsAdapter', () => {
 
   describe('insert', () => {
     it('should auto-generate id in auto mode', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -487,7 +455,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should increment id based on existing data', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [5, 'Bob', 25, false]
@@ -501,7 +469,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should use client-provided id in client mode', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>({
@@ -514,7 +482,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should throw in client mode when no id provided', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>({
@@ -528,7 +496,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should use LockService when available', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet, { withLock: true })
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -538,7 +506,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should invalidate data cache after insert', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -556,29 +524,28 @@ describe('SheetsAdapter', () => {
       adapter.findAll()
 
       // getLastRow called 3 times: first findAll, insert's getSheet, second findAll
-      expect(sheet.getLastRow.mock.calls.length).toBeGreaterThanOrEqual(3)
+      expect((sheet.getLastRow as any).mock.calls.length).toBeGreaterThanOrEqual(3)
     })
   })
 
   describe('concurrency: lock spans ID allocation and write (#80)', () => {
-    function setupWithCapturedLock(sheet: StubSheet) {
-      const lock = { waitLock: vi.fn(), releaseLock: vi.fn() }
-      const ss = {
-        getSheetByName: vi.fn(() => sheet),
-        insertSheet: vi.fn(() => sheet)
-      }
-      ;(globalThis as Record<string, unknown>).SpreadsheetApp = {
-        openById: vi.fn(() => ss),
-        getActiveSpreadsheet: vi.fn(() => ss)
-      }
-      ;(globalThis as Record<string, unknown>).LockService = {
-        getScriptLock: vi.fn(() => lock)
-      }
+    function setupWithCapturedLock(sheet: FakeSheet) {
+      const ss = new FakeSpreadsheet('TestSpreadsheet', [sheet])
+      installGasFakes({ spreadsheets: { [SPREADSHEET_ID]: ss }, activeId: SPREADSHEET_ID })
+
+      vi.spyOn(sheet, 'appendRow')
+      vi.spyOn(sheet, 'getRange')
+
+      const lock = (globalThis as any).LockService.getScriptLock()
+      vi.spyOn(lock, 'waitLock')
+      vi.spyOn(lock, 'releaseLock')
+      vi.spyOn((globalThis as any).LockService, 'getScriptLock').mockReturnValue(lock)
+
       return lock
     }
 
     it('insert (auto mode) releases the lock only AFTER the row is written', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       const lock = setupWithCapturedLock(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -588,9 +555,9 @@ describe('SheetsAdapter', () => {
       expect(lock.releaseLock).toHaveBeenCalled()
       expect(sheet.appendRow).toHaveBeenCalled()
 
-      const acquireOrder = lock.waitLock.mock.invocationCallOrder[0]
-      const writeOrder = sheet.appendRow.mock.invocationCallOrder[0]
-      const releaseOrder = lock.releaseLock.mock.invocationCallOrder[0]
+      const acquireOrder = (lock.waitLock as any).mock.invocationCallOrder[0]
+      const writeOrder = (sheet.appendRow as any).mock.invocationCallOrder[0]
+      const releaseOrder = (lock.releaseLock as any).mock.invocationCallOrder[0]
 
       // Lock must be held across the write: acquire < write < release
       expect(acquireOrder).toBeLessThan(writeOrder)
@@ -598,7 +565,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('batchInsert (auto mode) releases the lock only AFTER the batch write', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       const lock = setupWithCapturedLock(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -610,12 +577,12 @@ describe('SheetsAdapter', () => {
       expect(lock.releaseLock).toHaveBeenCalled()
 
       // The final getRange(...).setValues(...) is the batch write.
-      const results = sheet.getRange.mock.results
-      const writeRange = results[results.length - 1].value as StubRange
+      const results = (sheet.getRange as any).mock.results
+      const writeRange = results[results.length - 1].value as FakeRange
       expect(writeRange.setValues).toHaveBeenCalled()
 
-      const writeOrder = writeRange.setValues.mock.invocationCallOrder[0]
-      const releaseOrder = lock.releaseLock.mock.invocationCallOrder[0]
+      const writeOrder = (writeRange.setValues as any).mock.invocationCallOrder[0]
+      const releaseOrder = (lock.releaseLock as any).mock.invocationCallOrder[0]
 
       // Write must happen before the lock is released.
       expect(releaseOrder).toBeGreaterThan(writeOrder)
@@ -624,7 +591,7 @@ describe('SheetsAdapter', () => {
 
   describe('update', () => {
     it('should update existing row', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false]
@@ -640,7 +607,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return undefined for non-existent id', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -653,7 +620,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should write updated values back to sheet', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -663,7 +630,7 @@ describe('SheetsAdapter', () => {
       adapter.update(1, { name: 'Alice Updated' })
 
       // Verify setValues was called
-      const setValuesCalls = sheet.getRange.mock.results
+      const setValuesCalls = (sheet.getRange as any).mock.results
         .map((r: any) => r.value)
         .filter((r: any) => r.setValues?.mock?.calls?.length > 0)
       expect(setValuesCalls.length).toBeGreaterThan(0)
@@ -672,7 +639,7 @@ describe('SheetsAdapter', () => {
 
   describe('delete', () => {
     it('should delete existing row', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false]
@@ -687,7 +654,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return false for non-existent id', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -702,7 +669,7 @@ describe('SheetsAdapter', () => {
 
   describe('batchInsert', () => {
     it('should return empty array for empty input', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -712,7 +679,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should batch insert multiple rows with auto IDs', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -727,7 +694,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should batch insert with client-provided IDs', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>({
@@ -744,7 +711,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should throw in client mode when id missing', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>({
@@ -758,7 +725,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should write all rows in a single batch setValues call', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -768,7 +735,7 @@ describe('SheetsAdapter', () => {
       ])
 
       // Should use setValues (batch) rather than appendRow for each
-      const setValuesCalls = sheet.getRange.mock.results
+      const setValuesCalls = (sheet.getRange as any).mock.results
         .map((r: any) => r.value)
         .filter((r: any) => r.setValues?.mock?.calls?.length > 0)
       expect(setValuesCalls.length).toBeGreaterThan(0)
@@ -777,7 +744,7 @@ describe('SheetsAdapter', () => {
 
   describe('batchUpdate', () => {
     it('should return empty array for empty input', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -787,7 +754,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should update multiple rows', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true],
         [2, 'Bob', 25, false],
@@ -807,7 +774,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should handle string ID matching', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         ['abc', 'Alice', 30, true],
         ['def', 'Bob', 25, false]
@@ -827,7 +794,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should skip non-existent IDs', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -843,7 +810,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return empty when sheet has only header', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -857,7 +824,7 @@ describe('SheetsAdapter', () => {
 
   describe('reset', () => {
     it('should clear all data and rewrite header', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -870,7 +837,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should reset with provided data', () => {
-      const sheet = createStubSheet([['id', 'name', 'age', 'active']])
+      const sheet = createFakeSheet([['id', 'name', 'age', 'active']])
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -881,7 +848,7 @@ describe('SheetsAdapter', () => {
 
       expect(sheet.clear).toHaveBeenCalled()
       // Should write header + data
-      const setValuesCalls = sheet.getRange.mock.results
+      const setValuesCalls = (sheet.getRange as any).mock.results
         .map((r: any) => r.value)
         .filter((r: any) => r.setValues?.mock?.calls?.length > 0)
       expect(setValuesCalls.length).toBeGreaterThanOrEqual(2) // header + data
@@ -890,7 +857,7 @@ describe('SheetsAdapter', () => {
 
   describe('clearCache', () => {
     it('should clear sheet reference and data cache', () => {
-      const sheet = createStubSheet([
+      const sheet = createFakeSheet([
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ])
@@ -917,7 +884,7 @@ describe('SheetsAdapter', () => {
         ['id', 'name', 'age', 'active'],
         [1, 'Alice', 30, true]
       ]
-      const sheet = createStubSheet(rawData)
+      const sheet = createFakeSheet(rawData)
       setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<TestRow>(DEFAULT_OPTIONS)
@@ -929,11 +896,10 @@ describe('SheetsAdapter', () => {
 
   describe('rowToObject / objectToRow serialization', () => {
     it('should auto-detect and parse JSON array strings', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'tags'],
         [1, '["a","b","c"]']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -946,11 +912,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should auto-detect and parse JSON object strings', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'meta'],
         [1, '{"key":"value"}']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; meta: object }>({
         spreadsheetId: 'test',
@@ -963,11 +928,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should keep invalid JSON strings as-is', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'data'],
         [1, '[invalid json']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; data: string }>({
         spreadsheetId: 'test',
@@ -981,11 +945,10 @@ describe('SheetsAdapter', () => {
 
     it('should convert Date objects to ISO strings', () => {
       const date = new Date('2024-01-15T10:30:00Z')
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'created'],
         [1, date]
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; created: string }>({
         spreadsheetId: 'test',
@@ -998,8 +961,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should serialize arrays to JSON when writing', () => {
-      const sheet = createStubSheet([['id', 'tags']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'tags']])
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -1008,13 +970,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ tags: ['a', 'b'] })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('["a","b"]')
     })
 
     it('should serialize objects to JSON when writing', () => {
-      const sheet = createStubSheet([['id', 'meta']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'meta']])
 
       const adapter = new SheetsAdapter<{ id: number; meta: object }>({
         spreadsheetId: 'test',
@@ -1023,13 +984,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ meta: { key: 'value' } })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('{"key":"value"}')
     })
 
     it('should convert undefined/null to empty string when writing', () => {
-      const sheet = createStubSheet([['id', 'name']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'name']])
 
       const adapter = new SheetsAdapter<{ id: number; name: string }>({
         spreadsheetId: 'test',
@@ -1038,18 +998,17 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ name: undefined as unknown as string })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('')
     })
   })
 
   describe('schema-based column types', () => {
     it('should deserialize string[] type', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'tags'],
         [1, '["a","b"]']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -1062,11 +1021,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return empty array for empty string[] value', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'tags'],
         [1, '']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -1079,11 +1037,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return empty array for invalid JSON in string[] column', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'tags'],
         [1, 'not json']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -1096,11 +1053,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should deserialize number[] type', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'scores'],
         [1, '[10,20,30]']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; scores: number[] }>({
         spreadsheetId: 'test',
@@ -1113,11 +1069,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should deserialize object type', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'meta'],
         [1, '{"key":"val"}']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; meta: object }>({
         spreadsheetId: 'test',
@@ -1130,11 +1085,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return null for empty object value', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'meta'],
         [1, '']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; meta: object | null }>({
         spreadsheetId: 'test',
@@ -1147,11 +1101,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should return null for invalid JSON in object column', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'meta'],
         [1, 'not json']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; meta: object | null }>({
         spreadsheetId: 'test',
@@ -1164,13 +1117,12 @@ describe('SheetsAdapter', () => {
     })
 
     it('should deserialize boolean type from string', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'active'],
         [1, 'TRUE'],
         [2, 'false'],
         [3, '']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; active: boolean }>({
         spreadsheetId: 'test',
@@ -1185,12 +1137,11 @@ describe('SheetsAdapter', () => {
     })
 
     it('should deserialize boolean type from non-string', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'active'],
         [1, 1],
         [2, 0]
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; active: boolean }>({
         spreadsheetId: 'test',
@@ -1204,12 +1155,11 @@ describe('SheetsAdapter', () => {
     })
 
     it('should deserialize number type', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'count'],
         [1, '42'],
         [2, '']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; count: number }>({
         spreadsheetId: 'test',
@@ -1224,11 +1174,10 @@ describe('SheetsAdapter', () => {
 
     it('should deserialize date type to a real Date (#97)', () => {
       const date = new Date('2024-01-15T10:30:00Z')
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'created'],
         [1, date]
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; created: Date }>({
         spreadsheetId: 'test',
@@ -1242,11 +1191,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should parse date-string values for date type into a Date (#97)', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'created'],
         [1, '2024-01-15']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; created: Date }>({
         spreadsheetId: 'test',
@@ -1260,11 +1208,10 @@ describe('SheetsAdapter', () => {
     })
 
     it('should pass through already-parsed values for array/object types', () => {
-      const sheet = createStubSheet([
+      setupSerializationTest([
         ['id', 'tags'],
         [1, ['a', 'b']] // already an array, not a string
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -1277,8 +1224,7 @@ describe('SheetsAdapter', () => {
     })
 
     it('should serialize boolean as TRUE/FALSE', () => {
-      const sheet = createStubSheet([['id', 'active']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'active']])
 
       const adapter = new SheetsAdapter<{ id: number; active: boolean }>({
         spreadsheetId: 'test',
@@ -1288,13 +1234,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ active: true })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('TRUE')
     })
 
     it('should serialize FALSE for falsy boolean', () => {
-      const sheet = createStubSheet([['id', 'active']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'active']])
 
       const adapter = new SheetsAdapter<{ id: number; active: boolean }>({
         spreadsheetId: 'test',
@@ -1304,13 +1249,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ active: false })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('FALSE')
     })
 
     it('should serialize string[] to JSON', () => {
-      const sheet = createStubSheet([['id', 'tags']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'tags']])
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -1320,13 +1264,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ tags: ['x', 'y'] })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('["x","y"]')
     })
 
     it('should serialize non-array as empty array string for string[]', () => {
-      const sheet = createStubSheet([['id', 'tags']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'tags']])
 
       const adapter = new SheetsAdapter<{ id: number; tags: string[] }>({
         spreadsheetId: 'test',
@@ -1336,13 +1279,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ tags: 'not-array' as unknown as string[] })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('[]')
     })
 
     it('should serialize object to JSON', () => {
-      const sheet = createStubSheet([['id', 'meta']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'meta']])
 
       const adapter = new SheetsAdapter<{ id: number; meta: object }>({
         spreadsheetId: 'test',
@@ -1352,13 +1294,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ meta: { key: 'val' } })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('{"key":"val"}')
     })
 
     it('should serialize non-object as empty string for object type', () => {
-      const sheet = createStubSheet([['id', 'meta']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'meta']])
 
       const adapter = new SheetsAdapter<{ id: number; meta: object }>({
         spreadsheetId: 'test',
@@ -1368,14 +1309,13 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ meta: 'not-object' as unknown as object })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('')
     })
 
     it('should serialize Date for date type', () => {
       const date = new Date('2024-01-15T10:30:00Z')
-      const sheet = createStubSheet([['id', 'created']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'created']])
 
       const adapter = new SheetsAdapter<{ id: number; created: Date }>({
         spreadsheetId: 'test',
@@ -1385,13 +1325,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ created: date })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe(date.toISOString())
     })
 
     it('should pass through string value for date type', () => {
-      const sheet = createStubSheet([['id', 'created']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'created']])
 
       const adapter = new SheetsAdapter<{ id: number; created: string }>({
         spreadsheetId: 'test',
@@ -1401,13 +1340,12 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ created: '2024-01-15' })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('2024-01-15')
     })
 
     it('should pass through default type values', () => {
-      const sheet = createStubSheet([['id', 'name']])
-      setupGASGlobals(sheet)
+      const sheet = setupSerializationTest([['id', 'name']])
 
       const adapter = new SheetsAdapter<{ id: number; name: string }>({
         spreadsheetId: 'test',
@@ -1417,16 +1355,21 @@ describe('SheetsAdapter', () => {
       })
       adapter.insert({ name: 'hello' })
 
-      const appendCall = sheet.appendRow.mock.calls[0][0]
+      const appendCall = (sheet.appendRow as any).mock.calls[0][0]
       expect(appendCall[1]).toBe('hello')
     })
 
-    it('should return empty value for null/undefined with string type', () => {
-      const sheet = createStubSheet([
+    it('should return empty value for an empty cell with string type', () => {
+      // A real Sheets cell (and FakeSheet.getValues()) can never hold JS
+      // `null` — only `''` for empty. The original stub-based test injected
+      // raw `null` directly, bypassing objectToRow's own null→'' coercion,
+      // to exercise deserializeByType's defensive `value === null` branch;
+      // that scenario is unreachable through the fake (or real GAS), so this
+      // asserts the actually-reachable empty-cell path instead.
+      setupSerializationTest([
         ['id', 'name'],
-        [1, null]
+        [1, '']
       ])
-      setupGASGlobals(sheet)
 
       const adapter = new SheetsAdapter<{ id: number; name: string | null }>({
         spreadsheetId: 'test',
@@ -1435,7 +1378,7 @@ describe('SheetsAdapter', () => {
         columnTypes: { name: 'string' }
       })
       const result = adapter.findAll()
-      expect(result[0].name).toBeNull()
+      expect(result[0].name).toBe('')
     })
   })
 })
