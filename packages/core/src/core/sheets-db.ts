@@ -8,7 +8,8 @@ import type {
   TableSchemaTyped,
   InferRowFromSchema,
   InferTablesFromConfig,
-  UpdateData
+  UpdateData,
+  BatchUpdateItem
 } from './types'
 import { Repository } from './repository'
 import { QueryBuilder, createQueryBuilder } from './query-builder'
@@ -47,8 +48,8 @@ export interface TableHandle<T extends RowWithId> {
   /** Batch insert multiple rows at once */
   batchInsert(data: (T | Omit<T, 'id'>)[]): T[]
 
-  /** Batch update multiple rows at once */
-  batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[]
+  /** Batch update multiple rows at once (`data` excludes the immutable `id`) */
+  batchUpdate(items: BatchUpdateItem<T>[]): T[]
 }
 
 /**

@@ -119,10 +119,14 @@ export class Repository<T extends RowWithId> {
   /**
    * Batch update multiple rows at once
    * Skips rows that don't exist (no error thrown)
+   *
+   * `data` excludes `id` (via {@link UpdateData}) for the same reason
+   * `update()` does — the primary key is immutable (#98/#113). A widened
+   * `Partial<T>` here let an id through the ordinary public API with no cast.
    */
-  batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[] {
+  batchUpdate(items: BatchUpdateItem<T>[]): T[] {
     if (this.store.batchUpdate) {
-      return this.store.batchUpdate(items as BatchUpdateItem<T>[])
+      return this.store.batchUpdate(items)
     }
     // Fallback: update one by one
     const results: T[] = []
