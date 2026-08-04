@@ -96,7 +96,7 @@ const store = new SheetsAdapter<User>({
   sheetName: 'Users',               // required — name of the sheet tab
   columns: ['id', 'name', 'email', 'age', 'active'],  // required — column order
   createIfNotExists: true,          // default: true — creates sheet if missing
-  idColumn: 'id',                   // default: 'id'
+  // idColumn is deprecated — 1.0 fixes the primary key at 'id' (#101)
   idMode: 'auto',                   // default: 'auto'
   columnTypes: {                    // optional — type-aware serialization
     age: 'number',
@@ -115,7 +115,7 @@ interface SheetsAdapterOptions {
   sheetName: string
   columns: string[]
   createIfNotExists?: boolean
-  idColumn?: string
+  idColumn?: string                 // deprecated — 1.0 fixes it at 'id'
   idMode?: IdMode
   columnTypes?: Record<string, ColumnType>
 }
@@ -207,7 +207,7 @@ const store = new MockAdapter<User>()
 
 // WRONG: columns array doesn't include 'id'
 new SheetsAdapter({ sheetName: 'T', columns: ['name', 'email'] })
-// RIGHT: first column should be 'id' (or set idColumn)
+// RIGHT: first column must be 'id' — 1.0 fixes the primary key name
 new SheetsAdapter({ sheetName: 'T', columns: ['id', 'name', 'email'] })
 
 // WRONG: index fields not matching actual field names

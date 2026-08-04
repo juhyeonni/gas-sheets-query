@@ -92,6 +92,8 @@ id: number @id
 ```
 
 > **Contract (1.0):** the `@id` field **must be named `id`**. Schema validation rejects any other name (e.g. `userId: number @id`) with a clear error. Custom primary-key column names are planned for a future release. This keeps the generated types, both adapters, and the runtime consistent.
+>
+> The `idColumn` option on `SheetsAdapterOptions` / `TableSchema` predates this contract and is **deprecated**. Only `SheetsAdapter` honors it; `MockAdapter` and `LocalAdapter` have no such option, `defineSheetsDB` stores it without reading it, and `InferRowFromSchema` always types rows as `& { id }` — so a custom name produces rows whose declared type does not match their runtime shape. Leave it unset.
 
 ### @default(value)
 

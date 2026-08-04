@@ -65,7 +65,7 @@ const store = new SheetsAdapter<User>({
   sheetName: 'Users',              // required
   columns: ['id', 'name', 'email', 'age', 'active'],  // required
   createIfNotExists: true,         // default: true
-  idColumn: 'id',                  // default: 'id'
+  // idColumn is deprecated — 1.0 fixes the primary key at 'id' (#101)
   idMode: 'auto',                  // default: 'auto'
   columnTypes: {                   // optional type serialization
     age: 'number',
@@ -122,6 +122,6 @@ const db = defineSheetsDB({
 ## Common Mistakes
 
 - SheetsAdapter only works in GAS — use MockAdapter for Node.js/testing
-- First column should be `'id'` (or set `idColumn`)
+- First column must be `'id'` — 1.0 fixes the primary key name (#101); `idColumn` is deprecated
 - Index field names are case-sensitive
 - `columnTypes` keys must match actual column names
