@@ -9,8 +9,9 @@
  * sheet. These tests run one sequence through both stores and assert they agree.
  */
 import { describe, it, expect } from 'vitest'
-import { createMigrationRunner } from '../../src/core/migration'
+import { createMigrationRunner, MigrationExecutionError } from '../../src/core/migration'
 import type { Migration, MigrationRecord, StoreResolver } from '../../src/core/migration'
+import { UnknownColumnError } from '../../src/core/errors'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
 import { SheetsAdapter } from '../../src/adapters/sheets-adapter'
 import { fromArrays } from '../../src/testing/loaders'
@@ -93,6 +94,60 @@ describe('migration parity between MockAdapter and SheetsAdapter [#112]', () => 
 
     expect(mock.read().status).toBe('unknown')
     expect(sheets.read().status).toBe('unknown')
+  })
+
+  it('adds a column that is genuinely absent from the sheet on both stores [#127]', async () => {
+    // The parity case above pre-declared `status` in the header, which hid the
+    // silent no-op: with the column missing from the sheet, the value backfill
+    // had nothing to write to and the migration still reported success.
+    const mock = mockSetup()
+    await runner(mock.resolver, RE_ADD_DEFAULT).migrate()
+
+    const sheets = sheetsSetup(
+      ['id', 'name', 'status'],
+      [
+        ['id', 'name'],
+        [1, 'John'],
+      ]
+    )
+    const sheetsRunner = runner(sheets.resolver, RE_ADD_DEFAULT)
+    const result = await sheetsRunner.migrate()
+
+    expect(mock.read().status).toBe('unknown')
+    expect(sheets.read().status).toBe('unknown')
+    expect(result.currentVersion).toBe(1)
+    expect(sheets.users.getRawData()).toEqual([
+      ['id', 'name', 'status'],
+      [1, 'John', 'unknown'],
+    ])
+  })
+
+  it('fails loudly on SheetsAdapter when the column is not in the declared schema [#127]', async () => {
+    // Deliberate asymmetry: MockAdapter/LocalAdapter are name-keyed, so any key
+    // is representable and the value is simply stored. SheetsAdapter is
+    // positional — a column outside `columns` cannot be written at all — so the
+    // migration must fail instead of reporting a success it did not deliver.
+    const mock = mockSetup()
+    await runner(mock.resolver, RE_ADD_DEFAULT).migrate()
+    expect(mock.read().status).toBe('unknown')
+
+    const sheets = sheetsSetup(
+      ['id', 'name'],
+      [
+        ['id', 'name'],
+        [1, 'John'],
+      ]
+    )
+    const sheetsRunner = runner(sheets.resolver, RE_ADD_DEFAULT)
+
+    const error = await sheetsRunner.migrate().catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(MigrationExecutionError)
+    expect((error as MigrationExecutionError).cause).toBeInstanceOf(UnknownColumnError)
+    expect(sheetsRunner.getCurrentVersion()).toBe(0)
+    expect(sheets.users.getRawData()).toEqual([
+      ['id', 'name'],
+      [1, 'John'],
+    ])
   })
 
   it('applies renameColumn on both stores', async () => {

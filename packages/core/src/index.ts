@@ -18,6 +18,7 @@ export type {
   DataStore,
   BatchUpdateItem,
   UpdateData,
+  AddColumnOptions,
   TableSchema,
   SheetsDBConfig,
   // Schema-based type inference
@@ -61,7 +62,9 @@ export {
   NoResultsError,
   MissingStoreError,
   ValidationError,
-  InvalidOperatorError
+  InvalidOperatorError,
+  UnknownColumnError,
+  SchemaMismatchError
 } from './core/errors'
 
 // Migration System
