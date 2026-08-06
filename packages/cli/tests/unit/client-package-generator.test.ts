@@ -158,6 +158,61 @@ describe('generateClientCode', () => {
 
     expect(result).not.toContain('columnTypes:')
   })
+
+  it('emits indexes from @@index and @@unique block attributes (#135)', () => {
+    const schemaWithIndexes: SchemaAST = {
+      enums: {},
+      tables: {
+        Post: {
+          name: 'Post',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'slug', type: 'string', optional: false, attributes: [] },
+            { name: 'authorId', type: 'number', optional: false, attributes: [] },
+            { name: 'status', type: 'string', optional: false, attributes: [] },
+          ],
+          blockAttributes: [
+            { name: 'index', fields: ['authorId'] },
+            { name: 'index', fields: ['authorId', 'status'] },
+            { name: 'unique', fields: ['slug'] },
+          ],
+        },
+      },
+    }
+    const result = generateClientCode(schemaWithIndexes)
+
+    expect(result).toContain(
+      "indexes: [{ fields: ['authorId'] }, { fields: ['authorId', 'status'] }, { fields: ['slug'], unique: true }]"
+    )
+  })
+
+  it('collapses a field combination declared both @@index and @@unique', () => {
+    const schemaWithDuplicate: SchemaAST = {
+      enums: {},
+      tables: {
+        Post: {
+          name: 'Post',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'slug', type: 'string', optional: false, attributes: [] },
+          ],
+          blockAttributes: [
+            { name: 'index', fields: ['slug'] },
+            { name: 'unique', fields: ['slug'] },
+          ],
+        },
+      },
+    }
+    const result = generateClientCode(schemaWithDuplicate)
+
+    expect(result).toContain("indexes: [{ fields: ['slug'], unique: true }]")
+  })
+
+  it('omits indexes when the table declares none', () => {
+    const result = generateClientCode(simpleSchema)
+
+    expect(result).not.toContain('indexes:')
+  })
 })
 
 describe('generateClientIndex', () => {

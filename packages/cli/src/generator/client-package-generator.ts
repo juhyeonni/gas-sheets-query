@@ -142,7 +142,45 @@ function generateTableSchema(table: TableAST): string {
     parts.push(`columnTypes: { ${columnTypeEntries.join(', ')} }`)
   }
 
+  const indexEntries = buildIndexEntries(table)
+  if (indexEntries.length > 0) {
+    parts.push(`indexes: [${indexEntries.join(', ')}]`)
+  }
+
   return `{ ${parts.join(', ')} }`
+}
+
+/**
+ * Build the runtime index definitions for a table from its block attributes.
+ *
+ * `@@index` becomes a plain index and `@@unique` a unique one. Duplicate field
+ * combinations collapse, with unique winning over non-unique.
+ */
+function buildIndexEntries(table: TableAST): string[] {
+  const byKey = new Map<string, { fields: string[]; unique: boolean }>()
+
+  const add = (fields: string[], unique: boolean): void => {
+    if (fields.length === 0) return
+    const key = fields.join('|')
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.unique = existing.unique || unique
+      return
+    }
+    byKey.set(key, { fields: [...fields], unique })
+  }
+
+  for (const attr of table.blockAttributes) {
+    if (attr.name === 'index') add(attr.fields, false)
+    else if (attr.name === 'unique') add(attr.fields, true)
+  }
+
+  return Array.from(byKey.values()).map(({ fields, unique }) => {
+    const fieldList = fields.map(f => `'${escapeStringLiteral(f)}'`).join(', ')
+    return unique
+      ? `{ fields: [${fieldList}], unique: true }`
+      : `{ fields: [${fieldList}] }`
+  })
 }
 
 /**

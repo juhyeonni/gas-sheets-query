@@ -77,6 +77,10 @@ export type {
   DataStore,
   SheetsDB,
   TableHandle,
+  RuntimeSchema,
+  RuntimeTableSchema,
+  ColumnType,
+  IndexDefinition,
 } from "./runtime.js";
 
 // =============================================================================

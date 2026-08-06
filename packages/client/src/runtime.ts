@@ -10,7 +10,8 @@ import type {
   DataStore,
   SheetsDBConfig,
   IdMode,
-  ColumnType
+  RuntimeSchema,
+  RuntimeTableSchema
 } from '@gsquery/core'
 import { 
   createSheetsDB, 
@@ -42,15 +43,12 @@ export interface ClientOptions {
 
 /**
  * Generated schema interface (provided by generate command)
+ *
+ * Alias of the shared {@link RuntimeSchema}: the exact shape `createClientDB`
+ * consumes, so a generated schema drives both the server and the local-first
+ * path with the same `columnTypes` and `indexes` (#135).
  */
-export interface GeneratedSchema {
-  tables: Record<string, {
-    columns: readonly string[]
-    sheetName?: string
-    /** Column types for schema-driven (de)serialization (e.g. datetime -> 'date'). */
-    columnTypes?: Record<string, ColumnType>
-  }>
-}
+export type GeneratedSchema = RuntimeSchema
 
 /**
  * Client factory result type
@@ -85,14 +83,14 @@ export function isNodeEnvironment(): boolean {
  */
 export function createStore<T extends RowWithId>(
   tableName: string,
-  tableSchema: { columns: readonly string[]; sheetName?: string; columnTypes?: Record<string, ColumnType> },
+  tableSchema: RuntimeTableSchema,
   options: ClientOptions
 ): DataStore<T> {
   const idMode = options.idMode || 'auto'
 
   // Mock mode always uses MockAdapter
   if (options.mock) {
-    return new MockAdapter<T>({ idMode })
+    return new MockAdapter<T>({ idMode, indexes: tableSchema.indexes })
   }
 
   // If spreadsheetId is provided, use SheetsAdapter
@@ -238,4 +236,8 @@ export type {
   DataStore,
   SheetsDB,
   TableHandle,
+  RuntimeSchema,
+  RuntimeTableSchema,
 }
+
+export type { ColumnType, IndexDefinition } from '@gsquery/core'

@@ -21,6 +21,8 @@ export type {
   AddColumnOptions,
   TableSchema,
   SheetsDBConfig,
+  RuntimeTableSchema,
+  RuntimeSchema,
   // Schema-based type inference
   TypeSample,
   TableSchemaTyped,
@@ -48,6 +50,9 @@ export type { ColumnType, SheetsAdapterOptions } from './adapters/sheets-adapter
 
 // Query utilities
 export { evaluateCondition, compareRows } from './core/query-utils'
+
+// Column type conversion
+export { deserializeColumnValue, deserializeRow } from './core/column-conversion'
 
 // Index Store
 export { IndexStore, createIndexKey, serializeValues } from './core/index-store'
