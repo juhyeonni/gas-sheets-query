@@ -540,12 +540,44 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       }
     }
     
-    // Write all updates (could optimize with batch ranges if rows are contiguous)
-    for (const { rowIndex, values } of updatedRows) {
-      sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([values])
-    }
-    
+    this.writeRowRuns(sheet, updatedRows)
+
     return results
+  }
+
+  /**
+   * Writes serialized rows, coalescing consecutive sheet rows into a single
+   * `setValues` call — one write per contiguous run instead of one per row
+   * (#129), so a 1,000-row contiguous batch costs 1 write instead of 1,000.
+   * The old per-row loop could exhaust the 6-minute execution budget mid-batch
+   * and leave a silent partial update.
+   *
+   * Rows that were not updated are never included in a range, even when that
+   * would merge two runs: rewriting a clean row would write back the value
+   * read at the start of the call (clobbering a concurrent writer) and would
+   * replace any formula in it with its computed value. Scattered updates
+   * therefore still cost one write per dirty row — correctness over quota.
+   *
+   * `rows` must be sorted ascending by `rowIndex`; batchUpdate builds it in
+   * sheet order.
+   */
+  private writeRowRuns(
+    sheet: GoogleAppsScript.Spreadsheet.Sheet,
+    rows: { rowIndex: number; values: unknown[] }[]
+  ): void {
+    if (rows.length === 0) return
+
+    let runStart = 0
+    for (let i = 1; i <= rows.length; i++) {
+      const endOfRun = i === rows.length || rows[i].rowIndex !== rows[i - 1].rowIndex + 1
+      if (!endOfRun) continue
+
+      const run = rows.slice(runStart, i)
+      sheet
+        .getRange(run[0].rowIndex, 1, run.length, this.columns.length)
+        .setValues(run.map(({ values }) => values))
+      runStart = i
+    }
   }
 
   reset(data: T[] = []): void {
