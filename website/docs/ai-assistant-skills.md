@@ -63,7 +63,7 @@ Installed to `.claude/skills/gsquery/`:
 | `references/joins-and-aggregation.md` | JoinQueryBuilder, groupBy, agg |
 | `references/adapters-and-config.md` | DataStore, MockAdapter, SheetsAdapter, indexes |
 | `references/migration-and-cli.md` | MigrationRunner, SchemaBuilder, CLI commands |
-| `references/errors-and-viz.md` | Error hierarchy, Visualization API |
+| `references/errors.md` | Error hierarchy and handling patterns |
 
 ### Generic Format (6 files)
 
@@ -76,7 +76,7 @@ For Cursor (`.cursor/rules/`), Copilot, or any tool (`.ai/gsquery/`):
 | `gsquery-queries.md` | Joins & aggregation |
 | `gsquery-config.md` | Adapters & configuration |
 | `gsquery-advanced.md` | Migrations, CLI, client |
-| `gsquery-errors.md` | Error handling & Viz API |
+| `gsquery-errors.md` | Error handling |
 
 ## Programmatic API
 

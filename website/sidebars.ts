@@ -32,6 +32,7 @@ const sidebars: SidebarsConfig = {
         'migration-system',
         'cli-reference',
         'typed-client',
+        'local-first-client',
         'indexing-and-performance',
         'ai-assistant-skills',
       ],

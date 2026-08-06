@@ -56,7 +56,6 @@ The foundation. Contains all runtime code:
 | `SheetsAdapter` | Google Sheets `DataStore` for production (GAS environment) |
 | `IndexStore` | Column indexing for query optimization |
 | `MigrationRunner` | Schema migration execution and tracking |
-| Viz Query | Google Visualization API query builder |
 
 ### `@gsquery/cli`
 
@@ -66,8 +65,8 @@ Development-time tooling (not shipped to production):
 |-----------|---------|
 | `gsquery init` | Scaffold a new project with schema template |
 | `gsquery generate` | Parse `.gsq.yaml` schema and generate TypeScript types |
-| `gsquery migrate` | Run pending schema migrations |
-| `gsquery rollback` | Roll back the last applied migration |
+| `gsquery migrate` | Preview pending schema migrations (execution happens in the GAS runtime) |
+| `gsquery rollback` | Preview a migration rollback (execution happens in the GAS runtime) |
 
 ### `@gsquery/client`
 
