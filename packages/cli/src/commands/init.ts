@@ -23,6 +23,8 @@ export interface GSQConfig {
   migrationsDir: string
   generatedDir: string
   schemaFile: string
+  /** Output directory for the typed client (`gsquery generate --client`). */
+  clientDir?: string
 }
 
 // =============================================================================
@@ -33,6 +35,7 @@ const DEFAULT_CONFIG: Omit<GSQConfig, 'spreadsheetId'> = {
   migrationsDir: 'migrations',
   generatedDir: 'generated',
   schemaFile: 'schema.gsq.yaml',
+  clientDir: 'generated/client',
 }
 
 const CONFIG_FILENAME = 'gsquery.config.json'
@@ -111,7 +114,7 @@ export function loadConfig(): GSQConfig | null {
   const config = content as Record<string, unknown>
 
   // Validate that present fields have correct types
-  const validFields = ['spreadsheetId', 'migrationsDir', 'generatedDir', 'schemaFile']
+  const validFields = ['spreadsheetId', 'migrationsDir', 'generatedDir', 'schemaFile', 'clientDir']
 
   for (const field of validFields) {
     if (config[field] !== undefined && typeof config[field] !== 'string') {

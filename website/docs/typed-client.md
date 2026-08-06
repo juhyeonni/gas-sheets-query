@@ -105,6 +105,11 @@ Run `gsquery generate --client` to generate a typed client from your schema:
 npx gsquery generate -s schema.gsq.yaml -o src/generated --client
 ```
 
+The client is written into your project at `<output>/client` (here
+`src/generated/client/`), so it is committed with your code and survives
+reinstalls. Override the location with `--client-output <path>` or the
+`clientDir` field in `gsquery.config.json`.
+
 The generated client includes:
 
 1. **Type definitions** for all tables (the `Tables` map)
@@ -112,10 +117,11 @@ The generated client includes:
 3. **`createClient` factory function** ready to use
 
 ```ts
-// src/generated/client.ts (auto-generated)
-import { createClientFactory } from '@gsquery/client'
-import type { Tables } from './types'
-import { schema } from './types'
+// src/generated/client/client.ts (auto-generated)
+import { createClientFactory, type GeneratedSchema } from '@gsquery/client'
+import type { Tables } from './types.js'
+
+export const schema: GeneratedSchema = { /* ... */ }
 
 export const createClient = createClientFactory<Tables>(schema)
 ```
@@ -123,7 +129,7 @@ export const createClient = createClientFactory<Tables>(schema)
 Usage:
 
 ```ts
-import { createClient } from './generated/client'
+import { createClient } from './src/generated/client'
 
 const db = createClient({ mock: true })
 ```
