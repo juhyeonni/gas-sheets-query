@@ -281,18 +281,6 @@ interface SchemaBuilder {
 
 ---
 
-### Visualization API
-
-```ts
-function buildVizQuery<T extends Row>(options: QueryOptions<T>, vizOptions?: VizQueryOptions): string
-function buildVizUrl(spreadsheetId: string, query: string, vizOptions?: VizQueryOptions): string
-function buildVizQueryResult<T extends Row>(spreadsheetId: string, options: QueryOptions<T>, vizOptions?: VizQueryOptions): VizQueryResult
-function parseVizResponse<T extends Row>(responseText: string, columnNames?: string[]): VizApiResponse<T>
-function createVizFetcher(spreadsheetId: string, vizOptions?: VizQueryOptions): <T extends Row>(options: QueryOptions<T>, columnNames?: string[]) => VizApiResponse<T>
-```
-
----
-
 ### IndexStore
 
 ```ts
