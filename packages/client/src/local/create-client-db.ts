@@ -9,7 +9,11 @@ import { LocalAdapter, openSharedIDB } from './local-adapter.js'
 import type { LocalAdapterOptions } from './local-adapter.js'
 import { SyncEngine } from './sync-engine.js'
 import type { SyncEngineOptions } from './sync-engine.js'
-import type { SyncTransport, ConflictStrategy } from './sync-transport.js'
+import type {
+  SyncTransport,
+  ConflictStrategy,
+  PoisonedMutationHandler,
+} from './sync-transport.js'
 import type { MutationStorage } from './mutation-queue.js'
 import type { RuntimeSchema } from '@gsquery/core'
 import { composeName } from './naming.js'
@@ -28,6 +32,14 @@ export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>>
   transport: SyncTransport
   conflictStrategy?: ConflictStrategy
   pushDebounceMs?: number
+  /** Consecutive push failures per table before a batch is dead-lettered (default 5, 0 = never) */
+  maxRetries?: number
+  /** First backoff step for a failing table's background attempts (default 1000ms, 0 = none) */
+  retryBaseDelayMs?: number
+  /** Ceiling for the exponential backoff (default 60000ms) */
+  maxRetryDelayMs?: number
+  /** Called when a table's batch has failed `maxRetries` times in a row */
+  onPoisonedMutation?: PoisonedMutationHandler
   /** Custom mutation storage (defaults to localStorage) */
   mutationStorage?: MutationStorage
   /** Disable IndexedDB (for testing in non-browser environments) */
@@ -60,12 +72,28 @@ export interface ClientDBResult<Tables extends Record<string, RowWithId>> {
 export async function createClientDB<Tables extends Record<string, RowWithId>>(
   options: CreateClientDBOptions<Tables>
 ): Promise<ClientDBResult<Tables>> {
-  const { schema, transport, conflictStrategy, pushDebounceMs, mutationStorage, disableIDB, namespace } = options
+  const {
+    schema,
+    transport,
+    conflictStrategy,
+    pushDebounceMs,
+    maxRetries,
+    retryBaseDelayMs,
+    maxRetryDelayMs,
+    onPoisonedMutation,
+    mutationStorage,
+    disableIDB,
+    namespace,
+  } = options
 
   const syncEngine = new SyncEngine({
     transport,
     conflictStrategy,
     pushDebounceMs,
+    maxRetries,
+    retryBaseDelayMs,
+    maxRetryDelayMs,
+    onPoisonedMutation,
   } satisfies SyncEngineOptions)
 
   const stores: Record<string, DataStore<any>> = {}

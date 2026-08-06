@@ -27,6 +27,7 @@ export {
   MutationQueue,
   LocalAdapter,
   SyncEngine,
+  SyncError,
   createClientDB,
 } from "./local/index.js";
 
@@ -35,10 +36,12 @@ export type {
   MutationStorage,
   LocalAdapterOptions,
   SyncEngineOptions,
+  TableSyncError,
   CreateClientDBOptions,
   ClientDBResult,
   ClientDBSchema,
   SyncTransport,
+  SyncPushResult,
   Mutation,
   MutationType,
   MergedMutation,
@@ -47,6 +50,9 @@ export type {
   SyncEvent,
   SyncEventType,
   SyncEventListener,
+  PoisonedMutationInfo,
+  PoisonedMutationAction,
+  PoisonedMutationHandler,
 } from "./local/index.js";
 
 // Transports

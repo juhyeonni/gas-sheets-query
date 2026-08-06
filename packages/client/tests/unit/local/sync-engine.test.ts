@@ -511,6 +511,169 @@ describe('SyncEngine', () => {
       const t1 = adapter.findById('t1')
       expect(t1?.title).toBe('Merged: Server')
     })
+
+    it("re-enqueues the custom resolver's row so it survives the next pull [#131]", async () => {
+      const customSync = new SyncEngine({
+        transport,
+        conflictStrategy: ((conflict: any) => ({
+          ...conflict.serverRow,
+          title: `Merged: ${conflict.serverRow.title}`,
+        })) as any,
+      })
+      customSync.registerTable('Todo', adapter, adapter.queue)
+
+      transport.setServerData<Todo>('Todo', [{ id: 't1', title: 'Server', done: true }])
+      adapter.insert({ id: 't1', title: 'Local', done: false })
+
+      transport.conflictGenerator = (() => [
+        {
+          id: 't1',
+          serverRow: { id: 't1', title: 'Server', done: true },
+          clientMutation: { id: 't1', type: 'insert' as const, data: { id: 't1', title: 'Local', done: false } },
+        },
+      ]) as any
+
+      await customSync.push()
+
+      // The resolution must exist as a pending mutation, not just in memory.
+      const pending = adapter.queue.getMerged().find(m => m.id === 't1')
+      expect(pending).toBeDefined()
+      expect(pending?.data).toMatchObject({ title: 'Merged: Server' })
+
+      // A pull that brings back the untouched server row must not erase it.
+      transport.conflictGenerator = undefined
+      await customSync.pull()
+      expect(adapter.findById('t1')?.title).toBe('Merged: Server')
+    })
+
+    it("pushes the custom resolver's row to the server on the next cycle [#131]", async () => {
+      const customSync = new SyncEngine({
+        transport,
+        conflictStrategy: ((conflict: any) => ({
+          ...conflict.serverRow,
+          title: `Merged: ${conflict.serverRow.title}`,
+        })) as any,
+      })
+      customSync.registerTable('Todo', adapter, adapter.queue)
+
+      transport.setServerData<Todo>('Todo', [{ id: 't1', title: 'Server', done: true }])
+      adapter.insert({ id: 't1', title: 'Local', done: false })
+
+      transport.conflictGenerator = (() => [
+        {
+          id: 't1',
+          serverRow: { id: 't1', title: 'Server', done: true },
+          clientMutation: { id: 't1', type: 'insert' as const, data: { id: 't1', title: 'Local', done: false } },
+        },
+      ]) as any
+      await customSync.push()
+
+      transport.conflictGenerator = undefined
+      await customSync.push()
+
+      const server = transport.serverData.get('Todo') as Todo[]
+      expect(server.find(t => t.id === 't1')?.title).toBe('Merged: Server')
+    })
+
+    it('applies the resolution even when the row was deleted locally [#131]', async () => {
+      const customSync = new SyncEngine({
+        transport,
+        conflictStrategy: ((conflict: any) => ({
+          ...conflict.serverRow,
+          title: `Merged: ${conflict.serverRow.title}`,
+        })) as any,
+      })
+      customSync.registerTable('Todo', adapter, adapter.queue)
+
+      transport.setServerData<Todo>('Todo', [{ id: 't1', title: 'Server', done: true }])
+      await customSync.pull()
+      adapter.delete('t1')
+
+      transport.conflictGenerator = (() => [
+        {
+          id: 't1',
+          serverRow: { id: 't1', title: 'Server', done: true },
+          clientMutation: { id: 't1', type: 'delete' as const },
+        },
+      ]) as any
+
+      await customSync.push()
+
+      // The resolver decided the row should exist — that decision must not be
+      // silently dropped just because the row is missing locally.
+      expect(adapter.findById('t1')?.title).toBe('Merged: Server')
+    })
+
+    it('keeps non-conflicted mutations of a rejected batch [#131]', async () => {
+      adapter.insert({ id: 't1', title: 'Local 1', done: false })
+      adapter.insert({ id: 't2', title: 'Local 2', done: false })
+
+      transport.conflictGenerator = ((_table: string, mutations: any[]) =>
+        mutations
+          .filter(m => m.id === 't1')
+          .map(m => ({
+            id: 't1',
+            serverRow: { id: 't1', title: 'Server 1', done: true },
+            clientMutation: m,
+          }))) as any
+
+      await sync.push()
+
+      // The server rejected the batch, so t2 was never applied and must stay
+      // queued. t1 is settled by server-wins.
+      const pending = adapter.queue.getMerged()
+      expect(pending.map(m => m.id)).toEqual(['t2'])
+    })
+
+    it('clears exactly the ids the transport reports as applied [#131]', async () => {
+      transport.applyNonConflictedOnConflict = true
+
+      adapter.insert({ id: 't1', title: 'Local 1', done: false })
+      adapter.insert({ id: 't2', title: 'Local 2', done: false })
+
+      transport.conflictGenerator = ((_table: string, mutations: any[]) =>
+        mutations
+          .filter(m => m.id === 't1')
+          .map(m => ({
+            id: 't1',
+            serverRow: { id: 't1', title: 'Server 1', done: true },
+            clientMutation: m,
+          }))) as any
+
+      await sync.push()
+
+      // t2 is in appliedIds, t1 is settled by server-wins → nothing left.
+      expect(adapter.queue.getMerged()).toHaveLength(0)
+      const server = transport.serverData.get('Todo') as Todo[]
+      expect(server.find(t => t.id === 't2')?.title).toBe('Local 2')
+    })
+
+    it('honors appliedIds on a hard push failure [#131]', async () => {
+      const partialTransport = {
+        async pull() {
+          return { rows: [] as Todo[] }
+        },
+        async push() {
+          // Server applied t1 then died before t2 — no conflicts involved.
+          return { success: false, appliedIds: ['t1'] }
+        },
+      }
+      const a = new LocalAdapter<Todo>({
+        tableName: 'Todo',
+        idMode: 'client',
+        disableIDB: true,
+        mutationStorage: createMemoryStorage(),
+      })
+      const s = new SyncEngine({ transport: partialTransport as any })
+      s.registerTable('Todo', a, a.queue)
+
+      a.insert({ id: 't1', title: 'A', done: false })
+      a.insert({ id: 't2', title: 'B', done: false })
+
+      await expect(s.push()).rejects.toThrow()
+
+      expect(a.queue.getMerged().map(m => m.id)).toEqual(['t2'])
+    })
   })
 
   // ── Auto-sync ──────────────────────────────────────────────────────
