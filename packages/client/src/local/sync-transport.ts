@@ -39,6 +39,28 @@ export interface ConflictItem<T extends RowWithId = RowWithId> {
 }
 
 /**
+ * Result of a transport push.
+ *
+ * `appliedIds` is the authoritative list of rows the server actually committed.
+ * It is optional for backward compatibility: when a transport omits it the
+ * engine infers the applied set from `success` —
+ * - `success: true`  → every pushed mutation was applied,
+ * - `success: false` → none of them were, so nothing may be cleared from the
+ *   local queue (including the non-conflicting rows of a conflicted batch, which
+ *   used to be dropped as if the server had taken them — #131).
+ *
+ * A server that commits part of a batch should report `appliedIds` explicitly;
+ * otherwise the client conservatively re-pushes the whole batch, which is safe
+ * because every mutation is idempotent (see the `push` contract below).
+ */
+export interface SyncPushResult<T extends RowWithId = RowWithId> {
+  success: boolean
+  conflicts?: ConflictItem<T>[]
+  /** Ids the server confirms it applied. Absent → inferred from `success`. */
+  appliedIds?: (string | number)[]
+}
+
+/**
  * Server communication interface.
  *
  * Server contract for `push`: apply each mutation idempotently —
@@ -55,10 +77,7 @@ export interface SyncTransport {
   push<T extends RowWithId>(
     tableName: string,
     mutations: MergedMutation<T>[]
-  ): Promise<{
-    success: boolean
-    conflicts?: ConflictItem<T>[]
-  }>
+  ): Promise<SyncPushResult<T>>
 }
 
 /** Sync event types */
@@ -68,18 +87,52 @@ export type SyncEventType =
   | 'pull-complete'
   | 'sync-complete'
   | 'error'
+  | 'mutation-dead'
 
 export interface SyncEvent {
   type: SyncEventType
+  /**
+   * Table the event belongs to. An `error` without a table is a whole-attempt
+   * failure reported from a background path (auto-sync tick, debounced push);
+   * the per-table `error` events were already emitted separately.
+   */
   table?: string
   error?: Error
   /** Number of mutations pushed */
   pushedCount?: number
   /** Number of rows pulled */
   pulledCount?: number
+  /** The batch the server keeps rejecting ('mutation-dead') */
+  mutations?: MergedMutation[]
+  /** Consecutive failed push attempts for the batch ('mutation-dead') */
+  attempts?: number
 }
 
 export type SyncEventListener = (event: SyncEvent) => void
+
+/** Describes a batch the server has rejected `maxRetries` times in a row. */
+export interface PoisonedMutationInfo<T extends RowWithId = RowWithId> {
+  table: string
+  /** The merged batch that keeps failing */
+  mutations: MergedMutation<T>[]
+  /** The last error the transport reported */
+  error: Error
+  /** Number of consecutive failed push attempts */
+  attempts: number
+}
+
+/**
+ * What the engine should do with a poisoned batch.
+ * - `'discard'`: drop those mutations from the queue so the table can sync again
+ *   (the local rows are left untouched — a later pull reconciles them).
+ * - `'retain'` (also the default when the handler returns nothing): keep them and
+ *   keep retrying.
+ */
+export type PoisonedMutationAction = 'discard' | 'retain'
+
+export type PoisonedMutationHandler = (
+  info: PoisonedMutationInfo
+) => PoisonedMutationAction | void
 
 /** Conflict resolution strategy */
 export type ConflictStrategy<T extends RowWithId = RowWithId> =

@@ -3,7 +3,11 @@
  * Uses google.script.run in GAS environment, fetch in dev/browser environment.
  */
 import type { RowWithId } from '@gsquery/core'
-import type { SyncTransport, MergedMutation, ConflictItem } from '../local/sync-transport.js'
+import type {
+  SyncTransport,
+  MergedMutation,
+  SyncPushResult,
+} from '../local/sync-transport.js'
 
 declare const google: {
   script: {
@@ -55,10 +59,7 @@ export class GasApiTransport implements SyncTransport {
   async push<T extends RowWithId>(
     tableName: string,
     mutations: MergedMutation<T>[]
-  ): Promise<{
-    success: boolean
-    conflicts?: ConflictItem<T>[]
-  }> {
+  ): Promise<SyncPushResult<T>> {
     if (isGas()) {
       return this.gasPush<T>(tableName, mutations)
     }
@@ -79,12 +80,10 @@ export class GasApiTransport implements SyncTransport {
   private gasPush<T extends RowWithId>(
     tableName: string,
     mutations: MergedMutation<T>[]
-  ): Promise<{ success: boolean; conflicts?: ConflictItem<T>[] }> {
+  ): Promise<SyncPushResult<T>> {
     return new Promise((resolve, reject) => {
       const handler = google.script.run
-        .withSuccessHandler(
-          (result: { success: boolean; conflicts?: ConflictItem<T>[] }) => resolve(result)
-        )
+        .withSuccessHandler((result: SyncPushResult<T>) => resolve(result))
         .withFailureHandler((error: Error) => reject(error))
       ;(handler as any)[this.pushFn](tableName, mutations)
     })
@@ -111,7 +110,7 @@ export class GasApiTransport implements SyncTransport {
   private async fetchPush<T extends RowWithId>(
     tableName: string,
     mutations: MergedMutation<T>[]
-  ): Promise<{ success: boolean; conflicts?: ConflictItem<T>[] }> {
+  ): Promise<SyncPushResult<T>> {
     const url = this.baseUrl
       ? `${this.baseUrl}/sync/push`
       : `/api/sync/push`
