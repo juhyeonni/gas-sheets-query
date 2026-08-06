@@ -7,7 +7,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs'
 import { join } from 'path'
-import { runGenerate, generateIndex } from '../../src/commands/generate.js'
+import {
+  runGenerate,
+  generateIndex,
+  resolveGenerateOptions,
+  DEFAULT_SCHEMA_FILE,
+  DEFAULT_OUTPUT_DIR,
+} from '../../src/commands/generate.js'
+import type { GSQConfig } from '../../src/commands/init.js'
 
 // =============================================================================
 // Test Fixtures
@@ -16,6 +23,7 @@ import { runGenerate, generateIndex } from '../../src/commands/generate.js'
 const TEST_DIR = join(process.cwd(), 'tests', 'fixtures', 'generate-test')
 const SCHEMA_PATH = join(TEST_DIR, 'schema.gsq.yaml')
 const OUTPUT_DIR = join(TEST_DIR, 'generated')
+const CLIENT_OUTPUT_DIR = join(OUTPUT_DIR, 'client')
 
 const VALID_SCHEMA = `
 enums:
@@ -246,7 +254,14 @@ describe('runGenerate', () => {
       expect(existsSync(join(customOutput, 'index.ts'))).toBe(true)
     })
 
-    it('should warn when --client is used but @gsquery/client not found', async () => {
+  })
+
+  // =========================================================================
+  // Client Output (Issue #133)
+  // =========================================================================
+
+  describe('--client output', () => {
+    it('should write the typed client into <output>/client by default', async () => {
       writeSchema(VALID_SCHEMA)
 
       const result = await runGenerate({
@@ -256,12 +271,227 @@ describe('runGenerate', () => {
       })
 
       expect(result.success).toBe(true)
-      expect(result.files).toContain('types.ts')
-      expect(result.files).toContain('client.ts')
-      expect(result.files).toContain('index.ts')
-      // Should have warning about @gsquery/client not found
-      const clientWarning = result.warnings.find(e => e.includes('@gsquery/client'))
-      expect(clientWarning).toBeDefined()
+      expect(result.warnings).toHaveLength(0)
+      expect(existsSync(join(CLIENT_OUTPUT_DIR, 'types.ts'))).toBe(true)
+      expect(existsSync(join(CLIENT_OUTPUT_DIR, 'client.ts'))).toBe(true)
+      expect(existsSync(join(CLIENT_OUTPUT_DIR, 'index.ts'))).toBe(true)
     })
+
+    it('should honor an explicit client output directory', async () => {
+      writeSchema(VALID_SCHEMA)
+      const customClientDir = join(TEST_DIR, 'src', 'db')
+
+      const result = await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+        clientOutput: customClientDir,
+        client: true,
+      })
+
+      expect(result.success).toBe(true)
+      expect(existsSync(join(customClientDir, 'client.ts'))).toBe(true)
+      expect(existsSync(join(CLIENT_OUTPUT_DIR, 'client.ts'))).toBe(false)
+    })
+
+    it('should never write into node_modules', async () => {
+      writeSchema(VALID_SCHEMA)
+
+      const result = await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+        client: true,
+      })
+
+      for (const file of result.files) {
+        expect(file).not.toContain('node_modules')
+        expect(file).not.toContain('@gsquery/client')
+      }
+      expect(existsSync(join(process.cwd(), 'node_modules', '@gsquery', 'client', 'generated'))).toBe(
+        false
+      )
+    })
+
+    it('should generate client code with relative imports only', async () => {
+      writeSchema(VALID_SCHEMA)
+
+      await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+        client: true,
+      })
+
+      const clientContent = readFileSync(join(CLIENT_OUTPUT_DIR, 'client.ts'), 'utf-8')
+      const indexContent = readFileSync(join(CLIENT_OUTPUT_DIR, 'index.ts'), 'utf-8')
+
+      expect(clientContent).toContain("import type { Tables } from './types.js'")
+      expect(clientContent).not.toContain('@gsquery/client/generated')
+      expect(indexContent).not.toContain('@gsquery/client/generated')
+    })
+
+    it('should report the client output directory relative to the project', async () => {
+      writeSchema(VALID_SCHEMA)
+
+      const result = await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+        client: true,
+      })
+
+      expect(result.files.some(f => f.endsWith('generated/client'))).toBe(true)
+    })
+
+    it('should not create client files when --client is omitted', async () => {
+      writeSchema(VALID_SCHEMA)
+
+      await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+      })
+
+      expect(existsSync(CLIENT_OUTPUT_DIR)).toBe(false)
+    })
+  })
+
+  // =========================================================================
+  // Overwrite Protection (Issue #133)
+  // =========================================================================
+
+  describe('overwrite protection', () => {
+    it('should refuse to overwrite a file without the auto-generated header', async () => {
+      writeSchema(VALID_SCHEMA)
+      mkdirSync(OUTPUT_DIR, { recursive: true })
+      const handWritten = 'export const mine = 1\n'
+      writeFileSync(join(OUTPUT_DIR, 'types.ts'), handWritten, 'utf-8')
+
+      const result = await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.errors[0]).toContain('Refusing to overwrite')
+      expect(result.errors[0]).toContain('--force')
+      expect(readFileSync(join(OUTPUT_DIR, 'types.ts'), 'utf-8')).toBe(handWritten)
+      // No partial writes
+      expect(existsSync(join(OUTPUT_DIR, 'client.ts'))).toBe(false)
+    })
+
+    it('should overwrite an unprotected file when --force is passed', async () => {
+      writeSchema(VALID_SCHEMA)
+      mkdirSync(OUTPUT_DIR, { recursive: true })
+      writeFileSync(join(OUTPUT_DIR, 'types.ts'), 'export const mine = 1\n', 'utf-8')
+
+      const result = await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+        force: true,
+      })
+
+      expect(result.success).toBe(true)
+      expect(readFileSync(join(OUTPUT_DIR, 'types.ts'), 'utf-8')).toContain(
+        'Auto-generated by gsquery'
+      )
+    })
+
+    it('should overwrite previously generated files without --force', async () => {
+      writeSchema(VALID_SCHEMA)
+
+      const first = await runGenerate({ schema: SCHEMA_PATH, output: OUTPUT_DIR, client: true })
+      expect(first.success).toBe(true)
+
+      const second = await runGenerate({ schema: SCHEMA_PATH, output: OUTPUT_DIR, client: true })
+      expect(second.success).toBe(true)
+      expect(second.errors).toHaveLength(0)
+    })
+
+    it('should protect hand-written files in the client output directory', async () => {
+      writeSchema(VALID_SCHEMA)
+      mkdirSync(CLIENT_OUTPUT_DIR, { recursive: true })
+      writeFileSync(join(CLIENT_OUTPUT_DIR, 'client.ts'), 'export const mine = 1\n', 'utf-8')
+
+      const result = await runGenerate({
+        schema: SCHEMA_PATH,
+        output: OUTPUT_DIR,
+        client: true,
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.errors[0]).toContain('Refusing to overwrite')
+    })
+  })
+})
+
+// =============================================================================
+// Option Resolution (Issue #133)
+// =============================================================================
+
+describe('resolveGenerateOptions', () => {
+  const fullConfig: GSQConfig = {
+    spreadsheetId: 'sheet-id',
+    migrationsDir: 'migrations',
+    generatedDir: 'src/generated',
+    schemaFile: 'db/schema.gsq.yaml',
+    clientDir: 'src/db/client',
+  }
+
+  it('should fall back to built-in defaults without config or flags', () => {
+    const resolved = resolveGenerateOptions({}, null)
+
+    expect(resolved.schema).toBe(DEFAULT_SCHEMA_FILE)
+    expect(resolved.output).toBe(DEFAULT_OUTPUT_DIR)
+    expect(resolved.clientOutput).toBe(join(DEFAULT_OUTPUT_DIR, 'client'))
+  })
+
+  it('should use config values when no flags are passed', () => {
+    const resolved = resolveGenerateOptions({}, fullConfig)
+
+    expect(resolved.schema).toBe('db/schema.gsq.yaml')
+    expect(resolved.output).toBe('src/generated')
+    expect(resolved.clientOutput).toBe('src/db/client')
+  })
+
+  it('should prefer CLI flags over config values', () => {
+    const resolved = resolveGenerateOptions(
+      { schema: 'other.yaml', output: 'out', clientOutput: 'out/typed' },
+      fullConfig
+    )
+
+    expect(resolved.schema).toBe('other.yaml')
+    expect(resolved.output).toBe('out')
+    expect(resolved.clientOutput).toBe('out/typed')
+  })
+
+  it('should derive the client output from the resolved output directory', () => {
+    const resolved = resolveGenerateOptions({ output: 'src/generated' }, null)
+
+    expect(resolved.clientOutput).toBe(join('src/generated', 'client'))
+  })
+
+  it('should derive the client output from the config generatedDir', () => {
+    const config: GSQConfig = { ...fullConfig, clientDir: undefined }
+    const resolved = resolveGenerateOptions({}, config)
+
+    expect(resolved.clientOutput).toBe(join('src/generated', 'client'))
+  })
+
+  it('should ignore empty config values', () => {
+    const config: GSQConfig = {
+      spreadsheetId: '',
+      migrationsDir: '',
+      generatedDir: '',
+      schemaFile: '',
+    }
+    const resolved = resolveGenerateOptions({}, config)
+
+    expect(resolved.schema).toBe(DEFAULT_SCHEMA_FILE)
+    expect(resolved.output).toBe(DEFAULT_OUTPUT_DIR)
+  })
+
+  it('should pass through boolean flags', () => {
+    const resolved = resolveGenerateOptions({ watch: true, client: true, force: true }, null)
+
+    expect(resolved.watch).toBe(true)
+    expect(resolved.client).toBe(true)
+    expect(resolved.force).toBe(true)
   })
 })
