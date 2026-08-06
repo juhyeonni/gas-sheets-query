@@ -4,6 +4,8 @@
  */
 import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
 import { evaluateCondition, compareRows } from '../core/query-utils'
+import { DuplicateIdError } from '../core/errors'
+import { withScriptLock } from '../core/script-lock'
 
 /** Column type definition for schema-based serialization */
 export type ColumnType = 
@@ -277,20 +279,54 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   /**
    * Run a function while holding the script lock (when LockService is available).
    * The lock is held for the entire duration of fn so that read-allocate-write
-   * sequences stay atomic across concurrent executions.
+   * and find-then-write sequences stay atomic across concurrent executions
+   * (#80, #128). Degrades to running fn unlocked outside GAS.
    */
   private withLock<R>(fn: () => R): R {
-    let lock: GoogleAppsScript.Lock.Lock | null = null
-    try {
-      if (typeof LockService !== 'undefined') {
-        lock = LockService.getScriptLock()
-        lock.waitLock(10000)
+    return withScriptLock(fn)
+  }
+
+  /**
+   * Read the id of a client-mode row, throwing when the caller omitted it.
+   */
+  private requireClientId(data: Omit<T, 'id'> | T): string | number {
+    const record = data as Record<string, unknown>
+    if (!(this.idColumn in record)) {
+      throw new Error(`ID is required in client mode (idMode: 'client')`)
+    }
+    return record[this.idColumn] as string | number
+  }
+
+  /** Read every id currently on the sheet, keyed as strings for comparison. */
+  private readExistingIdKeys(): Set<string> {
+    const sheet = this.getSheet()
+    const lastRow = sheet.getLastRow()
+    const keys = new Set<string>()
+
+    if (lastRow <= 1) return keys
+
+    const idColIndex = this.columns.indexOf(this.idColumn) + 1
+    const ids = sheet.getRange(2, idColIndex, lastRow - 1, 1).getValues().flat()
+    for (const id of ids) {
+      if (id === '' || id === null || id === undefined) continue
+      keys.add(String(id))
+    }
+    return keys
+  }
+
+  /**
+   * Reject client-supplied ids that already exist on the sheet, or that repeat
+   * within the same batch. Must be called inside withLock() together with the
+   * write, otherwise a concurrent execution can insert the same id in between.
+   */
+  private assertClientIdsAvailable(ids: (string | number)[]): void {
+    const existing = this.readExistingIdKeys()
+    for (const id of ids) {
+      const key = String(id)
+      if (existing.has(key)) {
+        throw new DuplicateIdError(id, this.sheetName)
       }
-      return fn()
-    } finally {
-      if (lock) {
-        lock.releaseLock()
-      }
+      existing.add(key)
     }
   }
 
@@ -400,14 +436,17 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const sheet = this.getSheet()
 
     if (this.idMode === 'client') {
-      // Client mode: use client-provided ID
-      if (!(this.idColumn in (data as Record<string, unknown>))) {
-        throw new Error(`ID is required in client mode (idMode: 'client')`)
-      }
-      const newRow = data as T
-      const rowValues = this.objectToRow(newRow)
-      sheet.appendRow(rowValues)
-      return newRow
+      // Client mode: use client-provided ID. The uniqueness check and the write
+      // share one lock so a concurrent execution cannot slip in the same id
+      // between them, which would leave a row unreachable by id (#128).
+      const id = this.requireClientId(data)
+      return this.withLock(() => {
+        this.assertClientIdsAvailable([id])
+        const newRow = data as T
+        const rowValues = this.objectToRow(newRow)
+        sheet.appendRow(rowValues)
+        return newRow
+      })
     } else {
       // Auto mode: allocate the ID and write the row atomically under the lock,
       // otherwise concurrent executions can allocate the same ID.
@@ -422,34 +461,52 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   update(id: string | number, data: UpdateData<T>): T | undefined {
-    const rowIndex = this.findRowIndexById(id)
-    if (rowIndex === -1) return undefined
-
-    this.invalidateDataCache()
     const sheet = this.getSheet()
-    const currentValues = sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()[0]
-    const currentRow = this.rowToObject(currentValues)
 
-    const updatedRow = { ...currentRow, ...data } as T
-    // id is immutable via update; ignore any attempt to change it (#98).
-    ;(updatedRow as Record<string, unknown>)[this.idColumn] =
-      (currentRow as Record<string, unknown>)[this.idColumn]
-    const rowValues = this.objectToRow(updatedRow)
-    
-    sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([rowValues])
-    
-    return updatedRow
+    // Locating the row and writing to that row number must be atomic: a
+    // concurrent deleteRow above the target shifts rows up and the write would
+    // land on a different record (#128).
+    return this.withLock(() => {
+      const rowIndex = this.findRowIndexById(id)
+      if (rowIndex === -1) return undefined
+
+      this.invalidateDataCache()
+      const currentValues = sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()[0]
+
+      // Cheap re-verification of the row we are about to overwrite — free here
+      // because the row was read anyway, and it still guards the unlocked
+      // (LockService-less) path.
+      const currentId = currentValues[this.columns.indexOf(this.idColumn)]
+      if (currentId !== id && String(currentId) !== String(id)) return undefined
+
+      const currentRow = this.rowToObject(currentValues)
+
+      const updatedRow = { ...currentRow, ...data } as T
+      // id is immutable via update; ignore any attempt to change it (#98).
+      ;(updatedRow as Record<string, unknown>)[this.idColumn] =
+        (currentRow as Record<string, unknown>)[this.idColumn]
+      const rowValues = this.objectToRow(updatedRow)
+
+      sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([rowValues])
+
+      return updatedRow
+    })
   }
 
   delete(id: string | number): boolean {
-    const rowIndex = this.findRowIndexById(id)
-    if (rowIndex === -1) return false
-
-    this.invalidateDataCache()
     const sheet = this.getSheet()
-    sheet.deleteRow(rowIndex)
 
-    return true
+    // Same find-then-write race as update(): without the lock a concurrent
+    // delete above the target makes this remove the wrong row (#128).
+    return this.withLock(() => {
+      const rowIndex = this.findRowIndexById(id)
+      if (rowIndex === -1) return false
+
+      this.invalidateDataCache()
+      sheet.deleteRow(rowIndex)
+
+      return true
+    })
   }
 
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
@@ -466,19 +523,24 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     }
 
     if (this.idMode === 'client') {
-      // Client mode: use client-provided IDs (no server-side allocation)
+      // Client mode: no server-side allocation, but the write position
+      // (getLastRow) and the uniqueness check are still read-then-write, so
+      // they belong inside the lock — two concurrent batches otherwise compute
+      // the same start row and the second overwrites the first (#128).
       const results: T[] = []
       const rowsToInsert: unknown[][] = []
+      const ids: (string | number)[] = []
       for (const data of items) {
-        if (!(this.idColumn in (data as Record<string, unknown>))) {
-          throw new Error(`ID is required in client mode (idMode: 'client')`)
-        }
+        ids.push(this.requireClientId(data))
         const newRow = data as T
         results.push(newRow)
         rowsToInsert.push(this.objectToRow(newRow))
       }
-      writeRows(rowsToInsert)
-      return results
+      return this.withLock(() => {
+        this.assertClientIdsAvailable(ids)
+        writeRows(rowsToInsert)
+        return results
+      })
     }
 
     // Auto mode: allocate IDs (incl. the getLastRow used for the write

@@ -57,6 +57,7 @@ export {
   SheetsQueryError,
   TableNotFoundError,
   RowNotFoundError,
+  DuplicateIdError,
   NoResultsError,
   MissingStoreError,
   ValidationError,

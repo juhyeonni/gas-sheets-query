@@ -5,6 +5,7 @@
  */
 import type { Row, RowWithId, DataStore } from './types'
 import { SheetsQueryError } from './errors'
+import { withScriptLockAsync } from './script-lock'
 
 // ============================================================================
 // Migration Types
@@ -364,11 +365,20 @@ export class MigrationRunner {
   /**
    * Run all pending migrations
    * @param options - Optional: specify target version
+   *
+   * Holds the script lock for the whole run so two concurrent GAS executions
+   * cannot apply the same migration twice. The pending list is read *after*
+   * the lock is acquired, because another execution may have applied
+   * migrations while this one was waiting (#128).
    */
   async migrate(options?: { to?: number }): Promise<MigrationResult> {
+    return withScriptLockAsync(() => this.runMigrations(options))
+  }
+
+  private async runMigrations(options?: { to?: number }): Promise<MigrationResult> {
     const pending = this.getPendingMigrations()
     const applied: { version: number; name: string }[] = []
-    
+
     for (const migration of pending) {
       // Stop if we've reached the target version
       if (options?.to !== undefined && migration.version > options.to) {
@@ -410,10 +420,18 @@ export class MigrationRunner {
   
   /**
    * Rollback the last applied migration
+   *
+   * Locked for the same reason as migrate(): the applied list is re-read after
+   * the lock is acquired so a migration another execution already rolled back
+   * is not rolled back twice (#128).
    */
   async rollback(): Promise<RollbackResult> {
+    return withScriptLockAsync(() => this.runRollback())
+  }
+
+  private async runRollback(): Promise<RollbackResult> {
     const applied = this.getAppliedMigrations()
-    
+
     if (applied.length === 0) {
       throw new NoMigrationsToRollbackError()
     }
@@ -459,17 +477,21 @@ export class MigrationRunner {
    * Rollback all migrations (reset to version 0)
    */
   async rollbackAll(): Promise<{ rolledBack: { version: number; name: string }[]; currentVersion: number }> {
-    const rolledBack: { version: number; name: string }[] = []
-    
-    while (this.getCurrentVersion() > 0) {
-      const result = await this.rollback()
-      rolledBack.push(result.rolledBack)
-    }
-    
-    return {
-      rolledBack,
-      currentVersion: 0
-    }
+    // One lock for the whole sequence (the per-rollback lock is re-entrant), so
+    // the schema is never observed half-rolled-back by another execution.
+    return withScriptLockAsync(async () => {
+      const rolledBack: { version: number; name: string }[] = []
+
+      while (this.getCurrentVersion() > 0) {
+        const result = await this.rollback()
+        rolledBack.push(result.rolledBack)
+      }
+
+      return {
+        rolledBack,
+        currentVersion: 0
+      }
+    })
   }
   
   /**
