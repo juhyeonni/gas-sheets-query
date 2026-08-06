@@ -2,7 +2,8 @@
  * Mock adapter for testing - in-memory data storage
  */
 import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
-import { IndexStore, IndexDefinition } from '../core/index-store'
+import { IndexStore } from '../core/index-store'
+import type { IndexDefinition } from '../core/index-store'
 import { evaluateCondition, compareRows } from '../core/query-utils'
 
 /** MockAdapter configuration options */
