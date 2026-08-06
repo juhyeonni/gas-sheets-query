@@ -9,6 +9,7 @@ Error
  └── SheetsQueryError (base)
       ├── TableNotFoundError
       ├── RowNotFoundError
+      ├── DuplicateIdError
       ├── NoResultsError
       ├── MissingStoreError
       ├── ValidationError
@@ -57,6 +58,26 @@ try {
   if (e instanceof RowNotFoundError) {
     console.log(e.code)      // 'ROW_NOT_FOUND'
     console.log(e.id)        // 999
+    console.log(e.tableName) // 'users'
+  }
+}
+```
+
+### DuplicateIdError
+
+Thrown by `insert()`/`batchInsert()` on a `idMode: 'client'` store when the
+supplied id already exists (including a duplicate inside the same batch). The
+check runs under the write lock, so a concurrent execution that inserts the
+same id first wins and this one throws instead of writing a row that no id
+lookup could ever reach.
+
+```ts
+try {
+  db.from('users').insert({ id: 'u-1', name: 'Alice' })
+} catch (e) {
+  if (e instanceof DuplicateIdError) {
+    console.log(e.code)      // 'DUPLICATE_ID'
+    console.log(e.id)        // 'u-1'
     console.log(e.tableName) // 'users'
   }
 }

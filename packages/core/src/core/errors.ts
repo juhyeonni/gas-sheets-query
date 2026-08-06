@@ -56,6 +56,27 @@ export class RowNotFoundError extends SheetsQueryError {
 }
 
 /**
+ * Thrown when an insert would create a row whose id already exists.
+ *
+ * Only client-supplied ids can collide (`idMode: 'client'`); auto-mode ids are
+ * allocated under the write lock. A duplicate id is unreachable by id lookups,
+ * so it is rejected instead of written (#128).
+ */
+export class DuplicateIdError extends SheetsQueryError {
+  constructor(
+    public readonly id: string | number,
+    public readonly tableName?: string
+  ) {
+    const tableInfo = tableName ? ` in table "${tableName}"` : ''
+    super(
+      `Row with id "${id}" already exists${tableInfo}`,
+      'DUPLICATE_ID'
+    )
+    this.name = 'DuplicateIdError'
+  }
+}
+
+/**
  * Thrown when a query returns no results but one was expected
  */
 export class NoResultsError extends SheetsQueryError {

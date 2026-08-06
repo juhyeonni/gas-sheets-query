@@ -544,6 +544,7 @@ Options:
 | `SheetsQueryError` | Base error class |
 | `TableNotFoundError` | Table not found |
 | `RowNotFoundError` | Row not found |
+| `DuplicateIdError` | Insert would duplicate an existing id (`idMode: 'client'`) |
 | `NoResultsError` | No query results (`firstOrFail`) |
 | `MissingStoreError` | DataStore not found |
 | `ValidationError` | Validation failed |
