@@ -117,9 +117,18 @@ const store = new SheetsAdapter<User>({
   columnTypes: {                   // optional: explicit type serialization
     tags: 'string[]',
     metadata: 'json'
-  }
+  },
+  allowFormulas: false             // default: false, see Formula Safety below
 })
 ```
+
+### Formula Safety
+
+Strings that start with `=`, `+`, `-`, `@`, a tab or a carriage return would be
+parsed by Sheets as formulas, so `SheetsAdapter` writes them as literal text and
+returns the original string on read. Set `allowFormulas: true` only when the
+values come from your own script and are meant to run as formulas — never for
+user input.
 
 ### Column Types
 

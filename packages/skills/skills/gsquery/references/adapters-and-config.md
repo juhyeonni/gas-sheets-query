@@ -118,6 +118,7 @@ interface SheetsAdapterOptions {
   idColumn?: string                 // deprecated — 1.0 fixes it at 'id'
   idMode?: IdMode
   columnTypes?: Record<string, ColumnType>
+  allowFormulas?: boolean           // default: false — see Formula safety
 }
 
 type ColumnType =
@@ -137,6 +138,9 @@ type ColumnType =
 - **LockService**: Concurrent-safe auto-increment ID generation
 - **Column types**: Automatic serialization/deserialization (JSON for arrays/objects, booleans, dates)
 - **Auto-detect JSON**: Parses JSON strings in cells automatically
+- **Formula safety**: Strings starting with `=`, `+`, `-`, `@`, tab or CR are written as literal
+  text (Sheets would otherwise run them as formulas) and read back unchanged. Opt out per
+  adapter with `allowFormulas: true` — script-authored formulas only, never user input.
 
 ### Sheets-Specific Methods
 
