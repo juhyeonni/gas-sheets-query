@@ -1,6 +1,8 @@
 /**
  * Core types for gas-sheets-query
  */
+import type { ColumnType } from '../adapters/sheets-adapter'
+import type { IndexDefinition } from './index-store'
 
 /**
  * ID generation mode for insert operations
@@ -196,6 +198,38 @@ export type InferTablesFromConfig<
   Tables extends Record<string, TableSchemaTyped>
 > = {
   [K in keyof Tables]: InferRowFromSchema<Tables[K]>
+}
+
+// ============================================================================
+// Runtime schema (shared by generated clients and the local-first client)
+// ============================================================================
+
+/**
+ * Table description consumed at runtime by every client entry point:
+ * `createClientFactory` (server path) and `createClientDB` (local-first path).
+ *
+ * Both used to declare their own near-identical shape — one with
+ * `columnTypes`, the other with `indexes` — which made them silently
+ * cross-assignable and dropped date deserialization on the local-first path
+ * (#135). One type carries both, and every consumer honors both.
+ */
+export interface RuntimeTableSchema {
+  /** Column names in order (first column should be 'id') */
+  columns: readonly string[]
+  /** Sheet name (defaults to the table name if not specified) */
+  sheetName?: string
+  /**
+   * Column types for schema-driven (de)serialization (e.g. datetime -> 'date').
+   * Optional: without it, values are passed through as stored.
+   */
+  columnTypes?: Record<string, ColumnType>
+  /** Index definitions used to accelerate equality lookups */
+  indexes?: IndexDefinition[]
+}
+
+/** Runtime schema: the table map a generated client exports. */
+export interface RuntimeSchema {
+  tables: Record<string, RuntimeTableSchema>
 }
 
 // ============================================================================

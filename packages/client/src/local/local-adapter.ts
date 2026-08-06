@@ -18,8 +18,8 @@ import type {
   IdMode,
   UpdateData,
 } from '@gsquery/core'
-import { IndexStore, evaluateCondition, compareRows } from '@gsquery/core'
-import type { IndexDefinition } from '@gsquery/core'
+import { IndexStore, evaluateCondition, compareRows, deserializeRow } from '@gsquery/core'
+import type { IndexDefinition, ColumnType } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
 import type { MutationStorage } from './mutation-queue.js'
 import { composeName } from './naming.js'
@@ -90,6 +90,11 @@ export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
   tableName: string
   initialData?: T[]
   indexes?: IndexDefinition[]
+  /**
+   * Column types for schema-driven deserialization of rows arriving from the
+   * server (see replaceAll). Without it, pulled values are stored verbatim.
+   */
+  columnTypes?: Record<string, ColumnType>
   idMode?: IdMode
   /** Custom storage for MutationQueue (defaults to localStorage) */
   mutationStorage?: MutationStorage
@@ -107,6 +112,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private idIndex: Map<string | number, number> = new Map()
   private indexStore: IndexStore<T>
   private idMode: IdMode
+  private readonly columnTypes: Record<string, ColumnType> | undefined
 
   readonly tableName: string
   readonly queue: MutationQueue<T>
@@ -122,6 +128,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.idMode = options.idMode ?? 'client'
     this.idbEnabled = !options.disableIDB && typeof indexedDB !== 'undefined'
     this.indexStore = new IndexStore<T>(options.indexes ?? [])
+    this.columnTypes = options.columnTypes
     this.namespace = options.namespace
 
     // Accept pre-opened shared IDB handle
@@ -375,9 +382,20 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   // ── Additional methods for SyncEngine ──────────────────────────────
 
-  /** Replace all data (called by SyncEngine after pull) */
+  /**
+   * Replace all data (called by SyncEngine after pull).
+   *
+   * Rows coming off the wire carry transport representations (a datetime is an
+   * ISO string, a string[] is JSON text), so they are run through the same
+   * schema-driven conversion the server path applies — otherwise the local
+   * values contradict the generated model types (#135). The conversion is
+   * idempotent, so already-typed rows (locally created, or replayed from a
+   * conflict resolution) pass through untouched.
+   */
   replaceAll(rows: T[]): void {
-    this.data = [...rows]
+    this.data = this.columnTypes
+      ? rows.map(row => deserializeRow(row, this.columnTypes))
+      : [...rows]
     this.rebuildIndex()
     this.schedulePersist()
   }

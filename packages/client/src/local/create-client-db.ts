@@ -11,17 +11,17 @@ import { SyncEngine } from './sync-engine.js'
 import type { SyncEngineOptions } from './sync-engine.js'
 import type { SyncTransport, ConflictStrategy } from './sync-transport.js'
 import type { MutationStorage } from './mutation-queue.js'
-import type { IndexDefinition } from '@gsquery/core'
+import type { RuntimeSchema } from '@gsquery/core'
 import { composeName } from './naming.js'
 
-/** Schema definition for createClientDB */
-export interface ClientDBSchema {
-  tables: Record<string, {
-    columns: readonly string[]
-    sheetName?: string
-    indexes?: IndexDefinition[]
-  }>
-}
+/**
+ * Schema definition for createClientDB.
+ *
+ * Alias of the shared {@link RuntimeSchema} — the same shape a generated
+ * client exports, so `createClientDB({ schema })` accepts a generated schema
+ * and honors its `columnTypes` instead of silently discarding them (#135).
+ */
+export type ClientDBSchema = RuntimeSchema
 
 export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>> {
   schema: ClientDBSchema
@@ -88,6 +88,7 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     const adapterOpts: LocalAdapterOptions = {
       tableName,
       indexes: tableSchema.indexes,
+      columnTypes: tableSchema.columnTypes,
       idMode: 'client',
       mutationStorage,
       disableIDB: disableIDB ?? false,
