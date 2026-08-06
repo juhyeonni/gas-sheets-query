@@ -9,7 +9,6 @@ TypeScript library for using Google Sheets as a database in GAS projects.
 | When | Skill | Path |
 |------|-------|------|
 | Starting a task / GitHub sync | `development-flow` | `.claude/skills/development-flow/SKILL.md` |
-| Working on issues/PRs | `project-management` | `.claude/skills/project-management/SKILL.md` |
 | Designing APIs / Publishing | `library-dev` | `.claude/skills/library-dev/SKILL.md` |
 | GAS-specific code / Deploy | `gas-environment` | `.claude/skills/gas-environment/SKILL.md` |
 | Creating new skills | `skill-creator` | `.claude/skills/skill-creator/SKILL.md` |
@@ -17,7 +16,6 @@ TypeScript library for using Google Sheets as a database in GAS projects.
 ### Skill Triggers
 
 - **"let's start working"** → Read `development-flow`, sync GitHub issues
-- **Creating/updating issues** → Read `project-management`
 - **Designing public API** → Read `library-dev`
 - **Sheets optimization / clasp** → Read `gas-environment`
 
