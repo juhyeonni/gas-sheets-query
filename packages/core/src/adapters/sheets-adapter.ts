@@ -2,9 +2,17 @@
  * SheetsAdapter - Real Google Sheets DataStore implementation
  * Uses Google Apps Script SpreadsheetApp API
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
+import type {
+  RowWithId,
+  DataStore,
+  QueryOptions,
+  BatchUpdateItem,
+  IdMode,
+  UpdateData,
+  AddColumnOptions
+} from '../core/types'
 import { evaluateCondition, compareRows } from '../core/query-utils'
-import { DuplicateIdError } from '../core/errors'
+import { DuplicateIdError, SchemaMismatchError, UnknownColumnError } from '../core/errors'
 import { withScriptLock } from '../core/script-lock'
 
 /** Column type definition for schema-based serialization */
@@ -300,30 +308,36 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
    * Uses schema-based types if available, falls back to auto-detection
    */
   private objectToRow(obj: Partial<T>): unknown[] {
-    // Every serialized cell goes through escapeCellValue, so no user-supplied
-    // string can reach the sheet as a live formula (#130).
-    return this.columns.map(col => this.escapeCellValue(this.serializeCell(obj, col)))
+    return this.columns.map(col => this.serializeCell(col, obj[col as keyof T]))
   }
 
-  /** Serialize a single column of `obj` to its sheet representation */
-  private serializeCell(obj: Partial<T>, col: string): unknown {
-    const value = obj[col as keyof T]
-    const colType = this.columnTypes[col]
+  /**
+   * Convert a single value to its sheet cell representation.
+   * Shared by objectToRow and the addColumn default backfill so a default is
+   * written exactly as the same value would be written through a row write —
+   * including formula-injection escaping (#130), so no user-supplied string
+   * can reach the sheet as a live formula through either path.
+   */
+  private serializeCell(column: string, value: unknown): unknown {
+    const colType = this.columnTypes[column]
 
     // Convert undefined/null to empty string for Sheets
     if (value === undefined || value === null) return ''
 
-    // Schema-based serialization
+    let serialized: unknown
     if (colType) {
-      return this.serializeByType(value, colType)
+      // Schema-based serialization
+      serialized = this.serializeByType(value, colType)
+    } else if (Array.isArray(value)) {
+      // Auto-detect: serialize arrays and objects to JSON
+      serialized = JSON.stringify(value)
+    } else if (typeof value === 'object' && !(value instanceof Date)) {
+      serialized = JSON.stringify(value)
+    } else {
+      serialized = value
     }
 
-    // Auto-detect: serialize arrays and objects to JSON
-    if (Array.isArray(value)) return JSON.stringify(value)
-    if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-      return JSON.stringify(value)
-    }
-    return value
+    return this.escapeCellValue(serialized)
   }
 
   /** Serialize value based on column type */
@@ -739,4 +753,111 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const sheet = this.getSheet()
     return sheet.getDataRange().getValues()
   }
+
+  /**
+   * Physically add a column to the sheet: header row plus, when a default is
+   * given, a one-shot backfill of the empty cells in that column (#127).
+   *
+   * This adapter is positional — `rowToObject`/`objectToRow` map cell index to
+   * `this.columns[i]` — so a column has to exist in the physical layout before
+   * any value can be stored in it. A migration that only wrote values through
+   * `update()` left the sheet untouched while reporting success.
+   *
+   * Cost is independent of the row count: at most one header write plus one
+   * ranged write over the new column. Idempotent — re-running it on an
+   * already-added, already-backfilled column performs no write at all.
+   *
+   * @throws {UnknownColumnError} the column is not in the declared schema
+   * @throws {SchemaMismatchError} the physical header contradicts the schema
+   */
+  addColumn(column: string, options?: AddColumnOptions): void {
+    const targetIndex = this.columns.indexOf(column)
+    if (targetIndex < 0) {
+      throw new UnknownColumnError(column, this.sheetName, [...this.columns])
+    }
+
+    const sheet = this.getSheet()
+    const header = this.readHeader()
+    const headerIndex = header.indexOf(column)
+
+    if (headerIndex < 0) {
+      // The sheet is behind the schema. Its header must be a prefix of the
+      // declared columns minus the one being added; anything else means the
+      // positional mapping is already broken and writing would corrupt data.
+      const expected = this.columns.filter(col => col !== column)
+      if (!isPrefix(header, expected)) {
+        throw new SchemaMismatchError(this.sheetName, header, [...this.columns])
+      }
+
+      const position = targetIndex + 1
+      if (position <= header.length) {
+        // Mid-schema insert: shift the existing columns right so their values
+        // stay under their own header instead of sliding one column left.
+        sheet.insertColumnBefore(position)
+      }
+      // Rewrite the whole header from the schema to guarantee alignment.
+      sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+      this.invalidateDataCache()
+    } else if (headerIndex !== targetIndex) {
+      throw new SchemaMismatchError(this.sheetName, header, [...this.columns])
+    }
+
+    this.backfillColumn(column, targetIndex + 1, options?.default)
+  }
+
+  /** Read the current header row, trailing empty cells trimmed. */
+  private readHeader(): string[] {
+    const sheet = this.getSheet()
+    const lastColumn = sheet.getLastColumn()
+    if (lastColumn < 1) return []
+
+    const values = sheet.getRange(1, 1, 1, lastColumn).getValues()[0]
+    const header = values.map(value => (isEmptyCellValue(value) ? '' : String(value)))
+    while (header.length > 0 && header[header.length - 1] === '') {
+      header.pop()
+    }
+    return header
+  }
+
+  /**
+   * Write `defaultValue` into every empty cell of a column with one ranged
+   * write. Without a default nothing is written, so a re-run converges instead
+   * of rewriting all N rows every time.
+   */
+  private backfillColumn(column: string, position: number, defaultValue: unknown): void {
+    if (defaultValue === undefined) return
+
+    const sheet = this.getSheet()
+    const lastRow = sheet.getLastRow()
+    if (lastRow <= 1) return
+
+    const range = sheet.getRange(2, position, lastRow - 1, 1)
+    const current = range.getValues()
+    const cell = this.serializeCell(column, defaultValue)
+
+    let emptyCount = 0
+    const filled = current.map(([value]) => {
+      if (isEmptyCellValue(value)) {
+        emptyCount++
+        return [cell]
+      }
+      return [value]
+    })
+
+    if (emptyCount === 0) return
+
+    range.setValues(filled)
+    this.invalidateDataCache()
+  }
+}
+
+/** A sheet cell can hold no `undefined`: empty reads back as an empty string. */
+function isEmptyCellValue(value: unknown): boolean {
+  return value === undefined || value === null || value === ''
+}
+
+/** Whether `candidate` is a leading slice of `full`. */
+function isPrefix(candidate: readonly string[], full: readonly string[]): boolean {
+  if (candidate.length > full.length) return false
+  return candidate.every((value, index) => value === full[index])
 }

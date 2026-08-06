@@ -121,6 +121,53 @@ export class ValidationError extends SheetsQueryError {
 }
 
 /**
+ * Thrown when an operation targets a column the store cannot represent.
+ *
+ * A positional store (SheetsAdapter) can only read and write the columns it was
+ * declared with: `objectToRow` drops every other key. A schema operation on an
+ * undeclared column therefore has no effect at all, so it fails loudly instead
+ * of reporting a success it did not deliver (#127).
+ */
+export class UnknownColumnError extends SheetsQueryError {
+  constructor(
+    public readonly column: string,
+    public readonly tableName: string,
+    public readonly declaredColumns: string[]
+  ) {
+    super(
+      `Column "${column}" is not declared for "${tableName}". ` +
+      `Declared columns: ${declaredColumns.join(', ')}. ` +
+      'Add the column to the store schema (or regenerate your types) before migrating.',
+      'UNKNOWN_COLUMN'
+    )
+    this.name = 'UnknownColumnError'
+  }
+}
+
+/**
+ * Thrown when the physical layout of a sheet contradicts the declared schema.
+ *
+ * The adapter maps columns by position, so a header that is not the declared
+ * column list (minus columns not yet added) means reads are already misaligned.
+ * Writing into it would corrupt data, so the operation aborts (#127).
+ */
+export class SchemaMismatchError extends SheetsQueryError {
+  constructor(
+    public readonly tableName: string,
+    public readonly actualHeader: string[],
+    public readonly declaredColumns: string[]
+  ) {
+    super(
+      `Sheet "${tableName}" header [${actualHeader.join(', ')}] does not match the ` +
+      `declared columns [${declaredColumns.join(', ')}]. ` +
+      'Align the sheet header with the schema before running schema operations.',
+      'SCHEMA_MISMATCH'
+    )
+    this.name = 'SchemaMismatchError'
+  }
+}
+
+/**
  * Thrown when an invalid operator is used
  */
 export class InvalidOperatorError extends SheetsQueryError {

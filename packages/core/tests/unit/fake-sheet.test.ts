@@ -162,6 +162,36 @@ describe('FakeSheet', () => {
     })
   })
 
+  describe('insertColumnBefore', () => {
+    it('shifts cells at and after the position one column right', () => {
+      const sheet = new FakeSheet('Sheet1')
+      sheet.appendRow(['id', 'name'])
+      sheet.appendRow([1, 'John'])
+
+      sheet.insertColumnBefore(2)
+
+      expect(sheet.getRange(1, 1, 2, 3).getValues()).toEqual([
+        ['id', '', 'name'],
+        [1, '', 'John'],
+      ])
+    })
+
+    it('is a no-op for rows that end before the position', () => {
+      const sheet = new FakeSheet('Sheet1')
+      sheet.appendRow(['id', 'name'])
+
+      sheet.insertColumnBefore(5)
+
+      expect(sheet.getLastColumn()).toBe(2)
+      expect(sheet.getRange(1, 1, 1, 2).getValues()).toEqual([['id', 'name']])
+    })
+
+    it('throws for column indexes below 1', () => {
+      const sheet = new FakeSheet('Sheet1')
+      expect(() => sheet.insertColumnBefore(0)).toThrow(/must be >= 1/)
+    })
+  })
+
   describe('clear / clearContents', () => {
     it('clear empties the grid and resets frozen rows', () => {
       const sheet = new FakeSheet('Sheet1')

@@ -3,7 +3,7 @@
  * 
  * Provides version-controlled schema changes with up/down migrations.
  */
-import type { Row, RowWithId, DataStore } from './types'
+import type { Row, RowWithId, DataStore, BatchUpdateItem } from './types'
 import { SheetsQueryError } from './errors'
 import { withScriptLockAsync } from './script-lock'
 
@@ -310,23 +310,15 @@ export class MigrationRunner {
    */
   private applyOperation(operation: SchemaOperation): void {
     const store = this.storeResolver<RowWithId>(operation.table)
+
+    if (operation.type === 'addColumn') {
+      this.applyAddColumn(store, operation)
+      return
+    }
+
     const rows = store.findAll()
-    
+
     switch (operation.type) {
-      case 'addColumn': {
-        const defaultValue = operation.options?.default
-        for (const row of rows) {
-          // Treat an empty cell as "needs default" so a default is re-applied
-          // after a prior removeColumn cleared the value (#99, #112).
-          if (isEmptyCell((row as Record<string, unknown>)[operation.column!])) {
-            store.update(row.id as string | number, {
-              [operation.column!]: defaultValue
-            })
-          }
-        }
-        break
-      }
-      
       case 'removeColumn': {
         // Clears the column's value (in-memory: key left undefined; Sheets: cell
         // cleared). This is a value operation — it does not drop the column from
@@ -361,7 +353,51 @@ export class MigrationRunner {
       }
     }
   }
-  
+
+  /**
+   * Apply an addColumn operation.
+   *
+   * Stores whose column set is physical and positional (SheetsAdapter) must add
+   * the column themselves: writing values through `update()` cannot create a
+   * column there, so the migration silently did nothing while still recording
+   * itself as applied (#127). The store also owns the backfill, keeping it to a
+   * single ranged write instead of one update per row.
+   *
+   * Name-keyed stores (MockAdapter, LocalAdapter) have no physical schema, so
+   * the value backfill below is the whole operation. It writes only where the
+   * cell is empty — so a default is re-applied after a prior removeColumn
+   * cleared it (#99, #112) — and only when a default exists, so a no-default
+   * addColumn converges instead of rewriting every row on every run.
+   */
+  private applyAddColumn(store: DataStore<RowWithId>, operation: SchemaOperation): void {
+    const column = operation.column!
+    const defaultValue = operation.options?.default
+
+    if (store.addColumn) {
+      store.addColumn(column, { default: defaultValue })
+      return
+    }
+
+    if (defaultValue === undefined) return
+
+    const patches: BatchUpdateItem<RowWithId>[] = store
+      .findAll()
+      .filter(row => isEmptyCell((row as Record<string, unknown>)[column]))
+      .map(row => ({ id: row.id, data: { [column]: defaultValue } }))
+
+    if (patches.length === 0) return
+
+    // One batched write when the store supports it; per-row updates are the
+    // last resort (they are what made a 5,000-row backfill ~20,000 API calls).
+    if (store.batchUpdate) {
+      store.batchUpdate(patches)
+      return
+    }
+    for (const patch of patches) {
+      store.update(patch.id, patch.data)
+    }
+  }
+
   /**
    * Run all pending migrations
    * @param options - Optional: specify target version

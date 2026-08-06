@@ -127,6 +127,31 @@ Thrown when an invalid query operator is used.
 // validOperators: string[] (list of valid operators)
 ```
 
+### UnknownColumnError
+
+Thrown by a schema migration when the target column is not part of the store's
+declared schema. A positional store (`SheetsAdapter`) cannot hold a value for an
+undeclared column, so the migration fails instead of silently doing nothing.
+
+```ts
+// code: 'UNKNOWN_COLUMN'
+// column: string (the column the migration asked for)
+// tableName: string (sheet name)
+// declaredColumns: string[] (columns the store knows about)
+```
+
+### SchemaMismatchError
+
+Thrown by a schema migration when the sheet's physical header contradicts the
+declared columns; writing into a misaligned sheet would corrupt data.
+
+```ts
+// code: 'SCHEMA_MISMATCH'
+// tableName: string (sheet name)
+// actualHeader: string[] (header currently in the sheet)
+// declaredColumns: string[] (columns the store was created with)
+```
+
 ### MigrationVersionError
 
 Thrown for invalid migration version numbers or configurations.
@@ -183,6 +208,8 @@ try {
 | `MISSING_STORE` | `MissingStoreError` | Table config without matching store |
 | `VALIDATION_ERROR` | `ValidationError` | Input validation failure |
 | `INVALID_OPERATOR` | `InvalidOperatorError` | Invalid operator in where clause |
+| `UNKNOWN_COLUMN` | `UnknownColumnError` | `addColumn` for a column outside the store schema |
+| `SCHEMA_MISMATCH` | `SchemaMismatchError` | Sheet header contradicts the declared columns |
 | `MIGRATION_VERSION_ERROR` | `MigrationVersionError` | Invalid migration version |
 | `MIGRATION_EXECUTION_ERROR` | `MigrationExecutionError` | Migration up/down failure |
 | `NO_MIGRATIONS_TO_ROLLBACK` | `NoMigrationsToRollbackError` | Rollback with no applied migrations |

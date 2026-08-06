@@ -103,6 +103,22 @@ export class FakeSheet {
     this.grid.splice(rowIndex - 1, 1)
   }
 
+  /**
+   * Inserts a blank column before `columnIndex` (1-indexed), shifting cells at
+   * and after that position one column right. Rows whose content ends before
+   * the position are left as-is (they read as blank there either way).
+   */
+  insertColumnBefore(columnIndex: number): void {
+    if (columnIndex < 1) {
+      throw new Error(`insertColumnBefore: column index must be >= 1 (got ${columnIndex})`)
+    }
+    for (const row of this.grid) {
+      if (row.length >= columnIndex) {
+        row.splice(columnIndex - 1, 0, '')
+      }
+    }
+  }
+
   /** Empties the grid and resets frozen-row state. */
   clear(): void {
     this.grid = []

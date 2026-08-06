@@ -54,6 +54,16 @@ export interface QueryOptions<T = Row> {
  */
 export type UpdateData<T extends RowWithId> = Partial<Omit<T, 'id'>>
 
+/** Options for the optional {@link DataStore.addColumn} schema operation */
+export interface AddColumnOptions {
+  /**
+   * Value written into existing rows whose cell for this column is empty.
+   * Omitted (or `undefined`) means "no backfill" — only the column itself is
+   * added, so re-running the operation converges instead of rewriting rows.
+   */
+  default?: unknown
+}
+
 /** Batch update item - id and data to update */
 export interface BatchUpdateItem<T extends RowWithId = RowWithId> {
   id: string | number
@@ -88,6 +98,21 @@ export interface DataStore<T extends RowWithId = RowWithId> {
   
   /** Batch update multiple rows at once (optional) */
   batchUpdate?(items: BatchUpdateItem<T>[]): T[]
+
+  /**
+   * Physically add a column to the underlying storage (optional).
+   *
+   * Implemented by stores whose column set is fixed and positional, such as
+   * SheetsAdapter: there, a column that is not part of the physical layout
+   * cannot hold a value at all, so a migration must add the column itself
+   * rather than write values through `update()` (#127). Implementations must
+   * be idempotent and must not cost more I/O as the row count grows: the
+   * default backfill is a single ranged write.
+   *
+   * Name-keyed stores (MockAdapter, LocalAdapter) omit this — any key is
+   * representable there, so MigrationRunner falls back to a value backfill.
+   */
+  addColumn?(column: string, options?: AddColumnOptions): void
 }
 
 // ============================================================================

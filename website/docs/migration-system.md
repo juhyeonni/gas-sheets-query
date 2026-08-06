@@ -54,6 +54,28 @@ interface ColumnOptions<T = unknown> {
 }
 ```
 
+### How `addColumn` is applied
+
+`SheetsAdapter` maps cells to fields **by position**, so the column has to be part
+of the store's declared `columns` before it can hold anything:
+
+- **Declared in `columns`, missing from the sheet** — the migration writes the
+  header (inserting the physical column at its schema position when it is not the
+  last one) and, if a `default` is given, backfills every empty cell in that
+  column with **one ranged write**. Cost does not grow with the row count.
+- **Not declared in `columns`** — the migration throws `UnknownColumnError`
+  (wrapped in `MigrationExecutionError`). Nothing is written and the schema
+  version does not advance, instead of reporting a success that never reached the
+  sheet. Add the column to your schema (or regenerate your types) and re-run.
+- **Sheet header contradicts the schema** — `SchemaMismatchError`, for the same
+  reason: writing into a misaligned sheet would corrupt data.
+
+Without a `default`, no row values are written at all, so re-running a migration
+is a no-op rather than a full rewrite of the table. In-memory stores
+(`MockAdapter`, `@gsquery/client`'s `LocalAdapter`) are keyed by name, not by
+position: they accept any column, and the backfill goes through a single
+`batchUpdate`.
+
 ## MigrationRunner
 
 ### Creating a Runner
