@@ -6,6 +6,9 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    // Guard (#134): errors on a type re-exported in value position, which would
+    // otherwise land in .d.ts as a value export that the bundled JS cannot provide.
+    "verbatimModuleSyntax": true
   }
 }

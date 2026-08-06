@@ -13,7 +13,8 @@ import type {
 } from './types'
 import { Repository } from './repository'
 import { QueryBuilder, createQueryBuilder } from './query-builder'
-import { JoinQueryBuilder, createJoinQueryBuilder, StoreResolver } from './join-query-builder'
+import { JoinQueryBuilder, createJoinQueryBuilder } from './join-query-builder'
+import type { StoreResolver } from './join-query-builder'
 import { TableNotFoundError, MissingStoreError } from './errors'
 import { MockAdapter } from '../adapters/mock-adapter'
 
