@@ -74,6 +74,43 @@ describe('sheet auto-creation race (#178)', () => {
     expect(spreadsheet.getSheetByName('users')?.getRange(1, 1, 1, 2).getValues()[0]).toEqual(['id', 'name'])
   })
 
+  it('adopts the winner even when the in-lock re-check also reads stale (live repro of run 31298880115)', () => {
+    const spreadsheet = new FakeSpreadsheet('S')
+    const handle = installGasFakes({ spreadsheets: { S: spreadsheet }, activeId: 'S' })
+    restore = () => handle.restore()
+
+    // Model the harsher live failure: BOTH the unlocked check and the
+    // in-lock re-check read a stale "no such sheet" view (a Spreadsheet
+    // handle's sheet list can lag another execution's creation even under
+    // the lock). insertSheet then throws on the taken name, and only the
+    // adopt-on-failure path can recover.
+    const realGetSheetByName = spreadsheet.getSheetByName.bind(spreadsheet)
+    let staleReads = 0
+    spreadsheet.getSheetByName = (name: string) => {
+      const found = realGetSheetByName(name)
+      if (name === 'users' && found && staleReads < 2) {
+        staleReads++
+        return null // stale handle: the winner's sheet is not visible yet
+      }
+      if (name === 'users' && !found && staleReads === 0) {
+        staleReads++
+        const winner = makeAdapter()
+        winner.insert({ name: 'winner-row' })
+        return null
+      }
+      return found
+    }
+
+    const loser = makeAdapter()
+    const inserted = loser.insert({ name: 'loser-row' })
+
+    const rows = loser.findAll()
+    expect(rows.length).toBe(2)
+    expect(rows.map(r => r.name).sort()).toEqual(['loser-row', 'winner-row'])
+    expect(rows.find(r => r.id === inserted.id)?.name).toBe('loser-row')
+    expect(spreadsheet.getSheets().length).toBe(1)
+  })
+
   it('creates the sheet exactly once when it truly does not exist', () => {
     const spreadsheet = new FakeSpreadsheet('S')
     const handle = installGasFakes({ spreadsheets: { S: spreadsheet }, activeId: 'S' })
