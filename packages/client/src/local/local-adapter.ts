@@ -18,7 +18,13 @@ import type {
   IdMode,
   UpdateData,
 } from '@gsquery/core'
-import { IndexStore, evaluateCondition, compareRows, deserializeRow } from '@gsquery/core'
+import {
+  IndexStore,
+  evaluateCondition,
+  compareRows,
+  deserializeRow,
+  DuplicateIdError,
+} from '@gsquery/core'
 import type { IndexDefinition, ColumnType } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
 import type { MutationStorage } from './mutation-queue.js'
@@ -265,13 +271,50 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     return this.data[index]
   }
 
+  /** Read the id of a client-mode row, throwing when the caller omitted it. */
+  private requireClientId(data: Omit<T, 'id'> | T): string | number {
+    if (!('id' in data)) {
+      throw new Error(`ID is required in client mode (idMode: 'client')`)
+    }
+    return (data as T).id
+  }
+
+  /** Every id currently held, keyed as strings so 1 and '1' collide. */
+  private readExistingIdKeys(): Set<string> {
+    const keys = new Set<string>()
+    for (const row of this.data) {
+      keys.add(String(row.id))
+    }
+    return keys
+  }
+
+  /**
+   * Reject client-supplied ids that already exist locally, or that repeat
+   * within the same batch — the same contract SheetsAdapter enforces on the
+   * server (#128/#154). Called before any mutation, so a rejected write leaves
+   * the rows, the MutationQueue and IndexedDB untouched: the duplicate fails
+   * at the call site instead of being pushed and dead-lettered (#132).
+   *
+   * Rows arriving through replaceAll()/reset() are seeded verbatim and are not
+   * checked, mirroring rows that were already on the sheet.
+   */
+  private assertClientIdsAvailable(ids: (string | number)[]): void {
+    const existing = this.readExistingIdKeys()
+    for (const id of ids) {
+      const key = String(id)
+      if (existing.has(key)) {
+        throw new DuplicateIdError(id, this.tableName)
+      }
+      existing.add(key)
+    }
+  }
+
   insert(data: Omit<T, 'id'> | T): T {
     let newRow: T
 
     if (this.idMode === 'client') {
-      if (!('id' in data)) {
-        throw new Error(`ID is required in client mode (idMode: 'client')`)
-      }
+      const id = this.requireClientId(data)
+      this.assertClientIdsAvailable([id])
       newRow = data as T
     } else {
       const id = this.nextId++
@@ -331,33 +374,36 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
-    const results: T[] = []
-    const startIndex = this.data.length
+    // Resolve and validate every row up front: a rejected batch must leave the
+    // rows, the queue and IndexedDB untouched, matching SheetsAdapter (#154).
+    const newRows: T[] = []
 
-    for (let i = 0; i < items.length; i++) {
-      let newRow: T
-
-      if (this.idMode === 'client') {
-        if (!('id' in items[i])) {
-          throw new Error(`ID is required in client mode (idMode: 'client')`)
-        }
-        newRow = items[i] as T
-      } else {
-        const id = this.nextId++
-        newRow = { ...items[i], id } as T
+    if (this.idMode === 'client') {
+      const ids: (string | number)[] = []
+      for (const item of items) {
+        ids.push(this.requireClientId(item))
+        newRows.push(item as T)
       }
+      this.assertClientIdsAvailable(ids)
+    } else {
+      for (const item of items) {
+        newRows.push({ ...item, id: this.nextId++ } as T)
+      }
+    }
 
+    const startIndex = this.data.length
+    for (let i = 0; i < newRows.length; i++) {
+      const newRow = newRows[i]
       const rowIndex = startIndex + i
       this.data.push(newRow)
       this.idIndex.set(newRow.id, rowIndex)
       this.indexStore.addToIndex(rowIndex, newRow)
 
       this.queue.push('insert', newRow.id, undefined, newRow)
-      results.push(newRow)
     }
 
     this.schedulePersist()
-    return results
+    return newRows
   }
 
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
