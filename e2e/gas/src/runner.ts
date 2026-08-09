@@ -11,6 +11,13 @@ export interface TestResult {
   ok: boolean
   error?: string
   ms: number
+  /**
+   * Free-form notes a test emitted via {@link TestApi.info} — per-operation
+   * timings for the volume budget, "skipped under fakes" markers for the
+   * human-interference probes. Reported alongside the result so a green CI run
+   * still carries the numbers; never used for pass/fail.
+   */
+  info?: string
 }
 
 export interface SuiteResult {
@@ -22,13 +29,22 @@ export interface SuiteResult {
   results: TestResult[]
 }
 
+/** Handle passed to every test for attaching non-assertional notes. */
+export interface TestApi {
+  /** Record a note (timing, skip reason) on this test's result. */
+  info(message: string): void
+}
+
 /**
  * Tests must be fully synchronous: the GAS web-app dispatcher rejects a
  * Promise returned from doGet ("returned value is not a supported return
  * type" — verified against the real platform), so nothing in the request
  * path may await.
+ *
+ * The {@link TestApi} argument is optional at the call site — tests that need
+ * no notes keep the original `() => void` shape.
  */
-type TestFn = () => void
+type TestFn = (t: TestApi) => void
 
 const registry: { name: string; fn: TestFn }[] = []
 
@@ -46,12 +62,17 @@ export function runSuite(): SuiteResult {
 
   for (const { name, fn } of registry) {
     const start = Date.now()
+    const notes: string[] = []
+    // Notes survive a failure too: the timings/skips recorded before the throw
+    // are usually what explains it.
+    const api: TestApi = { info: (message: string) => { notes.push(message) } }
+    const info = (): string | undefined => (notes.length > 0 ? notes.join(' | ') : undefined)
     try {
-      fn()
-      results.push({ name, ok: true, ms: Date.now() - start })
+      fn(api)
+      results.push({ name, ok: true, ms: Date.now() - start, info: info() })
     } catch (err) {
       const error = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-      results.push({ name, ok: false, error, ms: Date.now() - start })
+      results.push({ name, ok: false, error, ms: Date.now() - start, info: info() })
     }
   }
 
