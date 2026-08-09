@@ -40,7 +40,7 @@
     "directory": "packages/client"
   },
   "dependencies": {
-    "@gsquery/core": "workspace:*"
+    "@gsquery/core": "workspace:^"
   },
   "devDependencies": {
     "@types/google-apps-script": "^2.0.8",
