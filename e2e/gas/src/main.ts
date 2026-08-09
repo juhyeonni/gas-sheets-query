@@ -39,13 +39,13 @@ function newRunId(): string {
   return new Date().getTime().toString(36)
 }
 
-export async function runAll(spreadsheetId?: string, runId?: string): Promise<SuiteResult & { runId: string }> {
+export function runAll(spreadsheetId?: string, runId?: string): SuiteResult & { runId: string } {
   const id = spreadsheetId ?? getSpreadsheetId()
   const rid = runId ?? newRunId()
 
   clearTests()
   registerTests({ spreadsheetId: id, runId: rid })
-  const suite = await runSuite()
+  const suite = runSuite()
 
   cleanupRunSheets(id, rid)
   return { ...suite, runId: rid }
@@ -151,13 +151,13 @@ interface DoGetEvent {
 /**
  * Web-app entrypoint. Always returns JSON.
  *
- * Declared async: the V8 runtime awaits the promise returned by the invoked
- * entry function before serializing the response, which is what lets the
- * suite's one async step (MigrationRunner.migrate) settle. If a future
- * runtime change breaks async doGet, `runAllTests()` from the editor remains
- * a working fallback.
+ * MUST stay synchronous end to end: the web-app dispatcher does NOT await a
+ * Promise returned from doGet — it fails with "returned value is not a
+ * supported return type" (verified against the real platform; editor runs
+ * DO await async entrypoints, which is why runAllTests worked while the
+ * async doGet did not).
  */
-export async function doGet(e: DoGetEvent): Promise<GoogleAppsScript.Content.TextOutput> {
+export function doGet(e: DoGetEvent): GoogleAppsScript.Content.TextOutput {
   const params = e?.parameter ?? {}
   const respond = (body: unknown): GoogleAppsScript.Content.TextOutput =>
     ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON)
@@ -169,7 +169,7 @@ export async function doGet(e: DoGetEvent): Promise<GoogleAppsScript.Content.Tex
   try {
     switch (params.action) {
       case 'run':
-        return respond(await runAll())
+        return respond(runAll())
       case 'burst':
         return respond(burst(params.tag ?? 'a', Number(params.n ?? '25')))
       case 'burstCheck':
@@ -186,8 +186,8 @@ export async function doGet(e: DoGetEvent): Promise<GoogleAppsScript.Content.Tex
 }
 
 /** Editor-friendly entrypoint: run everything and log the JSON result. */
-export async function runAllTests(): Promise<SuiteResult & { runId: string }> {
-  const result = await runAll()
+export function runAllTests(): SuiteResult & { runId: string } {
+  const result = runAll()
   Logger.log(JSON.stringify(result, null, 2))
   return result
 }

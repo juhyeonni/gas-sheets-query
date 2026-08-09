@@ -10,8 +10,7 @@
  * spreadsheet and the harness deletes all `e2e_<runId>_*` sheets afterwards
  * (when the runtime supports sheet deletion — the Node fakes do not).
  */
-import type { DataStore, StoreResolver } from '@gsquery/core'
-import { MigrationRunner, SheetsAdapter } from '@gsquery/core'
+import { SheetsAdapter } from '@gsquery/core'
 import type { ColumnType } from '@gsquery/core'
 import { assertEq, assertOk, assertThrows, test } from './runner'
 
@@ -160,8 +159,14 @@ export function registerTests(ctx: HarnessContext): void {
     assertEq(row?.meta, { k: 1, nested: { ok: true } }, 'json object')
   })
 
-  // ── 8. Migration addColumn: physical header + single-pass backfill (#127) ─
-  test('migration addColumn: header extended, defaults backfilled, converges on rerun', async () => {
+  // ── 8. addColumn: physical header + single-pass backfill (#127) ──────────
+  // Exercises SheetsAdapter.addColumn directly (synchronous) rather than
+  // through MigrationRunner.migrate(): the web-app request path must stay
+  // fully synchronous (see runner.ts), and the runner's async orchestration
+  // is covered by the unit suite and the local fake check. What only real
+  // GAS can prove — the physical column insert, ranged backfill, and
+  // convergence — lives in the adapter method tested here.
+  test('addColumn: header physically extended, defaults backfilled, converges on rerun', () => {
     const slug = 'mig'
     const name = sheetName(slug)
     // Seed with the OLD schema (no `status` column yet).
@@ -175,25 +180,10 @@ export function registerTests(ctx: HarnessContext): void {
       sheetName: name,
       columns: ['id', 'name', 'status']
     })
-    const migrationsStore = makeAdapter('migrec', ['id', 'version', 'name', 'appliedAt'])
-    const runner = new MigrationRunner({
-      migrationsStore: migrationsStore as unknown as DataStore<never>,
-      storeResolver: (() => store) as unknown as StoreResolver,
-      migrations: [
-        {
-          version: 1,
-          name: 'add status',
-          up: db => db.addColumn('t', 'status', { default: 'unknown' }),
-          down: db => db.removeColumn('t', 'status')
-        }
-      ]
-    })
-
-    const result = await runner.migrate()
-    assertEq(result.currentVersion, 1, 'version advanced')
+    store.addColumn('status', { default: 'unknown' })
 
     const rows = store.findAll()
-    assertEq(rows.length, 2, 'both rows present after migration')
+    assertEq(rows.length, 2, 'both rows present after addColumn')
     assertOk(rows.every(r => r.status === 'unknown'), 'default backfilled into every row')
 
     // The physical header row must actually contain the new column — this is
@@ -202,40 +192,26 @@ export function registerTests(ctx: HarnessContext): void {
     const ss = SpreadsheetApp.openById(ctx.spreadsheetId)
     const sheet = ss.getSheetByName(name)
     assertOk(sheet, 'migrated sheet exists')
+    const grid = (): string => JSON.stringify(sheet?.getRange(1, 1, 3, 3).getValues())
     const header = sheet ? (sheet.getRange(1, 1, 1, 3).getValues()[0] as string[]) : []
     assertEq(header, ['id', 'name', 'status'], 'physical header row extended')
 
-    // Convergence: a second migrate() must be a no-op.
-    const again = await runner.migrate()
-    assertEq(again.applied.length, 0, 'rerun applies nothing')
+    // Convergence: a second addColumn must not touch the grid at all.
+    const before = grid()
+    store.addColumn('status', { default: 'unknown' })
+    assertEq(grid(), before, 'rerun leaves the grid byte-identical')
   })
 
-  // ── 9. Migration addColumn for an undeclared column fails loudly (#127) ──
-  test('migration addColumn: undeclared column fails and does not advance the version', async () => {
+  // ── 9. addColumn for an undeclared column fails loudly (#127) ────────────
+  test('addColumn: undeclared column throws UnknownColumnError, sheet untouched', () => {
     const store = makeAdapter('migbad', ['id', 'name'])
     store.insert({ name: 'x' })
-    const migrationsStore = makeAdapter('migbadrec', ['id', 'version', 'name', 'appliedAt'])
-    const runner = new MigrationRunner({
-      migrationsStore: migrationsStore as unknown as DataStore<never>,
-      storeResolver: (() => store) as unknown as StoreResolver,
-      migrations: [
-        {
-          version: 1,
-          name: 'add ghost',
-          up: db => db.addColumn('t', 'ghost', { default: 'boo' }),
-          down: db => db.removeColumn('t', 'ghost')
-        }
-      ]
-    })
 
-    let threw = false
-    try {
-      await runner.migrate()
-    } catch {
-      threw = true
-    }
-    assertOk(threw, 'migrate() rejected')
-    assertEq(runner.getCurrentVersion(), 0, 'version did not advance')
+    assertThrows(() => store.addColumn('ghost', { default: 'boo' }), 'UNKNOWN_COLUMN', 'addColumn(ghost)')
+
+    const rows = store.findAll()
+    assertEq(rows.length, 1, 'row count unchanged')
+    assertEq(rows[0]?.name, 'x', 'row content unchanged')
   })
 
   // ── 10. Stale-index guard: delete above, then update below (#128) ────────
