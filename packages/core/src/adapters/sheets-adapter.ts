@@ -652,48 +652,58 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     if (items.length === 0) return []
 
     this.invalidateDataCache()
-    const results: T[] = []
     const sheet = this.getSheet()
-    
+
     // Build a map of id -> data for batch processing
     const updateMap = new Map<string | number, Partial<Omit<T, 'id'>>>()
     for (const { id, data } of items) {
       updateMap.set(id, data)
     }
 
-    // Get all data to find rows to update
-    const lastRow = sheet.getLastRow()
-    if (lastRow <= 1) return results
+    // Read, resolve row indices and write inside one lock. The row numbers
+    // below are positions within the block read at the top, so a concurrent
+    // deleteRow or insert landing in between shifts them and the ranged writes
+    // hit the wrong rows — the stale-index race of #128, amplified because
+    // writeRowRuns rewrites a whole contiguous span at once (#155).
+    // withScriptLock is re-entrant, so callers already holding the lock (a
+    // migration delegating to batchUpdate) reuse their acquisition.
+    return this.withLock(() => {
+      const results: T[] = []
 
-    const allData = sheet.getRange(2, 1, lastRow - 1, this.columns.length).getValues()
-    const idColIndex = this.columns.indexOf(this.idColumn)
+      // Get all data to find rows to update
+      const lastRow = sheet.getLastRow()
+      if (lastRow <= 1) return results
 
-    const updatedRows: { rowIndex: number; values: unknown[] }[] = []
+      const allData = sheet.getRange(2, 1, lastRow - 1, this.columns.length).getValues()
+      const idColIndex = this.columns.indexOf(this.idColumn)
 
-    for (let i = 0; i < allData.length; i++) {
-      // Unescape so an escaped id still matches the caller's id (#130).
-      const rowId = this.unescapeCellValue(allData[i][idColIndex]) as string | number
-      const updateData = updateMap.get(rowId) ?? updateMap.get(String(rowId))
-      
-      if (updateData) {
-        const currentRow = this.rowToObject(allData[i])
-        const updatedRow = { ...currentRow, ...updateData } as T
-        // id is immutable via batchUpdate too — mirrors the guard update()
-        // already has (#98/#113). Without this, `data` carrying an id rewrites
-        // the key cell and the row becomes reachable only at its new id.
-        ;(updatedRow as Record<string, unknown>)[this.idColumn] =
-          (currentRow as Record<string, unknown>)[this.idColumn]
-        results.push(updatedRow)
-        updatedRows.push({
-          rowIndex: i + 2, // +2 for header and 1-indexing
-          values: this.objectToRow(updatedRow)
-        })
+      const updatedRows: { rowIndex: number; values: unknown[] }[] = []
+
+      for (let i = 0; i < allData.length; i++) {
+        // Unescape so an escaped id still matches the caller's id (#130).
+        const rowId = this.unescapeCellValue(allData[i][idColIndex]) as string | number
+        const updateData = updateMap.get(rowId) ?? updateMap.get(String(rowId))
+
+        if (updateData) {
+          const currentRow = this.rowToObject(allData[i])
+          const updatedRow = { ...currentRow, ...updateData } as T
+          // id is immutable via batchUpdate too — mirrors the guard update()
+          // already has (#98/#113). Without this, `data` carrying an id rewrites
+          // the key cell and the row becomes reachable only at its new id.
+          ;(updatedRow as Record<string, unknown>)[this.idColumn] =
+            (currentRow as Record<string, unknown>)[this.idColumn]
+          results.push(updatedRow)
+          updatedRows.push({
+            rowIndex: i + 2, // +2 for header and 1-indexing
+            values: this.objectToRow(updatedRow)
+          })
+        }
       }
-    }
-    
-    this.writeRowRuns(sheet, updatedRows)
 
-    return results
+      this.writeRowRuns(sheet, updatedRows)
+
+      return results
+    })
   }
 
   /**

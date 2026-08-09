@@ -136,6 +136,31 @@ function interruptAfterIdScan(sheet: FakeSheet, run: () => void): void {
   )
 }
 
+/**
+ * Fires `run` once, right after the first full-width data-block read returns —
+ * i.e. between batchUpdate's "read every row" and its ranged writes, where a
+ * concurrent deleteRow shifts every computed row index up by one.
+ */
+function interruptAfterDataScan(sheet: FakeSheet, run: () => void): void {
+  let armed = true
+  const original = sheet.getRange.bind(sheet)
+  vi.spyOn(sheet, 'getRange').mockImplementation(
+    (row: number, col: number, numRows = 1, numCols = 1) => {
+      const range = original(row, col, numRows, numCols)
+      if (armed && row === 2 && col === 1 && numCols === COLUMNS.length) {
+        armed = false
+        const getValues = range.getValues.bind(range)
+        range.getValues = () => {
+          const values = getValues()
+          run()
+          return values
+        }
+      }
+      return range
+    }
+  )
+}
+
 /** Fires `run` once, right after the first `getLastRow()` reads its value. */
 function interruptAfterLastRow(sheet: FakeSheet, run: () => void): void {
   let armed = true
@@ -256,6 +281,41 @@ describe('SheetsAdapter concurrency (#128)', () => {
       other.drain()
 
       expect(idsOnSheet(sheet).sort()).toEqual(['a', 'b', 'c', 'd'])
+    })
+  })
+
+  describe('batchUpdate()', () => {
+    it('does not overwrite an unrelated row when another execution deletes a row above (#155)', () => {
+      const sheet = setupSharedSheet([
+        ['id', 'name', 'age'],
+        [1, 'Alice', 30],
+        [2, 'Bob', 25],
+        [3, 'Carol', 35],
+        [4, 'Dave', 40]
+      ])
+      const lockState = installExclusiveLock()
+
+      const writer = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+      const deleter = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+
+      const other = concurrentExecution(lockState, () => {
+        deleter.delete(1)
+      })
+      // The delete lands between the data-block read and writeRowRuns, so an
+      // unlocked batchUpdate writes Carol's values into row 4 — which by then
+      // holds Dave.
+      interruptAfterDataScan(sheet, () => other.run())
+
+      const results = writer.batchUpdate([{ id: 3, data: { name: 'Carol Updated' } }])
+      other.drain()
+
+      expect(results).toEqual([{ id: 3, name: 'Carol Updated', age: 35 }])
+      expect(idsOnSheet(sheet)).toEqual([2, 3, 4])
+      expect(dataRows(sheet)).toEqual([
+        [2, 'Bob', 25],
+        [3, 'Carol Updated', 35],
+        [4, 'Dave', 40]
+      ])
     })
   })
 
@@ -389,6 +449,24 @@ describe('SheetsAdapter lock coverage (#128)', () => {
     expect(order(lock.releaseLock)).toBeGreaterThan(order(write!))
   })
 
+  it('batchUpdate() holds the lock across the data read and the write (#155)', () => {
+    const sheet = fromArrays({
+      [SHEET_NAME]: [
+        ['id', 'name', 'age'],
+        [1, 'Alice', 30]
+      ]
+    }).getSheetByName(SHEET_NAME)!
+    const lock = setupCapturedLock(sheet)
+    const { getRange, lastWrite } = captureWrites(sheet)
+
+    new SheetsAdapter<TestRow>(BASE_OPTIONS).batchUpdate([{ id: 1, data: { name: 'Updated' } }])
+
+    const write = lastWrite()
+    expect(write).toBeDefined()
+    expect(order(lock.waitLock)).toBeLessThan(order(getRange))
+    expect(order(lock.releaseLock)).toBeGreaterThan(order(write!))
+  })
+
   it('keeps working when LockService is unavailable (Node)', () => {
     const sheet = setupSharedSheet([
       ['id', 'name', 'age'],
@@ -398,6 +476,9 @@ describe('SheetsAdapter lock coverage (#128)', () => {
 
     const adapter = new SheetsAdapter<TestRow>(BASE_OPTIONS)
     expect(adapter.update(1, { name: 'Updated' })?.name).toBe('Updated')
+    expect(adapter.batchUpdate([{ id: 1, data: { name: 'Batched' } }])).toEqual([
+      { id: 1, name: 'Batched', age: 30 }
+    ])
     expect(adapter.delete(1)).toBe(true)
 
     const clientAdapter = new SheetsAdapter<TestRow>({ ...BASE_OPTIONS, idMode: 'client' })
