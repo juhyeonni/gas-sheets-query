@@ -150,17 +150,25 @@ export class UnknownColumnError extends SheetsQueryError {
  * The adapter maps columns by position, so a header that is not the declared
  * column list (minus columns not yet added) means reads are already misaligned.
  * Writing into it would corrupt data, so the operation aborts (#127).
+ *
+ * Also raised by the per-execution header-drift guard on every read and write
+ * path (#179), which passes a `detail` naming the first diverging position.
  */
 export class SchemaMismatchError extends SheetsQueryError {
   constructor(
     public readonly tableName: string,
     public readonly actualHeader: string[],
-    public readonly declaredColumns: string[]
+    public readonly declaredColumns: string[],
+    /**
+     * Guidance replacing the generic closing sentence — used by the drift
+     * guard to point at the exact column that diverged and what to do next.
+     */
+    detail?: string
   ) {
     super(
       `Sheet "${tableName}" header [${actualHeader.join(', ')}] does not match the ` +
       `declared columns [${declaredColumns.join(', ')}]. ` +
-      'Align the sheet header with the schema before running schema operations.',
+      (detail ?? 'Align the sheet header with the schema before running schema operations.'),
       'SCHEMA_MISMATCH'
     )
     this.name = 'SchemaMismatchError'

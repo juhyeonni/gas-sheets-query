@@ -98,6 +98,28 @@ export interface SheetsAdapterOptions {
    * itself and are meant to be formulas; never for user input.
    */
   allowFormulas?: boolean
+  /**
+   * Skip the per-execution header-drift check (default: false).
+   *
+   * By default every read and write path verifies once per execution that the
+   * physical header row still agrees with {@link SheetsAdapterOptions.columns},
+   * and throws {@link SchemaMismatchError} otherwise (#179). The check exists
+   * because this adapter is positional: a column a collaborator inserts to the
+   * left of an existing one shifts every value one place right, which
+   * previously made reads return the neighbouring column's values and made
+   * `update()` overwrite the human's column while leaving the real one stale —
+   * silent data loss, confirmed on the live platform.
+   *
+   * Enable this only for sheets whose header row is deliberately not the
+   * column list (a decorative or localized title row, a header the script does
+   * not own). Doing so restores the old, dangerous behavior: misalignment is
+   * silent again, and it is on the caller to keep the physical layout in the
+   * declared order.
+   *
+   * Costs nothing to leave off: the check is a single 1×N read of row 1 per
+   * execution, shared by every operation.
+   */
+  skipHeaderCheck?: boolean
 }
 
 
@@ -140,12 +162,18 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private idMode: IdMode
   private columnTypes: Record<string, ColumnType>
   private allowFormulas: boolean
+  private skipHeaderCheck: boolean
 
   // Sheet reference cache
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null
   // Data cache - invalidated on write operations
   private _dataCache: T[] | null = null
+  /**
+   * Whether the physical header was already checked against the schema in this
+   * execution (#179). Set only on success, so a drifted sheet keeps throwing.
+   */
+  private _headerVerified = false
 
   constructor(options: SheetsAdapterOptions) {
     this.spreadsheetId = options.spreadsheetId
@@ -156,6 +184,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this.idMode = options.idMode ?? 'auto'
     this.columnTypes = options.columnTypes ?? {}
     this.allowFormulas = options.allowFormulas ?? false
+    this.skipHeaderCheck = options.skipHeaderCheck ?? false
 
     // Validate that id column is in columns
     if (!this.columns.includes(this.idColumn)) {
@@ -257,11 +286,90 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this._sheet = null
     this._spreadsheet = null
     this._dataCache = null
+    // The sheet may have been edited since the last check — re-arm the guard.
+    this._headerVerified = false
   }
 
   /** Invalidate data cache (called after write operations) */
   private invalidateDataCache(): void {
     this._dataCache = null
+  }
+
+  /**
+   * Assert, once per execution, that the physical header row still agrees with
+   * the declared {@link SheetsAdapterOptions.columns} (#179).
+   *
+   * ## Why every operation calls this
+   *
+   * The adapter is positional: `rowToObject` maps cell *i* to `columns[i]` and
+   * `objectToRow` writes back over columns 1..N. A collaborator who inserts a
+   * column to the left of an existing one therefore shifts every value one
+   * place right, and nothing downstream can tell. On the live platform that
+   * produced a silent misread on every field right of the insert, and an
+   * `update()` that overwrote the human's column while leaving the real
+   * trailing column stale (gas-e2e run 31298563680). This converts both into a
+   * loud, typed failure naming the column that drifted.
+   *
+   * ## Placement and cost
+   *
+   * Called at the top of every public data operation rather than from
+   * {@link getSheet}, for two reasons: `addColumn` (and the physical schema ops
+   * that follow it) legitimately runs against a header the schema has already
+   * moved past and does its own, stricter validation, so it must not be
+   * short-circuited here; and a guard tied to the sheet handle would be skipped
+   * by any future path that resolves the sheet some other way.
+   *
+   * The `_headerVerified` flag makes the check cost **one 1×N read of row 1 per
+   * execution**, no matter how many operations run — the flag is reset only by
+   * {@link clearCache} (a new execution, or an explicit "re-read everything"),
+   * never by {@link invalidateDataCache}, because a row write cannot move a
+   * column. Folding the read into `findAll`'s bulk `getRange` (starting at row
+   * 1 instead of row 2) would make it free for read-first executions, but a
+   * write-only execution would still need its own header read, `_dataCache`
+   * would have to carry a header slot, and the empty-sheet path (`lastRow <= 1`,
+   * which reads nothing at all today) would need a second branch. One
+   * single-row read, shared by every entry point, is the simpler contract.
+   *
+   * ## What counts as drift
+   *
+   * Only the first `columns.length` header cells are read, and a position
+   * counts as diverging only when the sheet has a non-empty header there that
+   * differs from the declared name. So:
+   * - a header that is a **prefix** of the schema (a sheet not yet migrated by
+   *   `addColumn`) passes — the mapping is still aligned;
+   * - extra physical columns to the **right** of the schema pass — they are
+   *   never read and never written;
+   * - a sheet with no header row at all passes — nothing to contradict;
+   * - an inserted, renamed or reordered column fails at its position.
+   *
+   * @throws {SchemaMismatchError} the header contradicts the declared columns
+   */
+  private assertHeaderAligned(): void {
+    if (this.skipHeaderCheck || this._headerVerified) return
+
+    const sheet = this.getSheet()
+    const cells = this.sheetsCall(() =>
+      sheet.getRange(1, 1, 1, this.columns.length).getValues()
+    )[0]
+    const header = cells.map(value => (isEmptyCellValue(value) ? '' : String(value)))
+
+    for (let i = 0; i < this.columns.length; i++) {
+      const found = header[i]
+      if (found === '' || found === this.columns[i]) continue
+      throw new SchemaMismatchError(
+        this.sheetName,
+        header,
+        [...this.columns],
+        `Header column ${i + 1} (${toColumnLetter(i)}) expected "${this.columns[i]}" but found ` +
+        `"${found}", so every value from that column on is read and written one place off. ` +
+        'A column may have been inserted/renamed/reordered in the sheet — align the sheet or ' +
+        'the schema. If this fired right after a migration, the value-level renameColumn ' +
+        'never updated the physical header (see #180). To accept the misalignment anyway, ' +
+        'construct the adapter with skipHeaderCheck: true.'
+      )
+    }
+
+    this._headerVerified = true
   }
 
   /**
@@ -609,6 +717,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   findAll(): T[] {
+    this.assertHeaderAligned()
+
     if (this._dataCache !== null) {
       return [...this._dataCache]
     }
@@ -632,6 +742,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   findById(id: string | number): T | undefined {
+    this.assertHeaderAligned()
+
     const rowIndex = this.findRowIndexById(id)
     if (rowIndex === -1) return undefined
     
@@ -643,6 +755,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   find(options: QueryOptions<T>): T[] {
+    this.assertHeaderAligned()
+
     // Get all data first (GAS doesn't support SQL-like queries)
     let result = this.findAll()
     
@@ -672,6 +786,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   insert(data: Omit<T, 'id'> | T): T {
+    this.assertHeaderAligned()
     this.invalidateDataCache()
     const sheet = this.getSheet()
 
@@ -701,6 +816,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   update(id: string | number, data: UpdateData<T>): T | undefined {
+    this.assertHeaderAligned()
     const sheet = this.getSheet()
 
     // Locating the row and writing to that row number must be atomic: a
@@ -740,6 +856,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   delete(id: string | number): boolean {
+    this.assertHeaderAligned()
     const sheet = this.getSheet()
 
     // Same find-then-write race as update(): without the lock a concurrent
@@ -760,6 +877,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
     if (items.length === 0) return []
 
+    this.assertHeaderAligned()
     this.invalidateDataCache()
     const sheet = this.getSheet()
 
@@ -814,6 +932,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
     if (items.length === 0) return []
 
+    this.assertHeaderAligned()
     this.invalidateDataCache()
     const sheet = this.getSheet()
 
@@ -909,6 +1028,10 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   reset(data: T[] = []): void {
+    // Guarded like any other write: reset() clears the grid and rewrites the
+    // header from the schema, so on a drifted sheet it would destroy the
+    // human's column instead of reporting the drift (#179).
+    this.assertHeaderAligned()
     this.invalidateDataCache()
     const sheet = this.getSheet()
 
@@ -931,7 +1054,12 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     }
   }
 
-  /** Get raw sheet data (for debugging) */
+  /**
+   * Get raw sheet data (for debugging).
+   *
+   * Deliberately NOT header-guarded (#179): it bypasses the positional mapping
+   * entirely, so it is the way to inspect a sheet the guard has just rejected.
+   */
   getRawData(): unknown[][] {
     const sheet = this.getSheet()
     return this.sheetsCall(() => sheet.getDataRange().getValues())
@@ -1239,6 +1367,18 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 /** A sheet cell can hold no `undefined`: empty reads back as an empty string. */
 function isEmptyCellValue(value: unknown): boolean {
   return value === undefined || value === null || value === ''
+}
+
+/** A1-notation letter for a 0-based column index: 0 -> A, 25 -> Z, 26 -> AA. */
+function toColumnLetter(index: number): string {
+  let remaining = index + 1
+  let letter = ''
+  while (remaining > 0) {
+    const digit = (remaining - 1) % 26
+    letter = String.fromCharCode(65 + digit) + letter
+    remaining = Math.floor((remaining - 1) / 26)
+  }
+  return letter
 }
 
 /** Whether `candidate` is a leading slice of `full`. */

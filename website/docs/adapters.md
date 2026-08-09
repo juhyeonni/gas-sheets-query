@@ -118,9 +118,50 @@ const store = new SheetsAdapter<User>({
     tags: 'string[]',
     metadata: 'json'
   },
-  allowFormulas: false             // default: false, see Formula Safety below
+  allowFormulas: false,            // default: false, see Formula Safety below
+  skipHeaderCheck: false           // default: false, see Header Drift below
 })
 ```
+
+### Header Drift
+
+`SheetsAdapter` is **positional**: cell 1 is `columns[0]`, cell 2 is `columns[1]`,
+and so on. If somebody opens the sheet and inserts a column in the middle, every
+value to its right shifts one place — reads then return the neighbouring
+column's values, and a write overwrites the inserted column while leaving the
+real one stale.
+
+Every read and write therefore verifies once per execution that the physical
+header row still matches `columns`, and throws
+[`SchemaMismatchError`](./error-handling.md) (`code: 'SCHEMA_MISMATCH'`) naming
+the first column that diverged:
+
+```
+Sheet "users" header [id, owner, name] does not match the declared columns
+[id, name, score]. Header column 2 (B) expected "name" but found "owner", ...
+```
+
+The check is a single 1×N read of row 1, shared by every operation in the
+execution, and it deliberately tolerates the two layouts that are *not*
+misaligned:
+
+- a header that is a **prefix** of `columns` (a sheet not yet migrated by
+  `addColumn`);
+- extra physical columns to the **right** of the schema, which are never read
+  and never written.
+
+`getRawData()` is not guarded — use it to inspect a sheet the guard rejected.
+
+> **If this started firing right after a migration**: a value-level
+> `renameColumn` moves cell values but never rewrites the header, so the sheet
+> can be left with the old name (`name`) under a schema that declares the new
+> one (`displayName`). The guard is right to flag it — rename the header cell to
+> match the schema (see issue #180 for making `renameColumn` physical).
+
+Set `skipHeaderCheck: true` only for sheets whose header row is deliberately not
+the column list (a decorative or localized title row, or a header your script
+does not own). It restores the old behavior: misalignment becomes silent again,
+and keeping the physical layout in the declared order is entirely on you.
 
 ### Formula Safety
 
