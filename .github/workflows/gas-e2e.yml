@@ -1,0 +1,74 @@
+name: GAS E2E (real Apps Script)
+
+# Runs the golden suite inside a real Apps Script deployment against a real
+# spreadsheet. Requires one-time setup (see e2e/gas/README.md):
+#   secrets.CLASPRC_JSON   — contents of ~/.clasprc.json from `clasp login`
+#                            (OAuth app must be in Production mode, or the
+#                            refresh token dies after 7 days)
+#   secrets.GAS_E2E_URL    — the deployed web app /exec URL
+#   secrets.GAS_E2E_TOKEN  — optional; must match Script Property E2E_TOKEN
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 20 * * 0' # weekly, Sunday 20:00 UTC (Monday 05:00 KST)
+
+jobs:
+  gas-e2e:
+    runs-on: ubuntu-latest
+    if: ${{ vars.GAS_E2E_ENABLED == 'true' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install and bundle harness
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @gsquery/gas-e2e-harness build
+
+      - name: Push harness to Apps Script
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          CLASP_JSON: ${{ secrets.CLASP_JSON }}
+        run: |
+          echo "$CLASPRC_JSON" > ~/.clasprc.json
+          echo "$CLASP_JSON" > e2e/gas/.clasp.json
+          cd e2e/gas
+          npx @google/clasp push --force
+
+      - name: Run golden suite
+        env:
+          URL: ${{ secrets.GAS_E2E_URL }}
+          TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
+        run: |
+          set -euo pipefail
+          RESULT=$(curl -sSL "${URL}?action=run&token=${TOKEN}")
+          echo "$RESULT" | python3 -m json.tool
+          echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+
+      - name: Lock contention — parallel bursts
+        env:
+          URL: ${{ secrets.GAS_E2E_URL }}
+          TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sSL "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
+          curl -sSL "${URL}?action=burst&tag=left&n=25&token=${TOKEN}" > left.json &
+          curl -sSL "${URL}?action=burst&tag=right&n=25&token=${TOKEN}" > right.json &
+          wait
+          cat left.json right.json
+          CHECK=$(curl -sSL "${URL}?action=burstCheck&expect=50&token=${TOKEN}")
+          echo "$CHECK" | python3 -m json.tool
+          echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+
+      - name: Cleanup test sheets
+        if: always()
+        env:
+          URL: ${{ secrets.GAS_E2E_URL }}
+          TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
+        run: curl -sSL "${URL}?action=cleanup&token=${TOKEN}" || true

@@ -1,0 +1,23 @@
+{
+  "name": "@gsquery/gas-e2e-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@gsquery/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/google-apps-script": "^2.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.0.0"
+  }
+}
