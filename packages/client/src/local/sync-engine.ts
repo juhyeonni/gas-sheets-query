@@ -12,6 +12,7 @@ import type {
   MergedMutation,
   PoisonedMutationAction,
   PoisonedMutationHandler,
+  RejectedMutationIds,
 } from './sync-transport.js'
 import type { LocalAdapter } from './local-adapter.js'
 import type { MutationQueue } from './mutation-queue.js'
@@ -41,7 +42,12 @@ export interface SyncEngineOptions {
   retryBaseDelayMs?: number
   /** Ceiling for the exponential backoff (default: 60000ms) */
   maxRetryDelayMs?: number
-  /** Called when a table's batch has failed `maxRetries` times in a row */
+  /**
+   * Called when a table's batch has failed `maxRetries` times in a row, with
+   * the mutations still unapplied at that point (#176). Its return value picks
+   * what leaves the queue: `'retain'`, `'discard'`, or an explicit list of ids
+   * (#174) — see {@link PoisonedMutationAction}.
+   */
   onPoisonedMutation?: PoisonedMutationHandler
 }
 
@@ -79,12 +85,69 @@ export class SyncError extends Error {
 class PushPhaseError extends Error {
   constructor(
     readonly inner: Error,
+    /**
+     * The mutations still unapplied when the push failed — the pushed batch
+     * minus whatever the server confirmed via `appliedIds`. Reporting the raw
+     * pre-push snapshot named rows that had already landed (#176).
+     */
     readonly mutations: MergedMutation[],
-    readonly boundary: number
+    readonly boundary: number,
+    /** Ids the transport named as refused, if it named any (#174) */
+    readonly rejectedIds?: readonly (string | number)[]
   ) {
     super(inner.message)
     this.name = 'PushPhaseError'
   }
+}
+
+/**
+ * Read the optional `rejectedIds` a transport may attach to the error it throws
+ * (see {@link RejectedMutationIds}). Defensive: the value crosses an untyped
+ * boundary, so anything that is not an array of ids is treated as absent.
+ */
+function readRejectedIds(source: unknown): readonly (string | number)[] | undefined {
+  if (typeof source !== 'object' || source === null) return undefined
+  const { rejectedIds } = source as RejectedMutationIds
+  if (!Array.isArray(rejectedIds)) return undefined
+  const ids = rejectedIds.filter(
+    (id): id is string | number => typeof id === 'string' || typeof id === 'number'
+  )
+  return ids.length > 0 ? ids : undefined
+}
+
+/**
+ * Translate a poisoned-batch decision into the exact set of ids to drop.
+ *
+ * The whole point is granularity (#174): with an all-or-nothing backend a
+ * single bad row used to cost the app every other mutation in the batch. Now
+ * the smallest defensible set wins — the handler's explicit list first, then the
+ * ids the transport named, and only as a last resort the whole batch, which is
+ * all the engine can distinguish when nobody says which row is at fault.
+ */
+function resolveDiscardIds(
+  action: PoisonedMutationAction | void,
+  batchIds: ReadonlySet<string | number>,
+  rejectedIds: readonly (string | number)[] | undefined
+): Set<string | number> {
+  if (Array.isArray(action)) {
+    return new Set(action.filter(id => batchIds.has(id)))
+  }
+  if (action !== 'discard') return new Set()
+  if (rejectedIds && rejectedIds.length > 0) return new Set(rejectedIds)
+  return new Set(batchIds)
+}
+
+/**
+ * What one pass over the requested tables left undone, beyond the failures it
+ * raises.
+ *
+ * This is what separates "everything asked for is in sync" from "nothing was
+ * even tried": a backoff-skipped table moved no data in either direction, so a
+ * pass that skipped one is not a completed sync (#173).
+ */
+interface SyncPassOutcome {
+  /** Tables skipped because their backoff window is still open */
+  deferred: string[]
 }
 
 /**
@@ -104,6 +167,7 @@ interface SyncQueue {
   getMerged(): MergedMutation[]
   currentSeq(): number
   clearForRows(ids: Set<string | number>, maxSeq?: number): void
+  purgeCancelled(maxSeq?: number): void
   push(type: 'insert' | 'update' | 'delete', id: string | number, data?: Partial<RowWithId>): void
 }
 
@@ -213,7 +277,7 @@ export class SyncEngine {
 
   /** Pull server data to local */
   async pull(tableName?: string): Promise<void> {
-    return this.serialize(() =>
+    await this.serialize(() =>
       this.runTables(tableName, false, name => this.pullTable(name))
     )
   }
@@ -228,14 +292,26 @@ export class SyncEngine {
       try {
         this.emit({ type: 'sync-start', table: tableName })
 
-        await this.runTables(tableName, background, async name => {
+        const outcome = await this.runTables(tableName, background, async name => {
           await this.pushTable(name)
           await this.pullTable(name)
         })
 
-        // Only a pass in which every table succeeded is a completed sync;
-        // failures were already reported as per-table 'error' events.
-        this.emit({ type: 'sync-complete', table: tableName })
+        // Failures never reach this point — they were reported as per-table
+        // 'error' events and raised as a SyncError. What is left is a pass in
+        // which nothing failed, which is only *complete* if nothing was left
+        // out either: a table skipped by backoff synced no data, and reporting
+        // that as a completed sync turned "all changes saved" green while the
+        // network was down (#173).
+        if (outcome.deferred.length > 0) {
+          this.emit({
+            type: 'sync-deferred',
+            table: tableName,
+            deferredTables: outcome.deferred,
+          })
+        } else {
+          this.emit({ type: 'sync-complete', table: tableName })
+        }
       } finally {
         this.syncing = false
       }
@@ -243,7 +319,7 @@ export class SyncEngine {
   }
 
   private async runPush(tableName: string | undefined, background: boolean): Promise<void> {
-    return this.serialize(() =>
+    await this.serialize(() =>
       this.runTables(tableName, background, name => this.pushTable(name))
     )
   }
@@ -256,17 +332,24 @@ export class SyncEngine {
    * rejected mutation stalled every table forever (#132). Failures are raised
    * together as a SyncError once the pass is done, so awaiting callers still
    * see them.
+   *
+   * Returns what the pass touched, so the caller can tell an idle pass from one
+   * that was entirely skipped by backoff (#173).
    */
   private async runTables(
     tableName: string | undefined,
     background: boolean,
     op: (name: string) => Promise<void>
-  ): Promise<void> {
+  ): Promise<SyncPassOutcome> {
     const tableNames = tableName ? [tableName] : Array.from(this.tables.keys())
     const errors: TableSyncError[] = []
+    const outcome: SyncPassOutcome = { deferred: [] }
 
     for (const name of tableNames) {
-      if (background && this.isBackedOff(name)) continue
+      if (background && this.isBackedOff(name)) {
+        outcome.deferred.push(name)
+        continue
+      }
 
       try {
         await op(name)
@@ -283,6 +366,7 @@ export class SyncEngine {
     }
 
     if (errors.length > 0) throw new SyncError(errors)
+    return outcome
   }
 
   // ── Retry / backoff / dead-letter ───────────────────────────────────
@@ -359,12 +443,19 @@ export class SyncEngine {
     // after another maxRetries attempts rather than going quiet forever.
     state.pushFailures = 0
 
+    const batchIds = new Set(failure.mutations.map(m => m.id))
+    // Only ids that are actually in the reported batch may be acted on; a
+    // transport naming something else must not cost the app unrelated writes.
+    const rejectedIds = failure.rejectedIds?.filter(id => batchIds.has(id))
+    const named = rejectedIds !== undefined && rejectedIds.length > 0
+
     this.emit({
       type: 'mutation-dead',
       table: tableName,
       error: failure.inner,
       mutations: failure.mutations,
       attempts,
+      rejectedIds: named ? rejectedIds : undefined,
     })
 
     let action: PoisonedMutationAction | void
@@ -374,20 +465,19 @@ export class SyncEngine {
         mutations: failure.mutations,
         error: failure.inner,
         attempts,
+        rejectedIds: named ? rejectedIds : undefined,
       })
     } catch {
       // A throwing handler must not break sync — treat it as 'retain'.
       action = undefined
     }
 
-    if (action !== 'discard') return
+    const discardIds = resolveDiscardIds(action, batchIds, named ? rejectedIds : undefined)
+    if (discardIds.size === 0) return
 
     // Respect the push boundary: writes enqueued after the batch was
     // snapshotted were never rejected and must survive (#109).
-    binding.queue.clearForRows(
-      new Set(failure.mutations.map(m => m.id)),
-      failure.boundary
-    )
+    binding.queue.clearForRows(discardIds, failure.boundary)
     // The blockage is gone, so let the table resume on the very next attempt.
     this.resetRetryState(tableName)
   }
@@ -399,7 +489,13 @@ export class SyncEngine {
     if (!binding) return
 
     const merged = binding.queue.getMerged()
-    if (merged.length === 0) return
+    if (merged.length === 0) {
+      // Nothing to send — but rows whose mutations cancelled out have no id in
+      // the merged batch, so no push will ever clear them. Collect them here
+      // too, or a queue holding only cancelled pairs would never shrink (#175).
+      binding.queue.purgeCancelled(binding.queue.currentSeq())
+      return
+    }
 
     // Boundary: only mutations enqueued up to this point are part of this push.
     // Anything enqueued during the await below (higher seq) must survive the
@@ -410,7 +506,8 @@ export class SyncEngine {
     try {
       result = await this.transport.push(tableName, merged)
     } catch (err) {
-      throw new PushPhaseError(toError(err), merged, boundary)
+      // The batch never reached the server, so nothing was applied.
+      throw new PushPhaseError(toError(err), merged, boundary, readRejectedIds(err))
     }
 
     // Ids that may leave the queue. A transport that reports appliedIds is
@@ -429,6 +526,10 @@ export class SyncEngine {
     }
 
     binding.queue.clearForRows(settledIds, boundary)
+    // Rows that cancelled each other out are settled by construction: they were
+    // never part of any batch and never will be. Their deadness does not depend
+    // on how this push went, only on the boundary (#175).
+    binding.queue.purgeCancelled(boundary)
 
     if (!result.success && conflicts.length === 0) {
       // success:false with no conflicts is a real push failure. Surface it so
@@ -438,8 +539,12 @@ export class SyncEngine {
         new Error(
           `Push failed for table "${tableName}": server reported failure without conflicts`
         ),
-        merged,
-        boundary
+        // Only what is still unapplied: a partial commit reported via
+        // appliedIds has already landed, and naming those rows in the
+        // dead-letter payload invited apps to re-apply them (#176).
+        merged.filter(m => !settledIds.has(m.id)),
+        boundary,
+        readRejectedIds(result)
       )
     }
 

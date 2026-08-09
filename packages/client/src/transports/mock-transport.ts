@@ -30,6 +30,16 @@ export class MockTransport implements SyncTransport {
   pullShouldFail = false
 
   /**
+   * Rows this "server" permanently refuses (a validation rule, say).
+   *
+   * A push containing one commits the rest and comes back with
+   * `success: false`, `appliedIds` for what landed and `rejectedIds` naming the
+   * offenders — the contract that lets a dead-lettered batch drop only the
+   * poisoned rows instead of every mutation beside them (#174).
+   */
+  readonly rejectedIds = new Set<string | number>()
+
+  /**
    * Whether a conflicting push still commits the mutations that did *not*
    * conflict. Off by default: the whole batch is rejected, which is the
    * conservative reading of the transport contract. When on, the applied rows
@@ -73,6 +83,17 @@ export class MockTransport implements SyncTransport {
         const applied = mutations.filter(m => !conflictIds.has(m.id))
         this.applyMutations(tableName, applied)
         return { success: false, conflicts, appliedIds: applied.map(m => m.id) }
+      }
+    }
+
+    const refused = mutations.filter(m => this.rejectedIds.has(m.id))
+    if (refused.length > 0) {
+      const accepted = mutations.filter(m => !this.rejectedIds.has(m.id))
+      this.applyMutations(tableName, accepted)
+      return {
+        success: false,
+        appliedIds: accepted.map(m => m.id),
+        rejectedIds: refused.map(m => m.id),
       }
     }
 

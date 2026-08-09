@@ -23,7 +23,9 @@ import { MockTransport } from '../../src/transports/mock-transport.js'
 import type { MutationStorage } from '../../src/local/mutation-queue.js'
 import type {
   MergedMutation,
+  PoisonedMutationAction,
   PoisonedMutationInfo,
+  RejectedMutationIds,
   SyncEvent,
   SyncPushResult,
   SyncTransport,
@@ -102,10 +104,14 @@ function createPersistentStorage(): MutationStorage {
  * - `partial-commit` — commit what is valid, report the rest via the
  *   documented `appliedIds` contract with `success: false`.
  * - `all-or-nothing` — reject the whole batch (the naive implementation).
+ *
+ * `namesOffenders` upgrades either style to the `rejectedIds` contract, i.e. a
+ * handler that says *which* rows it refused rather than only that it refused.
  */
 class GasBackendLink implements SyncTransport {
   online = true
   rejectionMode: 'partial-commit' | 'all-or-nothing' = 'partial-commit'
+  namesOffenders = false
   readonly rejectedIds = new Set<string>()
   readonly pushAttempts: Array<{ table: string; ids: (string | number)[] }> = []
   readonly pullAttempts: string[] = []
@@ -131,16 +137,22 @@ class GasBackendLink implements SyncTransport {
     }
 
     if (this.rejectionMode === 'all-or-nothing') {
-      throw new Error(
+      const error: Error & RejectedMutationIds = new Error(
         `syncPush: validation failed for ${refused.map(m => m.id).join(', ')} — batch rejected`
       )
+      if (this.namesOffenders) error.rejectedIds = refused.map(m => m.id)
+      throw error
     }
 
     const accepted = mutations.filter(m => !this.rejectedIds.has(String(m.id)))
     if (accepted.length > 0) {
       await this.server.push(tableName, accepted)
     }
-    return { success: false, appliedIds: accepted.map(m => m.id) }
+    return {
+      success: false,
+      appliedIds: accepted.map(m => m.id),
+      rejectedIds: this.namesOffenders ? refused.map(m => m.id) : undefined,
+    }
   }
 
   pushAttemptCount(): number {
@@ -201,7 +213,7 @@ describe('S5 offline session lifecycle', () => {
     options: {
       maxRetries?: number
       retryBaseDelayMs?: number
-      onPoisonedMutation?: (info: PoisonedMutationInfo) => 'discard' | 'retain' | void
+      onPoisonedMutation?: (info: PoisonedMutationInfo) => PoisonedMutationAction | void
     } = {}
   ): Promise<ClientDBResult<Tables>> {
     return createClientDB<Tables>({
@@ -301,8 +313,8 @@ describe('S5 offline session lifecycle', () => {
   })
 
   it(
-    'reports a completed sync for a pass whose only table was skipped by backoff ' +
-      '[documents: backoff-emits-false-sync-complete]',
+    'defers, and never completes, a pass whose only table was skipped by backoff ' +
+      '[regression: #173 backoff-emits-false-sync-complete]',
     async () => {
       const link = new GasBackendLink(server)
       const session = await openSession(link, { maxRetries: 0, retryBaseDelayMs: 1000 })
@@ -326,12 +338,17 @@ describe('S5 offline session lifecycle', () => {
         expect(link.pushAttemptCount()).toBe(1)
         expect(events.filter(e => e.type === 'error' && e.table === 'Task')).toHaveLength(1)
 
-        // THE DEFECT: a pass in which every table was skipped has no recorded
-        // failures, so it is reported as a completed sync. Four of the five
-        // offline ticks announce success while 15 mutations sit unsent and the
-        // network is down — an "all changes saved" indicator wired to
-        // `sync-complete` turns green mid-outage.
-        expect(events.filter(e => e.type === 'sync-complete')).toHaveLength(4)
+        // A pass in which every table was skipped has no recorded failures,
+        // but it is not a completed sync either: an "all changes saved"
+        // indicator wired to `sync-complete` must stay grey for the whole
+        // outage, with 15 mutations still unsent.
+        expect(events.filter(e => e.type === 'sync-complete')).toHaveLength(0)
+
+        // The four skipped passes announce themselves as deferred instead, so a
+        // UI can show "retrying..." and name the tables still waiting.
+        const deferred = events.filter(e => e.type === 'sync-deferred')
+        expect(deferred).toHaveLength(4)
+        expect(deferred.every(e => e.deferredTables?.includes('Task'))).toBe(true)
 
         // Those passes moved nothing in either direction.
         expect(events.filter(e => e.type === 'push-complete')).toHaveLength(0)
@@ -346,8 +363,8 @@ describe('S5 offline session lifecycle', () => {
   )
 
   it(
-    'never purges mutations that cancelled each other out ' +
-      '[documents: cancelled-mutations-never-purged]',
+    'purges mutations that cancelled each other out ' +
+      '[regression: #175 cancelled-mutations-never-purged]',
     async () => {
       const link = new GasBackendLink(server)
       const session = await openSession(link)
@@ -361,32 +378,31 @@ describe('S5 offline session lifecycle', () => {
       expect(queue.getMerged()).toEqual([])
       expect(serverRows(server)).toEqual(CONVERGED)
 
-      // ...but the two raw mutations for t7 (insert then delete, which merge to
-      // a no-op) are still in the queue, and in localStorage behind it. A push
-      // only clears the ids present in the *merged* batch, and t7 is not one of
-      // them, so this pair is never collected.
+      // ...and nothing left in the queue either. The two raw mutations for t7
+      // (insert then delete, which merge to a no-op) have no id in the merged
+      // batch, so the push-driven clear cannot see them — they are collected
+      // separately, once the push boundary proves them dead.
+      expect(queue.length).toBe(0)
+
+      // So `hasPending` answers the question an app actually asks it: is there
+      // work that still has to reach the server? Safe to close this tab.
+      expect(queue.hasPending).toBe(false)
+
+      // Nothing is left behind in localStorage either — create-then-delete
+      // churn no longer grows the key without bound.
+      expect(storage.getItem('gsquery:Task:mutations')).toBeNull()
+
+      // A cancelled pair enqueued *after* the sync is still pending work as far
+      // as durability goes, and is collected by the next push boundary.
+      const tasks = session.db.from('Task')
+      tasks.create({ id: 't10', title: 'Task 10', status: 'todo', priority: 10 })
+      tasks.delete('t10')
       expect(queue.length).toBe(2)
+      expect(queue.hasPending).toBe(false) // ...but it is not work to send
 
-      // Therefore `hasPending` reports work that does not exist. An app that
-      // gates "safe to close this tab?" on it can never let the user leave.
-      expect(queue.hasPending).toBe(true)
-
-      const persisted = storage.getItem('gsquery:Task:mutations')
-      expect(persisted).not.toBeNull()
-      const parsed = JSON.parse(persisted as string) as Array<{
-        id: string
-        type: string
-      }>
-      expect(parsed.map(m => [m.id, m.type])).toEqual([
-        ['t7', 'insert'],
-        ['t7', 'delete'],
-      ])
-
-      // It is a permanent leak, not a timing artifact: further clean syncs
-      // never remove it.
       await session.sync.sync()
-      await session.sync.sync()
-      expect(queue.length).toBe(2)
+      expect(queue.length).toBe(0)
+      expect(serverRows(server)).toEqual(CONVERGED)
 
       await session.close()
     }
@@ -450,12 +466,82 @@ describe('S5 offline session lifecycle', () => {
   })
 
   it(
-    "discarding a poisoned batch destroys every innocent write in it " +
-      '[documents: poison-discard-drops-whole-batch]',
+    'discards only the poisoned mutation the handler names, keeping the innocent ones ' +
+      '[regression: #174 poison-discard-drops-whole-batch]',
     async () => {
       const link = new GasBackendLink(server)
-      // The naive Apps Script handler: one invalid row rejects the whole batch.
+      // The naive Apps Script handler: one invalid row rejects the whole batch,
+      // and it does not say which row that was.
       link.rejectionMode = 'all-or-nothing'
+      link.rejectedIds.add('t8')
+
+      const poisoned: PoisonedMutationInfo[] = []
+      const session = await openSession(link, {
+        maxRetries: 1,
+        retryBaseDelayMs: 0,
+        onPoisonedMutation: info => {
+          poisoned.push(info)
+          // The app knows the sheet's validation rule (or parses the error) and
+          // names the single offender instead of sacrificing the batch.
+          return [/t8/.test(info.error.message) ? 't8' : '']
+        },
+      })
+
+      await session.sync.pull()
+      link.online = false
+      applyOfflineEdits(session)
+      link.online = true
+
+      await expect(session.sync.sync()).rejects.toThrow(/Sync failed for 1 table/)
+
+      // The report still shows the whole unapplied batch — with an
+      // all-or-nothing backend nothing was committed, so all 8 are genuinely
+      // still pending — and the backend named no offender.
+      expect(poisoned).toHaveLength(1)
+      expect(poisoned[0].mutations.map(m => m.id)).toEqual([
+        't1',
+        't2',
+        't6',
+        't3',
+        't8',
+        't4',
+        't5',
+        't9',
+      ])
+      expect(poisoned[0].rejectedIds).toBeUndefined()
+
+      // Returning a list drops exactly those ids. The 7 innocent merged
+      // mutations — 12 of the user's 15 raw offline actions — stay queued.
+      expect(session.adapters.Task.queue.getMerged().map(m => m.id)).toEqual([
+        't1',
+        't2',
+        't6',
+        't3',
+        't4',
+        't5',
+        't9',
+      ])
+
+      // Nothing reached the server yet, but the table is unblocked, so the very
+      // next sync lands the whole offline session except the refused row.
+      expect(serverRows(server)).toEqual(SEED)
+      await expect(session.sync.sync()).resolves.toBeUndefined()
+      expect(serverRows(server)).toEqual(CONVERGED_WITHOUT_T8)
+      expect(sortById(session.db.from('Task').findAll())).toEqual(CONVERGED_WITHOUT_T8)
+
+      await session.close()
+    }
+  )
+
+  it(
+    "discards only the ids an all-or-nothing backend names in its error " +
+      '[regression: #174]',
+    async () => {
+      const link = new GasBackendLink(server)
+      link.rejectionMode = 'all-or-nothing'
+      // The upgraded Apps Script handler: still all-or-nothing, but it reports
+      // which rows its validation refused, per the `rejectedIds` contract.
+      link.namesOffenders = true
       link.rejectedIds.add('t8')
 
       const poisoned: PoisonedMutationInfo[] = []
@@ -475,46 +561,28 @@ describe('S5 offline session lifecycle', () => {
 
       await expect(session.sync.sync()).rejects.toThrow(/Sync failed for 1 table/)
 
-      // `onPoisonedMutation` is called at BATCH granularity: the app is handed
-      // all 8 merged mutations and its only choices are keep-all or drop-all.
-      expect(poisoned).toHaveLength(1)
-      expect(poisoned[0].mutations.map(m => m.id)).toEqual([
-        't1',
-        't2',
-        't6',
-        't3',
-        't8',
-        't4',
-        't5',
-        't9',
-      ])
-      expect(poisoned[0].mutations).toHaveLength(8)
+      // The engine surfaces the named offenders, so a plain 'discard' is now
+      // precise: it drops t8 and nothing else.
+      expect(poisoned[0].rejectedIds).toEqual(['t8'])
+      expect(session.adapters.Task.queue.getMerged().map(m => m.id)).not.toContain('t8')
+      expect(session.adapters.Task.queue.getMerged()).toHaveLength(7)
 
-      // Choosing 'discard' to unblock the table drops all 8 — the 7 innocent
-      // merged mutations (12 of the user's 15 raw offline actions) included.
-      expect(session.adapters.Task.queue.getMerged()).toEqual([])
-
-      // Nothing ever reached the server: it is still exactly as it was seeded.
-      expect(serverRows(server)).toEqual(SEED)
-
-      // And the next sync overwrites the local view with that untouched server
-      // state, so the user's whole offline session disappears with no further
-      // signal.
       await expect(session.sync.sync()).resolves.toBeUndefined()
-      expect(sortById(session.db.from('Task').findAll())).toEqual(SEED)
+      expect(serverRows(server)).toEqual(CONVERGED_WITHOUT_T8)
 
       await session.close()
     }
   )
 
   it(
-    'reports already-committed rows as part of the poisoned batch ' +
-      '[documents: dead-letter-reports-applied-mutations]',
+    'reports only the still-unapplied rows in the poisoned batch ' +
+      '[regression: #176 dead-letter-reports-applied-mutations]',
     async () => {
       const link = new GasBackendLink(server)
       link.rejectedIds.add('t8')
 
       const poisoned: PoisonedMutationInfo[] = []
+      const events: SyncEvent[] = []
       const session = await openSession(link, {
         maxRetries: 1, // dead-letter on the very first refusal
         retryBaseDelayMs: 0,
@@ -523,6 +591,7 @@ describe('S5 offline session lifecycle', () => {
           return 'retain'
         },
       })
+      session.sync.on(e => events.push(e))
 
       await session.sync.pull()
       link.online = false
@@ -536,21 +605,17 @@ describe('S5 offline session lifecycle', () => {
       expect(serverRows(server)).toEqual(CONVERGED_WITHOUT_T8)
       expect(session.adapters.Task.queue.getMerged().map(m => m.id)).toEqual(['t8'])
 
-      // ...yet the dead-letter report names all 8, including the 7 the server
-      // accepted. An app that logs or re-queues `info.mutations` for manual
-      // repair would act on 7 writes that already landed.
+      // ...and the dead-letter report agrees with the queue: it names only the
+      // row that is still unapplied. An app that logs or re-queues
+      // `info.mutations` for manual repair acts on exactly the failed write.
       expect(poisoned).toHaveLength(1)
-      expect(poisoned[0].mutations.map(m => m.id)).toEqual([
-        't1',
-        't2',
-        't6',
-        't3',
-        't8',
-        't4',
-        't5',
-        't9',
-      ])
-      expect(poisoned[0].mutations.filter(m => m.id !== 't8')).toHaveLength(7)
+      expect(poisoned[0].mutations.map(m => m.id)).toEqual(['t8'])
+      expect(poisoned[0].mutations[0].data).toMatchObject({ title: 'Task 8' })
+
+      // The same payload reaches the event listener.
+      const dead = events.filter(e => e.type === 'mutation-dead')
+      expect(dead).toHaveLength(1)
+      expect(dead[0].mutations?.map(m => m.id)).toEqual(['t8'])
 
       await session.close()
     }

@@ -12,6 +12,7 @@ import type { SyncEngineOptions } from './sync-engine.js'
 import type {
   SyncTransport,
   ConflictStrategy,
+  PoisonedMutationAction,
   PoisonedMutationHandler,
 } from './sync-transport.js'
 import type { MutationStorage } from './mutation-queue.js'
@@ -38,7 +39,11 @@ export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>>
   retryBaseDelayMs?: number
   /** Ceiling for the exponential backoff (default 60000ms) */
   maxRetryDelayMs?: number
-  /** Called when a table's batch has failed `maxRetries` times in a row */
+  /**
+   * Called when a table's batch has failed `maxRetries` times in a row, with
+   * the mutations still unapplied. Return `'retain'`, `'discard'`, or the exact
+   * ids to drop — see {@link PoisonedMutationAction}.
+   */
   onPoisonedMutation?: PoisonedMutationHandler
   /** Custom mutation storage (defaults to localStorage) */
   mutationStorage?: MutationStorage
