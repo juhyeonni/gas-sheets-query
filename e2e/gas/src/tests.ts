@@ -196,6 +196,15 @@ export function registerTests(ctx: HarnessContext): void {
     assertEq(rows.length, 2, 'both rows present after migration')
     assertOk(rows.every(r => r.status === 'unknown'), 'default backfilled into every row')
 
+    // The physical header row must actually contain the new column — this is
+    // what separates the real #127 fix (header insert + backfill) from the
+    // old value-backfill that left the sheet header untouched.
+    const ss = SpreadsheetApp.openById(ctx.spreadsheetId)
+    const sheet = ss.getSheetByName(name)
+    assertOk(sheet, 'migrated sheet exists')
+    const header = sheet ? (sheet.getRange(1, 1, 1, 3).getValues()[0] as string[]) : []
+    assertEq(header, ['id', 'name', 'status'], 'physical header row extended')
+
     // Convergence: a second migrate() must be a no-op.
     const again = await runner.migrate()
     assertEq(again.applied.length, 0, 'rerun applies nothing')
