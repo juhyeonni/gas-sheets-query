@@ -66,10 +66,10 @@ try {
 ### DuplicateIdError
 
 Thrown by `insert()`/`batchInsert()` on a `idMode: 'client'` store when the
-supplied id already exists (including a duplicate inside the same batch). The
-check runs under the write lock, so a concurrent execution that inserts the
-same id first wins and this one throws instead of writing a row that no id
-lookup could ever reach.
+supplied id already exists (including a duplicate inside the same batch). On
+`SheetsAdapter` the check runs under the write lock, so a concurrent execution
+that inserts the same id first wins and this one throws instead of writing a
+row that no id lookup could ever reach.
 
 ```ts
 try {
@@ -82,6 +82,16 @@ try {
   }
 }
 ```
+
+Every adapter enforces the same rule, so code that passes against the test
+double behaves the same in production: `MockAdapter` and the client-side
+`LocalAdapter` reject duplicates too, and a rejected write mutates nothing —
+no row, and on `LocalAdapter` no queued mutation and no IndexedDB write, so the
+duplicate fails at the call site instead of being pushed and dead-lettered.
+Ids are compared as strings, so `1` collides with `'1'`. `MockAdapter` has no
+table name and leaves `e.tableName` undefined. Rows seeded outside the insert
+path — `initialData`, `reset()`, `LocalAdapter.replaceAll()` (a sync pull), or
+rows already on the sheet — are taken verbatim and are not checked.
 
 ### NoResultsError
 
