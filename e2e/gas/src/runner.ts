@@ -22,7 +22,13 @@ export interface SuiteResult {
   results: TestResult[]
 }
 
-type TestFn = () => void | Promise<void>
+/**
+ * Tests must be fully synchronous: the GAS web-app dispatcher rejects a
+ * Promise returned from doGet ("returned value is not a supported return
+ * type" — verified against the real platform), so nothing in the request
+ * path may await.
+ */
+type TestFn = () => void
 
 const registry: { name: string; fn: TestFn }[] = []
 
@@ -34,14 +40,14 @@ export function clearTests(): void {
   registry.length = 0
 }
 
-export async function runSuite(): Promise<SuiteResult> {
+export function runSuite(): SuiteResult {
   const results: TestResult[] = []
   const suiteStart = Date.now()
 
   for (const { name, fn } of registry) {
     const start = Date.now()
     try {
-      await fn()
+      fn()
       results.push({ name, ok: true, ms: Date.now() - start })
     } catch (err) {
       const error = err instanceof Error ? `${err.name}: ${err.message}` : String(err)

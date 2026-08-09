@@ -20,14 +20,14 @@ describe('gas e2e harness (against local fakes)', () => {
     restore = undefined
   })
 
-  it('runs the full golden suite green', async () => {
+  it('runs the full golden suite green', () => {
     const handle = installGasFakes({
       spreadsheets: { [TEST_SPREADSHEET_ID]: new FakeSpreadsheet(TEST_SPREADSHEET_ID) },
       activeId: TEST_SPREADSHEET_ID
     })
     restore = () => handle.restore()
 
-    const result = await runAll(TEST_SPREADSHEET_ID, 'localcheck')
+    const result = runAll(TEST_SPREADSHEET_ID, 'localcheck')
 
     const failures = result.results.filter(r => !r.ok)
     expect(failures, JSON.stringify(failures, null, 2)).toEqual([])
