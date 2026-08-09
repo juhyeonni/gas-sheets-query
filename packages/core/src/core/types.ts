@@ -115,6 +115,44 @@ export interface DataStore<T extends RowWithId = RowWithId> {
    * representable there, so MigrationRunner falls back to a value backfill.
    */
   addColumn?(column: string, options?: AddColumnOptions): void
+
+  /**
+   * Physically rename a column in the underlying storage (optional).
+   *
+   * Counterpart of {@link DataStore.addColumn} for positional stores: moving
+   * values between fields cannot rename anything there, because the field a
+   * cell belongs to is decided by its position — the migration left the sheet
+   * header on the old name while the schema declared the new one (#180). The
+   * declared column set is the POST-rename schema, so implementations receive
+   * a `newName` they know and an `oldName` they do not.
+   *
+   * Implementations must be idempotent (a second run writes nothing) and must
+   * not cost more I/O as the row count grows.
+   *
+   * Name-keyed stores (MockAdapter, LocalAdapter) omit this — a rename there is
+   * exactly the value move MigrationRunner falls back to.
+   */
+  renameColumn?(oldName: string, newName: string): void
+
+  /**
+   * Physically remove a column from the underlying storage (optional).
+   *
+   * **Destructive**: the column's values are deleted with it and no rollback
+   * can restore them.
+   *
+   * Counterpart of {@link DataStore.addColumn} for positional stores: clearing
+   * the values leaves the column in place, and the next deploy — whose schema
+   * no longer declares it — reads and writes every column to its right one
+   * position off (#180). The declared column set is the POST-removal schema, so
+   * implementations receive a column they no longer know.
+   *
+   * Implementations must be idempotent (removing an absent column is a no-op)
+   * and must not cost more I/O as the row count grows.
+   *
+   * Name-keyed stores (MockAdapter, LocalAdapter) omit this — there is no
+   * physical column to drop, so MigrationRunner falls back to clearing values.
+   */
+  removeColumn?(column: string): void
 }
 
 // ============================================================================

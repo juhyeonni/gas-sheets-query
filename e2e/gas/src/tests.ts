@@ -522,12 +522,14 @@ export function registerTests(ctx: HarnessContext): void {
   // adapter operations a chain would issue, in the same order, asserting the
   // physical layout after every step.
   //
-  // Only `addColumn` reaches the adapter as a schema operation; `renameColumn`
-  // and `removeColumn` are VALUE operations in MigrationRunner (they update
-  // cells and never touch the header). Against a positional adapter that is a
-  // meaningful difference, and the assertions below pin down exactly what it
-  // costs. Characterization, not repair — hence the tag.
-  test('migration chain v1→v3 on live data: addColumn is physical, rename/remove are value-only [documents #TBD]', t => {
+  // All three are PHYSICAL schema operations on the adapter (#127, #180): each
+  // version's store declares the schema that version deploys, `addColumn`
+  // extends the header, `renameColumn` rewrites the header cell, and
+  // `removeColumn` deletes the column outright. Before #180 the last two were
+  // value-only, which left a header reading `name` under a schema declaring
+  // `displayName`, and a ghost `legacy` column that made the next deploy
+  // misread and miswrite every column to its right.
+  test('migration chain v1→v3 on live data: addColumn, renameColumn and removeColumn are all physical (#180)', t => {
     const name = sheetName('chain')
     const makeStore = (columns: string[]): SheetsAdapter<E2ERow> =>
       new SheetsAdapter<E2ERow>({ spreadsheetId: ctx.spreadsheetId, sheetName: name, columns })
@@ -555,75 +557,71 @@ export function registerTests(ctx: HarnessContext): void {
     assertEq(v1.findById(bob.id)?.name, 'bob', 'v1: the write did not disturb the other columns')
 
     // ── v2: renameColumn('name' → 'displayName') ────────────────────────────
-    // MigrationRunner semantics: for each row, when the old field has a value
-    // and the new one is empty, move the value across with update().
+    // The store declares the POST-rename schema, which is what the deploy
+    // carrying this migration ships. The adapter rewrites the one header cell;
+    // no data moves, because the value is already in the right column.
     const v2 = makeStore(['id', 'displayName', 'legacy', 'status'])
-    let renameWrites = 0
-    for (const row of v2.findAll()) {
-      const record = row as Record<string, unknown>
-      if (!isEmptyValue(record['name']) && isEmptyValue(record['displayName'])) {
-        v2.update(row.id, { name: undefined, displayName: record['name'] })
-        renameWrites++
-      }
-    }
+    v2.renameColumn('name', 'displayName')
 
     assertEq(
-      renameWrites,
-      0,
-      'CURRENT: the value-level rename is a no-op here — the adapter already reads column 2 as `displayName`, ' +
-      'so the "old" field is never present and the copy condition is never true'
-    )
-    assertEq(
       rawRow(sheet, 1, 4),
-      ['id', 'name', 'legacy', 'status'],
-      'CURRENT: the physical header still says `name` — renameColumn never touches it, so header and schema now disagree'
+      ['id', 'displayName', 'legacy', 'status'],
+      'v2: the header cell was physically rewritten — header and schema agree again'
     )
-    assertEq(v2.findById(ann.id)?.displayName, 'ann', 'CURRENT: reads work anyway — position, not the header, decides the mapping')
+    assertEq(rawRow(sheet, 2, 4), [cellText(ann.id), 'ann', 'L1', 'active'], 'v2: the rename moved no data')
+    assertEq(rawRow(sheet, 3, 4), [cellText(bob.id), 'bob', 'L2', 'archived'], 'v2: second row untouched too')
+    assertEq(v2.findById(ann.id)?.displayName, 'ann', 'v2: reads resolve under the new name')
     v2.update(ann.id, { displayName: 'ann2' })
     assertEq(
       rawRow(sheet, 2, 4),
       [cellText(ann.id), 'ann2', 'L1', 'active'],
-      'CURRENT: a write under the new name lands in the column still headed `name`'
+      'v2: a write under the new name lands in its own column'
     )
-    t.info('v2 rename: value-op is a no-op; data survives by position; header left stale (`name` vs schema `displayName`)')
+
+    // Convergence: re-running the rename must not touch the grid at all.
+    const wideGrid = (): string => JSON.stringify(sheet.getRange(1, 1, 3, 4).getValues())
+    const beforeRenameRerun = wideGrid()
+    v2.renameColumn('name', 'displayName')
+    assertEq(wideGrid(), beforeRenameRerun, 'v2: rerun leaves the grid byte-identical')
+    t.info('v2 rename: header cell rewritten in place, data untouched, rerun converges')
 
     // ── v3: removeColumn('legacy') ──────────────────────────────────────────
-    const v3 = makeStore(['id', 'displayName', 'legacy', 'status'])
-    let clearedCells = 0
-    for (const row of v3.findAll()) {
-      if (!isEmptyValue((row as Record<string, unknown>)['legacy'])) {
-        v3.update(row.id, { legacy: undefined })
-        clearedCells++
-      }
-    }
-    assertEq(clearedCells, 2, 'v3: the value-level removeColumn cleared both legacy cells')
-    assertEq(
-      rawRow(sheet, 1, 4),
-      ['id', 'name', 'legacy', 'status'],
-      'CURRENT: removeColumn leaves the physical column and its header in place — it only blanks the values'
-    )
-    assertEq(rawRow(sheet, 2, 4), [cellText(ann.id), 'ann2', '', 'active'], 'v3: values cleared, layout unchanged')
-    assertEq(rawRow(sheet, 3, 4), [cellText(bob.id), 'bob', '', 'archived'], 'v3: second row cleared the same way')
+    // Again the store declares the POST-removal schema — the one the next
+    // deploy runs with. Destructive by contract: the legacy values go with the
+    // column and nothing can restore them.
+    const v3 = makeStore(['id', 'displayName', 'status'])
+    v3.removeColumn('legacy')
 
-    // The dangerous part: the NEXT deploy declares the post-v3 schema, with
-    // `legacy` gone. The sheet still has four physical columns.
-    const v3Narrow = makeStore(['id', 'displayName', 'status'])
-    const narrowed = v3Narrow.findById(ann.id)
-    assertOk(narrowed, 'CURRENT: the narrowed adapter still finds the row — the id column is still column 1')
-    assertEq(cellText(narrowed?.displayName), 'ann2', 'CURRENT: columns left of the drop still read correctly')
     assertEq(
-      cellText(narrowed?.status),
-      '',
-      'CURRENT: `status` silently reads the abandoned (now-empty) `legacy` column; the real status in column 4 is unreachable'
+      rawRow(sheet, 1, 3),
+      ['id', 'displayName', 'status'],
+      'v3: the column was physically deleted, not just blanked'
     )
+    assertEq(rawRow(sheet, 2, 3), [cellText(ann.id), 'ann2', 'active'], 'v3: the columns right of the drop shifted with their data')
+    assertEq(rawRow(sheet, 3, 3), [cellText(bob.id), 'bob', 'archived'], 'v3: second row aligned the same way')
 
-    v3Narrow.update(ann.id, { status: 'live' })
+    // The formerly dangerous part: a schema without `legacy` now reads and
+    // writes the real columns instead of the abandoned one.
+    v3.clearCache()
+    const narrowed = v3.findById(ann.id)
+    assertOk(narrowed, 'v3: the post-removal schema still finds the row')
+    assertEq(cellText(narrowed?.displayName), 'ann2', 'v3: columns left of the drop still read correctly')
+    assertEq(cellText(narrowed?.status), 'active', 'v3: `status` reads the real status, not the abandoned column')
+
+    v3.update(ann.id, { status: 'live' })
     assertEq(
-      rawRow(sheet, 2, 4),
-      [cellText(ann.id), 'ann2', 'live', 'active'],
-      'CURRENT: the write lands in the abandoned `legacy` column while the real `status` column keeps its stale value'
+      rawRow(sheet, 2, 3),
+      [cellText(ann.id), 'ann2', 'live'],
+      'v3: the write lands in the real `status` column'
     )
-    t.info('v3 remove: value-op only; a schema that later drops the column misreads and miswrites every column to its right')
+    assertEq(v3.findAll().length, 2, 'v3: both records survived the column delete')
+
+    // Convergence: the column is already gone, so a rerun is a no-op.
+    const narrowGrid = (): string => JSON.stringify(sheet.getRange(1, 1, 3, 3).getValues())
+    const beforeRemoveRerun = narrowGrid()
+    v3.removeColumn('legacy')
+    assertEq(narrowGrid(), beforeRemoveRerun, 'v3: rerun leaves the grid byte-identical')
+    t.info('v3 remove: column physically deleted, remaining data stays aligned, rerun converges')
   })
 
   // Expose for cleanup by the harness entrypoint.

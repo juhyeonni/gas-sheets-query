@@ -119,6 +119,24 @@ export class FakeSheet {
     }
   }
 
+  /**
+   * Deletes the column at `columnIndex` (1-indexed), shifting cells after that
+   * position one column left — values included, which is what makes it the
+   * physical counterpart of {@link insertColumnBefore} (#180). Rows whose
+   * content ends before the position are left as-is (they read as blank there
+   * either way).
+   */
+  deleteColumn(columnIndex: number): void {
+    if (columnIndex < 1) {
+      throw new Error(`deleteColumn: column index must be >= 1 (got ${columnIndex})`)
+    }
+    for (const row of this.grid) {
+      if (row.length >= columnIndex) {
+        row.splice(columnIndex - 1, 1)
+      }
+    }
+  }
+
   /** Empties the grid and resets frozen-row state. */
   clear(): void {
     this.grid = []
