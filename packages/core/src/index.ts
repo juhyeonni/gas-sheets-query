@@ -45,7 +45,7 @@ export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOption
 // Adapters
 export { MockAdapter } from './adapters/mock-adapter'
 export type { MockAdapterOptions } from './adapters/mock-adapter'
-export { SheetsAdapter } from './adapters/sheets-adapter'
+export { SheetsAdapter, MAX_CELL_LENGTH } from './adapters/sheets-adapter'
 export type { ColumnType, SheetsAdapterOptions } from './adapters/sheets-adapter'
 
 // Query utilities
@@ -69,8 +69,19 @@ export {
   ValidationError,
   InvalidOperatorError,
   UnknownColumnError,
-  SchemaMismatchError
+  SchemaMismatchError,
+  // GAS platform errors (#136)
+  LockTimeoutError,
+  QuotaExceededError,
+  SheetsApiError,
+  CellSizeLimitError,
+  classifyGasError,
+  isTransientGasError
 } from './core/errors'
+
+// Bounded retry with backoff for transient GAS failures (#136)
+export { withRetries, DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_BASE_DELAY_MS } from './core/gas-retry'
+export type { RetryOptions } from './core/gas-retry'
 
 // Migration System
 export {
