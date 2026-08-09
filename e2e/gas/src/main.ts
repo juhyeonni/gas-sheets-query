@@ -100,16 +100,27 @@ function deleteAllE2ESheets(spreadsheetId: string): number {
  * exercise the real LockService: with correct locking the two bursts must not
  * collide on ids or overwrite each other's rows.
  */
-export function burst(tag: string, n: number): { inserted: number; tag: string } {
+export function burst(tag: string, n: number): { inserted: number; tag: string; errors: string[] } {
   const adapter = new SheetsAdapter<BurstRow>({
     spreadsheetId: getSpreadsheetId(),
     sheetName: BURST_SHEET,
     columns: ['id', 'tag']
   })
+  // Per-insert error capture so a failed burst is distinguishable from a
+  // silently lost row (#164): `inserted` is the count the server actually
+  // claims, and burstCheck's expectation should match the sum of the two
+  // bursts' `inserted` values.
+  const errors: string[] = []
+  let inserted = 0
   for (let i = 0; i < n; i++) {
-    adapter.insert({ tag: `${tag}-${i}` })
+    try {
+      adapter.insert({ tag: `${tag}-${i}` })
+      inserted++
+    } catch (err) {
+      errors.push(`${tag}-${i}: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`)
+    }
   }
-  return { inserted: n, tag }
+  return { inserted, tag, errors }
 }
 
 export function burstCheck(expect: number): {
