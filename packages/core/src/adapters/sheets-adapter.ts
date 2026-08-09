@@ -163,6 +163,20 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   /** Get the spreadsheet instance */
+  /**
+   * Drops the cached Spreadsheet handle and opens a fresh one.
+   *
+   * A handle's sheet list reflects the spreadsheet as of when the handle was
+   * materialized; a sheet created by ANOTHER execution afterwards can be
+   * invisible through the old handle even after that execution flushed
+   * (#178, second live repro). Creation-path re-checks must read through a
+   * fresh handle.
+   */
+  private reopenSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
+    this._spreadsheet = null
+    return this.getSpreadsheet()
+  }
+
   private getSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
     if (!this._spreadsheet) {
       // Opening a document is a read, and one of the likeliest calls to hit a
@@ -195,19 +209,37 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
           // and would both insertSheet — one throws on the taken name, and
           // the loser's early rows can be clobbered by the winner's header
           // write (acknowledged-row loss, observed on the live platform).
-          // Re-check inside the lock; the lock's flush-before-release (#164)
-          // makes the creation durably visible before the lock hands over.
+          //
+          // The lock alone is not enough: a Spreadsheet handle materializes
+          // its sheet list when opened, so even inside the lock a re-check
+          // through a stale handle can miss a sheet another execution just
+          // created (second live repro, gas-e2e run 31298880115). Hence the
+          // fresh re-open before the re-check, and the adopt-on-failure
+          // below as the final backstop — insertSheet's name-taken message
+          // is localized, so recovery keys on "the sheet exists after all",
+          // never on matching error text.
           sheet = this.withLock(() => {
-            const existing = this.sheetsCall(() => ss.getSheetByName(this.sheetName))
+            const fresh = this.reopenSpreadsheet()
+            const existing = this.sheetsCall(() => fresh.getSheetByName(this.sheetName))
             if (existing) return existing
-            // insertSheet is not idempotent — a retry after a spurious failure
-            // would either create a second sheet or throw on the taken name.
-            const created = this.sheetsCallOnce(() => ss.insertSheet(this.sheetName))
-            // Write header row
-            this.sheetsCall(() =>
-              created.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
-            )
-            return created
+            try {
+              // insertSheet is not idempotent — a retry after a spurious
+              // failure would either create a second sheet or throw on the
+              // taken name.
+              const created = this.sheetsCallOnce(() => fresh.insertSheet(this.sheetName))
+              // Write header row
+              this.sheetsCall(() =>
+                created.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+              )
+              return created
+            } catch (err) {
+              // A concurrent execution may have won a race even the fresh
+              // read could not see. If the sheet exists now, adopt it;
+              // otherwise the failure was real — rethrow it.
+              const adopted = this.sheetsCall(() => this.reopenSpreadsheet().getSheetByName(this.sheetName))
+              if (adopted) return adopted
+              throw err
+            }
           })
         } else {
           throw new Error(`Sheet '${this.sheetName}' not found`)
