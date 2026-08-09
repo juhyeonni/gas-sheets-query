@@ -10,10 +10,12 @@
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "prepublishOnly": "pnpm clean && pnpm build",
+    "prepublishOnly": "node ../../scripts/check-publish-manifest.mjs && pnpm clean && pnpm build",
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
@@ -51,5 +53,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

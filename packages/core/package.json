@@ -16,13 +16,16 @@
       "types": "./dist/types/testing/index.d.ts",
       "import": "./dist/testing.mjs",
       "require": "./dist/testing.cjs"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
-    "prepublishOnly": "pnpm clean && pnpm build",
+    "prepublishOnly": "node ../../scripts/check-publish-manifest.mjs && pnpm clean && pnpm build",
     "build": "node build.mjs && tsc --emitDeclarationOnly",
     "build:gas": "node build.mjs",
     "dev": "vitest",
@@ -54,5 +57,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -186,6 +186,30 @@ npm dist-tag rm @gsquery/core beta
 
 ---
 
+## Publish with pnpm — never `npm publish`
+
+> The examples above are the intent; `.github/workflows/release.yml` (release-please
+> + `pnpm -r publish`) is what actually runs. Keep both on pnpm.
+
+`@gsquery/cli` declares `peerDependencies: { "@gsquery/core": "workspace:*" }` and
+`@gsquery/client` depends on `@gsquery/core: workspace:*`. `pnpm publish` rewrites those
+to the concrete version at pack time; `npm publish` ships `workspace:*` verbatim, which
+no installer can resolve — and a published version cannot be replaced.
+
+Two guards enforce this:
+
+| Guard | Where | Fails when |
+|---|---|---|
+| `scripts/check-publish-manifest.mjs` | `prepublishOnly` in every package | a `workspace:` / `catalog:` / `link:` range is in the manifest and the publisher is not pnpm |
+| `scripts/verify-publish-artifacts.mjs` (`pnpm verify:pack`) | release workflow, after build+test | a packed tarball is missing README/LICENSE/`dist`, leaks `src/`/`tests/`, or still contains a pnpm-only protocol |
+
+Run the artifact check locally before any release:
+
+```bash
+pnpm build && pnpm verify:pack          # add --list for full file listings
+node scripts/verify-publish-artifacts.mjs --list
+```
+
 ## Monorepo Publishing
 
 ### 전체 패키지 배포
