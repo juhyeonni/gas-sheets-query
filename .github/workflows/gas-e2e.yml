@@ -1,12 +1,21 @@
 name: GAS E2E (real Apps Script)
 
 # Runs the golden suite inside a real Apps Script deployment against a real
-# spreadsheet. Requires one-time setup (see e2e/gas/README.md):
-#   secrets.CLASPRC_JSON   — contents of ~/.clasprc.json from `clasp login`
-#                            (OAuth app must be in Production mode, or the
-#                            refresh token dies after 7 days)
-#   secrets.GAS_E2E_URL    — the deployed web app /exec URL
-#   secrets.GAS_E2E_TOKEN  — optional; must match Script Property E2E_TOKEN
+# spreadsheet. Two modes, selected by which secrets exist (see e2e/gas/README.md):
+#
+#   curl-only (minimum viable):
+#     secrets.GAS_E2E_URL           — deployed web app /exec URL
+#     secrets.GAS_E2E_TOKEN         — optional; must match Script Property E2E_TOKEN
+#     → runs the suite against whatever version is currently deployed.
+#
+#   full (also pushes the current checkout and redeploys before testing):
+#     secrets.CLASPRC_JSON          — contents of ~/.clasprc.json from `clasp login`
+#     secrets.CLASP_JSON            — contents of e2e/gas/.clasp.json
+#     secrets.GAS_E2E_DEPLOYMENT_ID — the web app deployment id (AKfycb… — from
+#                                     `clasp deployments` or the /exec URL)
+#     → `clasp push` updates HEAD, then `clasp deploy -i` re-versions the SAME
+#       deployment so the /exec URL serves the just-pushed code. Without the
+#       redeploy step the URL would keep serving the old version.
 on:
   workflow_dispatch:
   schedule:
@@ -17,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ vars.GAS_E2E_ENABLED == 'true' }}
     timeout-minutes: 20
+    env:
+      HAS_CLASP: ${{ secrets.CLASPRC_JSON != '' && secrets.CLASP_JSON != '' && secrets.GAS_E2E_DEPLOYMENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,19 +38,24 @@ jobs:
           cache: pnpm
 
       - name: Install and bundle harness
+        if: ${{ env.HAS_CLASP == 'true' }}
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter @gsquery/gas-e2e-harness build
 
-      - name: Push harness to Apps Script
+      - name: Push current checkout and redeploy the web app
+        if: ${{ env.HAS_CLASP == 'true' }}
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
           CLASP_JSON: ${{ secrets.CLASP_JSON }}
+          DEPLOYMENT_ID: ${{ secrets.GAS_E2E_DEPLOYMENT_ID }}
         run: |
+          set -euo pipefail
           echo "$CLASPRC_JSON" > ~/.clasprc.json
           echo "$CLASP_JSON" > e2e/gas/.clasp.json
           cd e2e/gas
           npx @google/clasp push --force
+          npx @google/clasp deploy -i "$DEPLOYMENT_ID" -d "ci ${GITHUB_SHA::7}"
 
       - name: Run golden suite
         env:
