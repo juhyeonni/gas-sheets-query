@@ -190,19 +190,30 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
       if (!sheet) {
         if (this.createIfNotExists) {
-          // insertSheet is not idempotent — a retry after a spurious failure
-          // would either create a second sheet or throw on the taken name.
-          const created = this.sheetsCallOnce(() => ss.insertSheet(this.sheetName))
-          sheet = created
-          // Write header row
-          this.sheetsCall(() =>
-            created.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
-          )
+          // Creation is a cross-execution critical section (#178): two
+          // executions touching a not-yet-created table both see null above
+          // and would both insertSheet — one throws on the taken name, and
+          // the loser's early rows can be clobbered by the winner's header
+          // write (acknowledged-row loss, observed on the live platform).
+          // Re-check inside the lock; the lock's flush-before-release (#164)
+          // makes the creation durably visible before the lock hands over.
+          sheet = this.withLock(() => {
+            const existing = this.sheetsCall(() => ss.getSheetByName(this.sheetName))
+            if (existing) return existing
+            // insertSheet is not idempotent — a retry after a spurious failure
+            // would either create a second sheet or throw on the taken name.
+            const created = this.sheetsCallOnce(() => ss.insertSheet(this.sheetName))
+            // Write header row
+            this.sheetsCall(() =>
+              created.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+            )
+            return created
+          })
         } else {
           throw new Error(`Sheet '${this.sheetName}' not found`)
         }
       }
-      
+
       this._sheet = sheet
     }
     return this._sheet
