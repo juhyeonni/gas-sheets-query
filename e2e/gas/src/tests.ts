@@ -376,20 +376,27 @@ export function registerTests(ctx: HarnessContext): void {
     }
   })
 
-  // ── 14. Human inserts a foreign column in the middle — EXPECTED TO BREAK ──
+  // ── 14. Human inserts a foreign column in the middle — must FAIL LOUDLY ───
   // This adapter is positional: `rowToObject` maps cell index i to
-  // `columns[i]`. A column inserted to the LEFT of an existing one shifts every
-  // value one place right, and nothing in the read path re-checks the header.
-  // The point of this test is to pin down HOW it breaks (silent misread, no
-  // error) with exact evidence, not to fix it. Do not "repair" the adapter here.
-  test('human edit: a foreign column inserted mid-table silently misaligns reads and writes [documents #TBD]', t => {
+  // `columns[i]`, so a column inserted to the LEFT of an existing one shifts
+  // every value one place right. It used to do that in silence (characterized
+  // here, then confirmed live in run 31298563680: misread on every field right
+  // of the insert, and an update that destroyed the human's column while
+  // leaving the real trailing one stale). #179 added a header-drift guard: one
+  // read of row 1 per execution, then SchemaMismatchError on divergence.
+  //
+  // The escape hatch `skipHeaderCheck: true` still buys the old behavior, and
+  // this test pins that too — it is the documented-dangerous path, so it must
+  // keep behaving exactly as characterized rather than half-failing.
+  test('human edit: a foreign column inserted mid-table is rejected with SchemaMismatchError (#179)', t => {
     const adapter = makeAdapter('humancol', ['id', 'name', 'score'])
     const rows = adapter.batchInsert([
       { name: 'p0', score: 10 },
       { name: 'p1', score: 20 },
       { name: 'p2', score: 30 }
     ])
-    const sheet = openSheet(`e2e_${ctx.runId}_humancol`)
+    const sheetNameForSlug = `e2e_${ctx.runId}_humancol`
+    const sheet = openSheet(sheetNameForSlug)
     assertOk(sheet, 'seeded sheet exists')
     if (!sheet) return
 
@@ -407,32 +414,59 @@ export function registerTests(ctx: HarnessContext): void {
 
     adapter.clearCache()
 
-    // CHARACTERIZED BEHAVIOR (read side): no error, no warning — the adapter
-    // reads three cells positionally and every field after `id` is off by one.
-    const all = adapter.findAll()
-    assertEq(all.length, 3, 'CURRENT: row count still looks correct — the corruption is silent')
-    const first = adapter.findById(rows[0].id)
-    assertOk(first, 'CURRENT: findById still resolves — the id column did not move')
-    assertEq(cellText(first?.name), 'alice', "CURRENT: `name` reads the human's `owner` cell")
-    assertEq(cellText(first?.score), 'p0', 'CURRENT: `score` reads the old `name` cell')
-    assertEq(cellText(all[2]?.score), 'p2', 'CURRENT: every row is shifted the same way, so nothing looks anomalous')
-    t.info('read side: silent misread (no error), every field right of `id` shifted by one column')
+    // Read side: the misalignment is now an error, not a wrong answer.
+    assertThrows(() => adapter.findAll(), 'SCHEMA_MISMATCH', 'findAll on a drifted sheet')
+    assertThrows(() => adapter.findById(rows[0].id), 'SCHEMA_MISMATCH', 'findById on a drifted sheet')
+    assertThrows(
+      () => adapter.find({ where: [{ field: 'name', operator: '=', value: 'p0' }], orderBy: [] }),
+      'SCHEMA_MISMATCH',
+      'find on a drifted sheet'
+    )
 
-    // CHARACTERIZED BEHAVIOR (write side): the update writes columns 1..3, so
-    // it destroys the human's column and never touches the real `score`.
-    const updated = adapter.update(rows[0].id, { name: 'renamed' })
-    assertOk(updated, 'CURRENT: update reports success')
+    // Write side: rejected before anything is written.
+    assertThrows(() => adapter.update(rows[0].id, { name: 'renamed' }), 'SCHEMA_MISMATCH', 'update on a drifted sheet')
+    assertThrows(() => adapter.insert({ name: 'p3', score: 40 }), 'SCHEMA_MISMATCH', 'insert on a drifted sheet')
+    assertThrows(() => adapter.delete(rows[2].id), 'SCHEMA_MISMATCH', 'delete on a drifted sheet')
+
+    // Nothing moved: the human's column and every data cell are exactly as they
+    // were before the rejected operations.
+    assertEq(rawRow(sheet, 1, 4), ['id', 'owner', 'name', 'score'], 'header untouched by the rejected writes')
+    assertEq(
+      rawCells(sheet, 2, 1, 3, 4),
+      [
+        [cellText(rows[0].id), 'alice', 'p0', '10'],
+        [cellText(rows[1].id), 'bob', 'p1', '20'],
+        [cellText(rows[2].id), 'carol', 'p2', '30']
+      ],
+      'no row was read wrong, written, or deleted — the guard fires before any mutation'
+    )
+    t.info('guarded: reads and writes throw SchemaMismatchError (SCHEMA_MISMATCH) naming the drifted column')
+
+    // The escape hatch reproduces the old, dangerous behavior verbatim.
+    const unguarded = new SheetsAdapter<E2ERow>({
+      spreadsheetId: ctx.spreadsheetId,
+      sheetName: sheetNameForSlug,
+      columns: ['id', 'name', 'score'],
+      skipHeaderCheck: true
+    })
+    const first = unguarded.findById(rows[0].id)
+    assertOk(first, 'skipHeaderCheck: findById still resolves — the id column did not move')
+    assertEq(cellText(first?.name), 'alice', "skipHeaderCheck: `name` reads the human's `owner` cell")
+    assertEq(cellText(first?.score), 'p0', 'skipHeaderCheck: `score` reads the old `name` cell')
+
+    const updated = unguarded.update(rows[0].id, { name: 'renamed' })
+    assertOk(updated, 'skipHeaderCheck: update reports success')
     assertEq(
       rawRow(sheet, 2, 4),
       [cellText(rows[0].id), 'renamed', 'p0', '10'],
-      "CURRENT: the write overwrote the human's `owner` cell; the real `score` column (4) is left stale"
+      "skipHeaderCheck: the write overwrote the human's `owner` cell; the real `score` column (4) is left stale"
     )
     assertEq(
       rawCells(sheet, 3, 2, 2, 1).map(([value]) => value),
       ['bob', 'carol'],
-      'CURRENT: only the row that was written is damaged — untouched rows keep their owner value'
+      'skipHeaderCheck: only the row that was written is damaged — untouched rows keep their owner value'
     )
-    t.info('write side: clobbers the foreign column, real trailing column left stale — silent data loss')
+    t.info('skipHeaderCheck: opts back into the documented-dangerous silent misalignment')
   })
 
   // ══ S3. Volume budget ════════════════════════════════════════════════════
@@ -531,8 +565,18 @@ export function registerTests(ctx: HarnessContext): void {
   // misread and miswrite every column to its right.
   test('migration chain v1→v3 on live data: addColumn, renameColumn and removeColumn are all physical (#180)', t => {
     const name = sheetName('chain')
+    // skipHeaderCheck (#179): from v2 on, this chain deliberately runs schemas
+    // whose header the value-level rename/remove never updated — exactly the
+    // drift the new guard rejects. Opting out here keeps the characterization
+    // readable; the guard itself is covered by S2c. Once renameColumn is
+    // physical (#180) the header stops drifting and this can come off.
     const makeStore = (columns: string[]): SheetsAdapter<E2ERow> =>
-      new SheetsAdapter<E2ERow>({ spreadsheetId: ctx.spreadsheetId, sheetName: name, columns })
+      new SheetsAdapter<E2ERow>({
+        spreadsheetId: ctx.spreadsheetId,
+        sheetName: name,
+        columns,
+        skipHeaderCheck: true
+      })
 
     // v0 — the shape production is already running.
     const v0 = makeStore(['id', 'name', 'legacy'])

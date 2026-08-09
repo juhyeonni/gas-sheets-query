@@ -84,6 +84,7 @@ Google Sheets is not a database engine — know what you're trading:
 - **Schema `@unique` / `@@index` are declarative only** — parsed and emitted, but not enforced at runtime; indexes accelerate the mock/local adapters, not `SheetsAdapter`.
 - **Local-first client is single-tab** — two tabs sharing the same namespace can clobber each other's queued mutations.
 - **Formula escaping is on by default** — user-supplied strings are stored as literal text (never executed as formulas); opt out per adapter with `allowFormulas: true` if you intentionally store formulas.
+- **Columns are mapped by position** — if somebody inserts or reorders a column in the sheet, the layout no longer matches the schema. Every read and write checks the header row once per execution and throws `SchemaMismatchError` instead of silently reading and writing the wrong columns; opt out per adapter with `skipHeaderCheck: true`.
 
 ## 🤖 AI Coding Assistants
 

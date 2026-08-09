@@ -363,6 +363,23 @@ describe('SheetsAdapter lock coverage (#128)', () => {
   }
 
   /**
+   * Invocation order of the first `getRange` that touches DATA (row >= 2).
+   *
+   * Row 1 is read by the header-drift guard (#179), a pre-flight check that
+   * deliberately runs before the lock is taken: it protects against a human
+   * column insert, which no execution-level lock can serialize, so a drifted
+   * sheet should fail without first queueing behind the lock. The critical
+   * section under test is the row scan and the write, both of which read data
+   * rows.
+   */
+  function orderOfFirstDataRead(spy: {
+    mock: { calls: unknown[][]; invocationCallOrder: number[] }
+  }): number {
+    const index = spy.mock.calls.findIndex(([row]) => row !== 1)
+    return spy.mock.invocationCallOrder[index]
+  }
+
+  /**
    * Spies `getRange` and every `setValues` it hands out, so writes can be
    * ordered against lock acquisition/release.
    */
@@ -399,7 +416,7 @@ describe('SheetsAdapter lock coverage (#128)', () => {
 
     const write = lastWrite()
     expect(write).toBeDefined()
-    expect(order(lock.waitLock)).toBeLessThan(order(getRange))
+    expect(order(lock.waitLock)).toBeLessThan(orderOfFirstDataRead(getRange))
     expect(order(lock.releaseLock)).toBeGreaterThan(order(write!))
   })
 
@@ -463,7 +480,7 @@ describe('SheetsAdapter lock coverage (#128)', () => {
 
     const write = lastWrite()
     expect(write).toBeDefined()
-    expect(order(lock.waitLock)).toBeLessThan(order(getRange))
+    expect(order(lock.waitLock)).toBeLessThan(orderOfFirstDataRead(getRange))
     expect(order(lock.releaseLock)).toBeGreaterThan(order(write!))
   })
 

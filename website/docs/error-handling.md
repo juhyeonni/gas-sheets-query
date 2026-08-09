@@ -152,8 +152,13 @@ undeclared column, so the migration fails instead of silently doing nothing.
 
 ### SchemaMismatchError
 
-Thrown by a schema migration when the sheet's physical header contradicts the
-declared columns; writing into a misaligned sheet would corrupt data.
+Thrown when the sheet's physical header contradicts the declared columns, either
+by a schema migration or by the per-execution header-drift check that guards
+every `SheetsAdapter` read and write. Reading a misaligned sheet returns the
+neighbouring column's values and writing into one corrupts data, so the
+operation is refused instead. The message names the first column that diverged;
+see [Header Drift](./adapters.md#header-drift) for the layouts that are tolerated
+and for the `skipHeaderCheck` escape hatch.
 
 ```ts
 // code: 'SCHEMA_MISMATCH'
