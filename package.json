@@ -1,6 +1,6 @@
 {
   "name": "gas-sheets-query-monorepo",
-  "version": "0.9.0",
+  "version": "1.0.0-rc3",
   "private": true,
   "description": "Monorepo for gas-sheets-query",
   "scripts": {
@@ -10,6 +10,7 @@
     "test:coverage": "pnpm -r exec vitest run --coverage",
     "typecheck": "pnpm -r typecheck",
     "clean": "pnpm -r clean",
+    "verify:pack": "node scripts/verify-publish-artifacts.mjs",
     "dev": "pnpm --filter gsquery dev",
     "release": "pnpm build && pnpm -r publish --access public"
   },
