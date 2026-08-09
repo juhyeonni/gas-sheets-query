@@ -53,6 +53,7 @@ export type {
   PoisonedMutationInfo,
   PoisonedMutationAction,
   PoisonedMutationHandler,
+  RejectedMutationIds,
 } from "./local/index.js";
 
 // Transports

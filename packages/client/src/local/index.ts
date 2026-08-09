@@ -26,4 +26,5 @@ export type {
   PoisonedMutationInfo,
   PoisonedMutationAction,
   PoisonedMutationHandler,
+  RejectedMutationIds,
 } from './sync-transport.js'
