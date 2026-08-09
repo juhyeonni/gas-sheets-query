@@ -1,33 +1,43 @@
 name: GAS E2E (real Apps Script)
 
 # Runs the golden suite inside a real Apps Script deployment against a real
-# spreadsheet. Two modes, selected by which secrets exist (see e2e/gas/README.md):
+# spreadsheet, on every dev push that touches runtime code (plus manual runs).
 #
-#   curl-only (minimum viable):
-#     secrets.GAS_E2E_URL           — deployed web app /exec URL
-#     secrets.GAS_E2E_TOKEN         — optional; must match Script Property E2E_TOKEN
-#     → runs the suite against whatever version is currently deployed.
+# The web app is locked to `access: MYSELF` — no anonymous access. CI
+# authenticates every request with a Bearer token minted from the owner's
+# clasp credentials (e2e/gas/mint-token.mjs), so CLASPRC_JSON is always
+# required. See e2e/gas/README.md.
 #
-#   full (also pushes the current checkout and redeploys before testing):
+#   always required:
 #     secrets.CLASPRC_JSON          — contents of ~/.clasprc.json from `clasp login`
+#     secrets.GAS_E2E_URL           — deployed web app /exec URL
+#   optional:
+#     secrets.GAS_E2E_TOKEN         — extra shared secret (Script Property E2E_TOKEN)
+#   full mode (push current checkout + redeploy before testing):
 #     secrets.CLASP_JSON            — contents of e2e/gas/.clasp.json
-#     secrets.GAS_E2E_DEPLOYMENT_ID — the web app deployment id (AKfycb… — from
-#                                     `clasp deployments` or the /exec URL)
-#     → `clasp push` updates HEAD, then `clasp deploy -i` re-versions the SAME
-#       deployment so the /exec URL serves the just-pushed code. Without the
-#       redeploy step the URL would keep serving the old version.
+#     secrets.GAS_E2E_DEPLOYMENT_ID — web app deployment id (AKfycb…); `clasp push`
+#                                     only moves HEAD, so `clasp deploy -i` must
+#                                     re-version the SAME deployment or the /exec
+#                                     URL keeps serving the old code.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 20 * * 0' # weekly, Sunday 20:00 UTC (Monday 05:00 KST)
+  push:
+    branches: [dev]
+    paths:
+      - 'packages/**'
+      - 'e2e/**'
+      - '.github/workflows/gas-e2e.yml'
 
 jobs:
   gas-e2e:
     runs-on: ubuntu-latest
     if: ${{ vars.GAS_E2E_ENABLED == 'true' }}
     timeout-minutes: 20
+    concurrency:
+      group: gas-e2e
+      cancel-in-progress: false
     env:
-      HAS_CLASP: ${{ secrets.CLASPRC_JSON != '' && secrets.CLASP_JSON != '' && secrets.GAS_E2E_DEPLOYMENT_ID != '' }}
+      HAS_PUSH: ${{ secrets.CLASP_JSON != '' && secrets.GAS_E2E_DEPLOYMENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,14 +47,23 @@ jobs:
           node-version: 20
           cache: pnpm
 
+      - name: Mint access token (web app is access:MYSELF)
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          ACCESS_TOKEN=$(node e2e/gas/mint-token.mjs)
+          echo "::add-mask::$ACCESS_TOKEN"
+          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> "$GITHUB_ENV"
+
       - name: Install and bundle harness
-        if: ${{ env.HAS_CLASP == 'true' }}
+        if: ${{ env.HAS_PUSH == 'true' }}
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter @gsquery/gas-e2e-harness build
 
       - name: Push current checkout and redeploy the web app
-        if: ${{ env.HAS_CLASP == 'true' }}
+        if: ${{ env.HAS_PUSH == 'true' }}
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
           CLASP_JSON: ${{ secrets.CLASP_JSON }}
@@ -63,7 +82,7 @@ jobs:
           TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
         run: |
           set -euo pipefail
-          RESULT=$(curl -sSL "${URL}?action=run&token=${TOKEN}")
+          RESULT=$(curl -sSL -H "Authorization: Bearer $ACCESS_TOKEN" "${URL}?action=run&token=${TOKEN}")
           echo "$RESULT" | python3 -m json.tool
           echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
 
@@ -73,12 +92,13 @@ jobs:
           TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
         run: |
           set -euo pipefail
-          curl -sSL "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
-          curl -sSL "${URL}?action=burst&tag=left&n=25&token=${TOKEN}" > left.json &
-          curl -sSL "${URL}?action=burst&tag=right&n=25&token=${TOKEN}" > right.json &
+          AUTH="Authorization: Bearer $ACCESS_TOKEN"
+          curl -sSL -H "$AUTH" "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
+          curl -sSL -H "$AUTH" "${URL}?action=burst&tag=left&n=25&token=${TOKEN}" > left.json &
+          curl -sSL -H "$AUTH" "${URL}?action=burst&tag=right&n=25&token=${TOKEN}" > right.json &
           wait
           cat left.json right.json
-          CHECK=$(curl -sSL "${URL}?action=burstCheck&expect=50&token=${TOKEN}")
+          CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=burstCheck&expect=50&token=${TOKEN}")
           echo "$CHECK" | python3 -m json.tool
           echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
 
@@ -87,4 +107,5 @@ jobs:
         env:
           URL: ${{ secrets.GAS_E2E_URL }}
           TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
-        run: curl -sSL "${URL}?action=cleanup&token=${TOKEN}" || true
+        run: |
+          curl -sSL -H "Authorization: Bearer $ACCESS_TOKEN" "${URL}?action=cleanup&token=${TOKEN}" || true

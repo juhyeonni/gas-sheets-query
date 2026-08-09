@@ -31,8 +31,8 @@ The harness creates sheets named `e2e_<runId>_*`, and deletes them after each ru
    npx @google/clasp push --force
    ```
 3. **First run in the editor**: open the project, run `runAllTests` once — this triggers the OAuth consent for the spreadsheet scope. Check the log for the JSON result.
-4. **Deploy as web app** (for CI): Deploy → New deployment → Web app, *Execute as: me*, *Access: anyone*. Copy the `/exec` URL.
-   Optionally set Script Properties: `E2E_TOKEN` (shared secret CI must echo), `GSQUERY_E2E_SPREADSHEET_ID` (to point at a different sheet).
+4. **Deploy as web app** (for CI): `npx @google/clasp deploy -d "e2e web app"` (the manifest already sets *Execute as: me*, ***Access: only myself***). The `/exec` URL is `https://script.google.com/macros/s/<deploymentId>/exec`.
+   Because access is locked to the owner, every non-browser call must carry `Authorization: Bearer <token>` — mint one with `node mint-token.mjs` (reads `~/.clasprc.json`). Optionally set Script Properties: `E2E_TOKEN` (defense-in-depth shared secret), `GSQUERY_E2E_SPREADSHEET_ID` (to point at a different sheet).
 5. **Wire CI** (from a machine where steps 2–4 are done; uses the `gh` CLI):
 
    ```bash
@@ -46,20 +46,30 @@ The harness creates sheets named `e2e_<runId>_*`, and deletes them after each ru
    gh secret set GAS_E2E_DEPLOYMENT_ID -b "AKfycb..." -R $REPO        # from `npx @google/clasp deployments`
    ```
 
-   Two modes, chosen automatically by which secrets exist:
-   - **curl-only** (just `GAS_E2E_URL`/`GAS_E2E_TOKEN`): tests whatever version is currently deployed. Zero token maintenance.
-   - **full** (also the three clasp secrets): CI pushes the current checkout and re-versions the SAME deployment (`clasp deploy -i`) so the `/exec` URL serves the just-pushed code — without that redeploy, `clasp push` alone would leave the URL serving the old version.
+   `CLASPRC_JSON` is always required — the web app is `access: MYSELF`, so CI mints a Bearer token from it for every request (`mint-token.mjs`). Modes:
+   - **test-only** (`CLASPRC_JSON` + `GAS_E2E_URL`): tests whatever version is currently deployed.
+   - **full** (also `CLASP_JSON` + `GAS_E2E_DEPLOYMENT_ID`): CI pushes the current checkout and re-versions the SAME deployment (`clasp deploy -i`) so the `/exec` URL serves the just-pushed code — without that redeploy, `clasp push` alone would leave the URL serving the old version.
+
+   > If authenticated curls come back as a Google login page (HTML instead of JSON), the clasp token's scopes don't satisfy the web app's access check — re-run `npx @google/clasp login` with the stock client (its `drive.file` scope satisfies the check) and refresh the `CLASPRC_JSON` secret.
 
    > ⚠️ If the OAuth client behind `clasp login` belongs to a GCP project whose consent screen is in **Testing** mode, its refresh token dies every 7 days. The stock clasp client (Google's, production) does not have this problem.
 
-Then: **Actions → "GAS E2E (real Apps Script)" → Run workflow.** It also runs weekly.
+Then: **Actions → "GAS E2E (real Apps Script)" → Run workflow.** It also runs automatically on every `dev` push that touches `packages/**` or `e2e/**`.
 
 ## What CI does
 
-1. *(full mode)* Bundles the harness (`esbuild` IIFE — library + tests in one `Code.js`), `clasp push`es it, and redeploys the web app to the new version.
-2. `GET ?action=run` — full golden suite, asserts `ok: true` from the JSON report.
-3. Fires two parallel `?action=burst&n=25` requests, then `?action=burstCheck&expect=50` — verifies the real script lock: 50 rows, 50 unique ids, no overwrites.
-4. `?action=cleanup` — removes all `e2e_*` sheets.
+1. Mints an owner Bearer token from `CLASPRC_JSON` (the app is not publicly accessible).
+2. *(full mode)* Bundles the harness (`esbuild` IIFE — library + tests in one `Code.js`), `clasp push`es it, and redeploys the web app to the new version.
+3. `GET ?action=run` — full golden suite, asserts `ok: true` from the JSON report.
+4. Fires two parallel `?action=burst&n=25` requests, then `?action=burstCheck&expect=50` — verifies the real script lock: 50 rows, 50 unique ids, no overwrites.
+5. `?action=cleanup` — removes all `e2e_*` sheets.
+
+## Calling the web app manually
+
+```bash
+ACCESS_TOKEN=$(node mint-token.mjs)
+curl -sL -H "Authorization: Bearer $ACCESS_TOKEN" "$URL?action=run&token=$E2E_TOKEN" | python3 -m json.tool
+```
 
 ## Local sanity check (no Google account needed)
 
