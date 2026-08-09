@@ -687,6 +687,41 @@ describe('MigrationRunner locking (#128)', () => {
     expect(dataRows(sheet)[0]).toEqual([1, 'Alice', 99])
   })
 
+  it('does not deadlock when a migration renames or removes a column physically (#180)', async () => {
+    // Both physical schema ops take the script lock themselves, so they must
+    // re-enter the one migrate() already holds instead of asking for a second.
+    const sheet = setupSharedSheet([
+      ['id', 'name', 'age'],
+      [1, 'Alice', 30]
+    ])
+    installExclusiveLock()
+
+    // Post-migration schema: `name` renamed to `label`, `age` dropped.
+    const users = new SheetsAdapter<TestRow>({ ...BASE_OPTIONS, columns: ['id', 'label'] })
+    const resolver: StoreResolver = <T extends Row>() => users as unknown as DataStore<T>
+    const runner = runnerWith(
+      migrationsStore(),
+      [
+        {
+          version: 1,
+          name: 'rename-and-drop',
+          up: schema => {
+            schema.renameColumn(SHEET_NAME, 'name', 'label')
+            schema.removeColumn(SHEET_NAME, 'age')
+          },
+          down: schema => schema.renameColumn(SHEET_NAME, 'label', 'name')
+        }
+      ],
+      resolver
+    )
+
+    await expect(runner.migrate()).resolves.toMatchObject({ currentVersion: 1 })
+    expect(sheet.getRange(1, 1, 2, 2).getValues()).toEqual([
+      ['id', 'label'],
+      [1, 'Alice']
+    ])
+  })
+
   it('migrate() still runs when LockService is unavailable (Node)', async () => {
     delete (globalThis as Record<string, unknown>).LockService
     const store = migrationsStore()

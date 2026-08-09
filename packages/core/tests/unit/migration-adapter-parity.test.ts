@@ -39,6 +39,15 @@ const RENAME: Migration[] = [
   },
 ]
 
+const DROP_NAME: Migration[] = [
+  {
+    version: 1,
+    name: 'drop-name',
+    up: schema => schema.removeColumn('users', 'name'),
+    down: schema => schema.addColumn('users', 'name'),
+  },
+]
+
 function mockSetup() {
   const users = new MockAdapter<any>({ initialData: [{ id: 1, name: 'John' }] })
   const resolver: StoreResolver = <T extends Row>() => users as unknown as DataStore<T>
@@ -150,7 +159,63 @@ describe('migration parity between MockAdapter and SheetsAdapter [#112]', () => 
     ])
   })
 
-  it('applies renameColumn on both stores', async () => {
+  it('renames physically on SheetsAdapter when the schema is the post-rename one [#180]', async () => {
+    // Deliberate asymmetry, the addColumn one turned inside out (#127): a
+    // name-keyed store renames by moving the value to the new key, while the
+    // positional store renames by rewriting the header cell and leaving every
+    // value exactly where it is — there is nothing to move, the cell is already
+    // read under the new name. Same end state, different mechanics.
+    const mock = mockSetup()
+    await runner(mock.resolver, RENAME).migrate()
+
+    const sheets = sheetsSetup(
+      ['id', 'label'],
+      [
+        ['id', 'name'],
+        [1, 'John'],
+      ]
+    )
+    const result = await runner(sheets.resolver, RENAME).migrate()
+
+    expect(mock.read().label).toBe('John')
+    expect(mock.read().name).toBeUndefined()
+    expect(sheets.read().label).toBe('John')
+    expect(result.currentVersion).toBe(1)
+    expect(sheets.users.getRawData()).toEqual([
+      ['id', 'label'],
+      [1, 'John'],
+    ])
+  })
+
+  it('removes physically on SheetsAdapter when the schema is the post-removal one [#180]', async () => {
+    // The name-keyed store clears the key; the positional store deletes the
+    // column itself, because leaving it would shift every column to its right
+    // for the very schema being deployed here.
+    const mock = mockSetup()
+    await runner(mock.resolver, DROP_NAME).migrate()
+
+    const sheets = sheetsSetup(
+      ['id', 'status'],
+      [
+        ['id', 'name', 'status'],
+        [1, 'John', 'active'],
+      ]
+    )
+    await runner(sheets.resolver, DROP_NAME).migrate()
+
+    expect(mock.read().name).toBeUndefined()
+    expect(sheets.read().status).toBe('active')
+    expect(sheets.users.getRawData()).toEqual([
+      ['id', 'status'],
+      [1, 'active'],
+    ])
+  })
+
+  it('applies renameColumn on both stores when both names are declared', async () => {
+    // Here the Sheets schema declares `name` AND `label`: two real columns, so
+    // the header must not change and the rename degrades to the value move the
+    // name-keyed store performs (#180 keeps this case value-level on purpose —
+    // dropping the old header cell would misalign this very adapter).
     const mock = mockSetup()
     await runner(mock.resolver, RENAME).migrate()
 

@@ -311,45 +311,79 @@ export class MigrationRunner {
   private applyOperation(operation: SchemaOperation): void {
     const store = this.storeResolver<RowWithId>(operation.table)
 
-    if (operation.type === 'addColumn') {
-      this.applyAddColumn(store, operation)
+    switch (operation.type) {
+      case 'addColumn':
+        this.applyAddColumn(store, operation)
+        return
+      case 'removeColumn':
+        this.applyRemoveColumn(store, operation)
+        return
+      case 'renameColumn':
+        this.applyRenameColumn(store, operation)
+        return
+    }
+  }
+
+  /**
+   * Apply a removeColumn operation.
+   *
+   * Same capability probe as {@link MigrationRunner.applyAddColumn} (#127): a
+   * store whose columns are physical and positional (SheetsAdapter) has to drop
+   * the column itself, because clearing values leaves the column — and the next
+   * deploy, whose schema no longer declares it, then maps every column to its
+   * right one position off (#180).
+   *
+   * Name-keyed stores (MockAdapter, LocalAdapter) have no physical column, so
+   * the value clear below is the whole operation: the key is left `undefined`
+   * (Sheets: the cell blanked). addColumn's empty-cell guard (#99) lets a later
+   * re-add re-apply its default over the cleared value.
+   */
+  private applyRemoveColumn(store: DataStore<RowWithId>, operation: SchemaOperation): void {
+    const column = operation.column!
+
+    if (store.removeColumn) {
+      store.removeColumn(column)
       return
     }
 
-    const rows = store.findAll()
-
-    switch (operation.type) {
-      case 'removeColumn': {
-        // Clears the column's value (in-memory: key left undefined; Sheets: cell
-        // cleared). This is a value operation — it does not drop the column from
-        // the sheet header. addColumn's empty-cell guard (#99) lets a later
-        // re-add re-apply its default over the cleared value.
-        for (const row of rows) {
-          if (!isEmptyCell((row as Record<string, unknown>)[operation.column!])) {
-            store.update(row.id as string | number, {
-              [operation.column!]: undefined
-            })
-          }
-        }
-        break
+    for (const row of store.findAll()) {
+      if (!isEmptyCell((row as Record<string, unknown>)[column])) {
+        store.update(row.id as string | number, { [column]: undefined })
       }
+    }
+  }
 
-      case 'renameColumn': {
-        for (const row of rows) {
-          const r = row as Record<string, unknown>
-          // Rename when the source has a value and the target is empty
-          // (missing, or cleared by a prior op) — an emptiness test rather than
-          // `in`, consistent with the addColumn guard (#99). Using `in` here
-          // would wrongly skip the rename when the target key lingers from an
-          // earlier removeColumn/rename.
-          if (!isEmptyCell(r[operation.oldColumn!]) && isEmptyCell(r[operation.newColumn!])) {
-            store.update(row.id as string | number, {
-              [operation.oldColumn!]: undefined,
-              [operation.newColumn!]: r[operation.oldColumn!]
-            })
-          }
-        }
-        break
+  /**
+   * Apply a renameColumn operation.
+   *
+   * Same capability probe as {@link MigrationRunner.applyAddColumn} (#127): on
+   * a positional store the value move below cannot rename anything — the cell
+   * is already read under the new name, so the copy condition is never true and
+   * the sheet header keeps the old name (#180). Such a store renames its own
+   * header.
+   *
+   * On name-keyed stores the value move IS the rename: it fires when the source
+   * has a value and the target is empty (missing, or cleared by a prior op) —
+   * an emptiness test rather than `in`, consistent with the addColumn guard
+   * (#99). Using `in` here would wrongly skip the rename when the target key
+   * lingers from an earlier removeColumn/rename.
+   */
+  private applyRenameColumn(store: DataStore<RowWithId>, operation: SchemaOperation): void {
+    const oldColumn = operation.oldColumn!
+    const newColumn = operation.newColumn!
+
+    if (store.renameColumn) {
+      store.renameColumn(oldColumn, newColumn)
+      return
+    }
+
+    for (const row of store.findAll()) {
+      const r = row as Record<string, unknown>
+      if (!isEmptyCell(r[oldColumn]) && isEmptyCell(r[newColumn])) {
+        store.update(row.id as string | number, {
+          [oldColumn]: undefined,
+          [newColumn]: r[oldColumn]
+        })
       }
     }
   }

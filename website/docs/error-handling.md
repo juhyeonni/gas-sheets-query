@@ -218,8 +218,8 @@ try {
 | `MISSING_STORE` | `MissingStoreError` | Table config without matching store |
 | `VALIDATION_ERROR` | `ValidationError` | Input validation failure |
 | `INVALID_OPERATOR` | `InvalidOperatorError` | Invalid operator in where clause |
-| `UNKNOWN_COLUMN` | `UnknownColumnError` | `addColumn` for a column outside the store schema |
-| `SCHEMA_MISMATCH` | `SchemaMismatchError` | Sheet header contradicts the declared columns |
+| `UNKNOWN_COLUMN` | `UnknownColumnError` | `addColumn`, or `renameColumn`'s new name, for a column outside the store schema |
+| `SCHEMA_MISMATCH` | `SchemaMismatchError` | Sheet header contradicts the declared columns (also raised by `renameColumn`/`removeColumn` when the physical layout does not match) |
 | `MIGRATION_VERSION_ERROR` | `MigrationVersionError` | Invalid migration version |
 | `MIGRATION_EXECUTION_ERROR` | `MigrationExecutionError` | Migration up/down failure |
 | `NO_MIGRATIONS_TO_ROLLBACK` | `NoMigrationsToRollbackError` | Rollback with no applied migrations |

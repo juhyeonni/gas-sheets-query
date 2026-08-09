@@ -192,6 +192,46 @@ describe('FakeSheet', () => {
     })
   })
 
+  describe('deleteColumn', () => {
+    it('removes the column and shifts the ones after it left, values included', () => {
+      const sheet = new FakeSheet('Sheet1')
+      sheet.appendRow(['id', 'legacy', 'name'])
+      sheet.appendRow([1, 'L1', 'John'])
+
+      sheet.deleteColumn(2)
+
+      expect(sheet.getLastColumn()).toBe(2)
+      expect(sheet.getRange(1, 1, 2, 2).getValues()).toEqual([
+        ['id', 'name'],
+        [1, 'John'],
+      ])
+    })
+
+    it('reads as blank past the shortened row instead of throwing', () => {
+      const sheet = new FakeSheet('Sheet1')
+      sheet.appendRow(['id', 'name'])
+
+      sheet.deleteColumn(2)
+
+      expect(sheet.getRange(1, 1, 1, 2).getValues()).toEqual([['id', '']])
+    })
+
+    it('is a no-op for rows that end before the position', () => {
+      const sheet = new FakeSheet('Sheet1')
+      sheet.appendRow(['id', 'name'])
+
+      sheet.deleteColumn(5)
+
+      expect(sheet.getLastColumn()).toBe(2)
+      expect(sheet.getRange(1, 1, 1, 2).getValues()).toEqual([['id', 'name']])
+    })
+
+    it('throws for column indexes below 1', () => {
+      const sheet = new FakeSheet('Sheet1')
+      expect(() => sheet.deleteColumn(0)).toThrow(/must be >= 1/)
+    })
+  })
+
   describe('clear / clearContents', () => {
     it('clear empties the grid and resets frozen rows', () => {
       const sheet = new FakeSheet('Sheet1')

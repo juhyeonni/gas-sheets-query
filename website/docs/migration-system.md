@@ -76,6 +76,58 @@ is a no-op rather than a full rewrite of the table. In-memory stores
 position: they accept any column, and the backfill goes through a single
 `batchUpdate`.
 
+### How `renameColumn` is applied
+
+On `SheetsAdapter` a rename is a **header rewrite**, not a data move: the value
+already sits in the right column, only its name is wrong.
+
+- **New name declared, old name gone** (the schema a deploy ships once its types
+  are regenerated) — the migration rewrites that one header cell. No row is
+  touched, so the cost is a single write no matter how large the table is, and a
+  re-run writes nothing.
+- **New name not declared** — `UnknownColumnError`. Regenerate your types (or
+  add the column to the schema) and re-run.
+- **The header cell holds neither name** — `SchemaMismatchError`, because the
+  sheet is not laid out the way the schema says and rewriting would mislabel a
+  live column.
+- **Both names declared** — the two columns are real and distinct, so the header
+  stays and the values move across (only where the source has a value and the
+  target is empty), as a ranged read plus two ranged writes.
+
+In-memory stores have no header: there, the rename *is* the value move.
+
+Because the declared columns decide the layout, roll a rename back **under the
+schema that rollback targets** — deploy the previous schema, then run
+`rollback()`. A `down: (db) => db.renameColumn(newName, oldName)` executed while
+the store still declares `newName` raises `UnknownColumnError` instead of
+writing anything.
+
+### How `removeColumn` is applied
+
+:::danger Destructive — no undo
+Removing a column deletes its values along with it. A `down` migration can
+re-create the column, but **nothing can restore the data that was in it**. Take a
+copy of the sheet before running a removal against production.
+:::
+
+- **Not declared in `columns`** (the post-removal schema) — the migration
+  deletes the physical column, and the columns to its right shift left with
+  their data. This is what keeps the deploy that no longer knows the column
+  reading its own values: a column left behind would make every field to its
+  right read the neighbour's cell and write into the abandoned one.
+- **Still declared in `columns`** — the column is part of the store's positional
+  map, so dropping it would misalign this very deploy. Its values are cleared
+  with one ranged write and the column stays; the physical delete happens under
+  the deploy whose schema no longer declares it. This is also what makes
+  `down: (db) => db.removeColumn(...)` usable as the rollback of an `addColumn`.
+- **Already gone from the sheet** — a no-op, so re-runs converge.
+- **The rest of the header would not match the schema after the delete** —
+  `SchemaMismatchError`, for the same reason as `addColumn`: shifting a
+  misaligned sheet would move live data under the wrong headers.
+
+In-memory stores have no physical column to drop: there, the removal clears the
+key on every row.
+
 ## MigrationRunner
 
 ### Creating a Runner

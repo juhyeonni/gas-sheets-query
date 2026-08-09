@@ -127,8 +127,9 @@ export interface SheetsAdapterOptions {
  *
  * Sheets API calls that are safe to repeat (all reads, and `setValues` over a
  * fixed range) are retried with bounded backoff; calls that are not
- * idempotent (`appendRow`, `deleteRow`, `insertSheet`, `insertColumnBefore`)
- * are attempted exactly once. See {@link SheetsAdapter.sheetsCall}.
+ * idempotent (`appendRow`, `deleteRow`, `insertSheet`, `insertColumnBefore`,
+ * `deleteColumn`) are attempted exactly once. See
+ * {@link SheetsAdapter.sheetsCall}.
  */
 export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private spreadsheetId?: string
@@ -505,11 +506,12 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
    * Run one **non-idempotent** Sheets API call: classify its failure, never
    * repeat it (#136).
    *
-   * `appendRow`, `deleteRow`, `insertSheet` and `insertColumnBefore` change
-   * the sheet's shape. A timeout from one of them does not say whether the
-   * mutation landed, so retrying risks a second append (in auto id mode, a
-   * duplicate row under a duplicate id) or a second deleted row. Losing the
-   * operation is recoverable; silently doubling it is not.
+   * `appendRow`, `deleteRow`, `insertSheet`, `insertColumnBefore` and
+   * `deleteColumn` change the sheet's shape. A timeout from one of them does
+   * not say whether the mutation landed, so retrying risks a second append (in
+   * auto id mode, a duplicate row under a duplicate id), a second deleted row,
+   * or a second deleted column. Losing the operation is recoverable; silently
+   * doubling it is not.
    */
   private sheetsCallOnce<R>(fn: () => R): R {
     return withRetries(fn, { attempts: 1 })
@@ -991,6 +993,198 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     }
 
     this.backfillColumn(targetIndex + 1, defaultCell)
+  }
+
+  /**
+   * Physically rename a column: rewrite the single header cell (#180).
+   *
+   * The declared `columns` are the POST-rename schema, so `newName` must be
+   * declared and `oldName` must not — that is the shape a deploy has once its
+   * types are regenerated. The header cell at `newName`'s schema position must
+   * currently read `oldName`; the values themselves never move, because this
+   * adapter maps cells by position and the column is already in the right one.
+   *
+   * A value-level rename could not do this: the adapter already reads that cell
+   * as `newName`, so the "old" field is never present, no row is ever written,
+   * and the header keeps the old name while the schema declares the new one —
+   * the exact live failure of #180.
+   *
+   * Idempotent: when the header already reads `newName` nothing is written, so
+   * a re-run converges. Cost is one read plus at most one cell write,
+   * independent of the row count.
+   *
+   * When the store declares BOTH names, the two columns are real and distinct
+   * in this layout; the header must not change, so the operation degrades to
+   * moving the values across (the name-keyed semantics), still as ranged
+   * reads/writes rather than one `update()` per row.
+   *
+   * @throws {UnknownColumnError} `newName` is not in the declared schema
+   * @throws {SchemaMismatchError} the header cell holds neither name
+   */
+  renameColumn(oldName: string, newName: string): void {
+    const targetIndex = this.columns.indexOf(newName)
+    if (targetIndex < 0) {
+      throw new UnknownColumnError(newName, this.sheetName, [...this.columns])
+    }
+    const sourceIndex = this.columns.indexOf(oldName)
+
+    // Locked so the header rewrite (or the value move, which is a read then a
+    // write) cannot interleave with another execution's write, and flushed
+    // before the lock is released (#128, #164). Re-entrant under migrate().
+    this.withLock(() => {
+      if (sourceIndex >= 0) {
+        this.moveColumnValues(sourceIndex + 1, targetIndex + 1)
+        return
+      }
+
+      const sheet = this.getSheet()
+      const header = this.readHeader()
+      const current = header[targetIndex]
+
+      // Already renamed (or a sheet this adapter created with the new header):
+      // converge instead of rewriting.
+      if (current === newName) return
+      if (current !== oldName) {
+        throw new SchemaMismatchError(this.sheetName, header, [...this.columns])
+      }
+
+      this.sheetsCall(() =>
+        sheet.getRange(1, targetIndex + 1, 1, 1).setValues([[newName]])
+      )
+      this.invalidateDataCache()
+    })
+  }
+
+  /**
+   * Physically delete a column from the sheet (#180).
+   *
+   * **Destructive by contract**: `deleteColumn` removes the header AND every
+   * value in that column. Nothing can bring them back — a `down` migration can
+   * re-create the column, never its data. Back the sheet up before running a
+   * removal against production.
+   *
+   * The declared `columns` are the POST-removal schema, so the column must NOT
+   * be declared. Leaving it physically in place is what corrupts the NEXT
+   * deploy: the schema that no longer declares it maps every column to the
+   * right of the ghost one position off, so reads return the neighbour's value
+   * and writes land in the abandoned column (#180, live evidence).
+   *
+   * A column the schema still DOES declare is part of this store's positional
+   * map, and dropping it here would misalign this very adapter. Its values are
+   * cleared with one ranged write instead (the value-level meaning of the
+   * operation) and the layout is kept; the physical delete happens under the
+   * deploy whose schema no longer declares it.
+   *
+   * Idempotent: a column that is not on the sheet is a no-op, and a
+   * cleared-values column is not cleared twice. Cost is one read plus one
+   * structural call, independent of the row count.
+   *
+   * @throws {SchemaMismatchError} the header around the column contradicts the schema
+   */
+  removeColumn(column: string): void {
+    const declaredIndex = this.columns.indexOf(column)
+
+    this.withLock(() => {
+      const sheet = this.getSheet()
+      const header = this.readHeader()
+
+      if (declaredIndex >= 0) {
+        if (header[declaredIndex] !== column) {
+          // Not on the sheet at all: nothing to clear. Anywhere else means the
+          // positional mapping is already broken.
+          if (header.indexOf(column) < 0) return
+          throw new SchemaMismatchError(this.sheetName, header, [...this.columns])
+        }
+        this.clearColumnValues(declaredIndex + 1)
+        return
+      }
+
+      const headerIndex = header.indexOf(column)
+      if (headerIndex < 0) return
+
+      // What is left after the delete must be the declared schema (or a prefix
+      // of it, for a sheet that is behind on later columns). Anything else and
+      // the shift would move live data under the wrong headers.
+      const remaining = header.slice(0, headerIndex).concat(header.slice(headerIndex + 1))
+      if (!isPrefix(remaining, this.columns)) {
+        throw new SchemaMismatchError(this.sheetName, header, [...this.columns])
+      }
+
+      // deleteColumn shifts every later column left, so a repeat after a
+      // spurious failure would destroy a second, innocent column.
+      this.sheetsCallOnce(() => sheet.deleteColumn(headerIndex + 1))
+      this.invalidateDataCache()
+    })
+  }
+
+  /**
+   * Move each cell of the column at `fromPosition` into the column at
+   * `toPosition`, for rows whose source has a value and whose target is empty.
+   *
+   * Mirrors MigrationRunner's value-level rename guard (an emptiness test, not
+   * an `in` test — #99/#112), but as two ranged writes instead of one
+   * `update()` per row. Cells are copied verbatim, so escaping and typing
+   * survive untouched. Writes nothing when no row qualifies, so a re-run
+   * converges.
+   */
+  private moveColumnValues(fromPosition: number, toPosition: number): void {
+    const sheet = this.getSheet()
+    const lastRow = sheet.getLastRow()
+    if (lastRow <= 1) return
+
+    const rowCount = lastRow - 1
+    const sourceRange = sheet.getRange(2, fromPosition, rowCount, 1)
+    const targetRange = sheet.getRange(2, toPosition, rowCount, 1)
+    const source = this.sheetsCall(() => sourceRange.getValues())
+    const target = this.sheetsCall(() => targetRange.getValues())
+
+    let moved = 0
+    const nextSource: unknown[][] = []
+    const nextTarget: unknown[][] = []
+    for (let i = 0; i < rowCount; i++) {
+      const from = source[i][0]
+      const to = target[i][0]
+      if (!isEmptyCellValue(from) && isEmptyCellValue(to)) {
+        moved++
+        nextSource.push([''])
+        nextTarget.push([from])
+      } else {
+        nextSource.push([from])
+        nextTarget.push([to])
+      }
+    }
+
+    if (moved === 0) return
+
+    // Target first: if the second write is lost, the value exists in both
+    // columns and the next run converges. The other order would clear the
+    // source before the copy landed and lose the data outright.
+    this.sheetsCall(() => targetRange.setValues(nextTarget))
+    this.sheetsCall(() => sourceRange.setValues(nextSource))
+    this.invalidateDataCache()
+  }
+
+  /**
+   * Blank every non-empty cell of a column with one ranged write, leaving the
+   * column itself in place. Writes nothing when the column is already empty, so
+   * a re-run converges.
+   */
+  private clearColumnValues(position: number): void {
+    const sheet = this.getSheet()
+    const lastRow = sheet.getLastRow()
+    if (lastRow <= 1) return
+
+    const range = sheet.getRange(2, position, lastRow - 1, 1)
+    const current = this.sheetsCall(() => range.getValues())
+
+    let filled = 0
+    for (const [value] of current) {
+      if (!isEmptyCellValue(value)) filled++
+    }
+    if (filled === 0) return
+
+    this.sheetsCall(() => range.setValues(current.map(() => [''])))
+    this.invalidateDataCache()
   }
 
   /** Read the current header row, trailing empty cells trimmed. */
