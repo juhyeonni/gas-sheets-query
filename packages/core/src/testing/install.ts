@@ -78,7 +78,9 @@ export function installGasFakes(options: InstallGasFakesOptions): GasFakesHandle
         )
       }
       return spreadsheets[activeId]
-    }
+    },
+    /** Fakes write synchronously, so committing buffered writes is a no-op (#164). */
+    flush(): void {}
   }
 
   const lockService = {

@@ -31,6 +31,23 @@ function acquireLock(timeoutMs: number): GoogleAppsScript.Lock.Lock | null {
 }
 
 /**
+ * Commits buffered SpreadsheetApp writes before the lock is released.
+ *
+ * SpreadsheetApp buffers mutations: a write that is still buffered when the
+ * lock is released is invisible to the next lock holder, which then reads a
+ * stale sheet and can commit over the uncommitted row — silent data loss
+ * reproduced on the live platform by the E2E burst test (#164; two parallel
+ * runs of 25 locked inserts each produced 49 rows with both callers
+ * reporting success). This is why LockService's own documentation flushes
+ * before releasing. No-op outside GAS and under fakes without `flush`.
+ */
+function flushPendingWrites(): void {
+  if (typeof SpreadsheetApp !== 'undefined' && typeof SpreadsheetApp.flush === 'function') {
+    SpreadsheetApp.flush()
+  }
+}
+
+/**
  * Runs `fn` while holding the script lock, releasing it once `fn` returns or
  * throws. Re-entrant: a nested call runs under the lock already held.
  */
@@ -50,6 +67,7 @@ export function withScriptLock<R>(fn: () => R, timeoutMs: number = DEFAULT_LOCK_
     return fn()
   } finally {
     lockDepth--
+    flushPendingWrites()
     if (lock) {
       lock.releaseLock()
     }
@@ -80,6 +98,7 @@ export async function withScriptLockAsync<R>(
     return await fn()
   } finally {
     lockDepth--
+    flushPendingWrites()
     if (lock) {
       lock.releaseLock()
     }
