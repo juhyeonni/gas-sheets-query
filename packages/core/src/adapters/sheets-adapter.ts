@@ -12,8 +12,14 @@ import type {
   AddColumnOptions
 } from '../core/types'
 import { evaluateCondition, compareRows } from '../core/query-utils'
-import { DuplicateIdError, SchemaMismatchError, UnknownColumnError } from '../core/errors'
+import {
+  CellSizeLimitError,
+  DuplicateIdError,
+  SchemaMismatchError,
+  UnknownColumnError
+} from '../core/errors'
 import { withScriptLock } from '../core/script-lock'
+import { withRetries } from '../core/gas-retry'
 
 /** Column type definition for schema-based serialization */
 export type ColumnType = 
@@ -38,6 +44,15 @@ const FORMULA_TRIGGER_CHARS = ['=', '+', '-', '@', '\t', '\r']
 
 /** Prefix that forces Sheets to store a written cell as literal text. */
 const TEXT_PREFIX = "'"
+
+/**
+ * Maximum characters Google Sheets stores in one cell.
+ *
+ * Enforced before any write (#136): the platform otherwise rejects the
+ * oversized cell mid-`setValues`, which aborts a multi-row batch halfway and
+ * leaves a partial update on the sheet.
+ */
+export const MAX_CELL_LENGTH = 50000
 
 /** SheetsAdapter configuration options */
 export interface SheetsAdapterOptions {
@@ -89,6 +104,31 @@ export interface SheetsAdapterOptions {
 /**
  * Google Sheets DataStore implementation
  * Provides CRUD operations on a single sheet
+ *
+ * ## Platform ceilings
+ *
+ * Sheets is not an unbounded store, and two of its limits are hard walls that
+ * a growing table will eventually hit (#136):
+ *
+ * - **50,000 characters per cell.** Enforced: every serialized value is
+ *   checked against {@link MAX_CELL_LENGTH} before any write, and a batch is
+ *   validated in full before its first write, so an oversized value fails the
+ *   whole operation instead of tearing it in half. See
+ *   {@link CellSizeLimitError}.
+ * - **10,000,000 cells per spreadsheet** (across all sheets; a sheet is also
+ *   capped at 18,278 columns). Deliberately *not* enforced at runtime: the
+ *   adapter would have to walk every sheet in the workbook on each write to
+ *   know the current total, which costs more than it saves. Budget for it
+ *   when sizing a table — `rows × columns` for this sheet is only its share.
+ *   A workbook at the ceiling rejects writes at the platform level, which
+ *   surfaces here as a {@link SheetsApiError}.
+ *
+ * ## Transient failures
+ *
+ * Sheets API calls that are safe to repeat (all reads, and `setValues` over a
+ * fixed range) are retried with bounded backoff; calls that are not
+ * idempotent (`appendRow`, `deleteRow`, `insertSheet`, `insertColumnBefore`)
+ * are attempted exactly once. See {@link SheetsAdapter.sheetsCall}.
  */
 export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private spreadsheetId?: string
@@ -125,9 +165,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   /** Get the spreadsheet instance */
   private getSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
     if (!this._spreadsheet) {
-      const ss = this.spreadsheetId
+      // Opening a document is a read, and one of the likeliest calls to hit a
+      // transient backend timeout, so it is worth retrying (#136).
+      const ss = this.sheetsCall(() => this.spreadsheetId
         ? SpreadsheetApp.openById(this.spreadsheetId)
-        : SpreadsheetApp.getActiveSpreadsheet()
+        : SpreadsheetApp.getActiveSpreadsheet())
       if (!ss) {
         throw new Error(
           `No spreadsheet available for sheet '${this.sheetName}'. ` +
@@ -144,13 +186,18 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private getSheet(): GoogleAppsScript.Spreadsheet.Sheet {
     if (!this._sheet) {
       const ss = this.getSpreadsheet()
-      let sheet = ss.getSheetByName(this.sheetName)
-      
+      let sheet = this.sheetsCall(() => ss.getSheetByName(this.sheetName))
+
       if (!sheet) {
         if (this.createIfNotExists) {
-          sheet = ss.insertSheet(this.sheetName)
+          // insertSheet is not idempotent — a retry after a spurious failure
+          // would either create a second sheet or throw on the taken name.
+          const created = this.sheetsCallOnce(() => ss.insertSheet(this.sheetName))
+          sheet = created
           // Write header row
-          sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+          this.sheetsCall(() =>
+            created.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+          )
         } else {
           throw new Error(`Sheet '${this.sheetName}' not found`)
         }
@@ -317,6 +364,13 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
    * written exactly as the same value would be written through a row write —
    * including formula-injection escaping (#130), so no user-supplied string
    * can reach the sheet as a live formula through either path.
+   *
+   * This is also the single choke point for the 50,000-character cell limit
+   * (#136): every write path serializes its whole payload here before issuing
+   * any Sheets call, so an oversized value fails the operation as a whole
+   * instead of aborting a batch halfway through.
+   *
+   * @throws {CellSizeLimitError} the serialized value exceeds {@link MAX_CELL_LENGTH}
    */
   private serializeCell(column: string, value: unknown): unknown {
     const colType = this.columnTypes[column]
@@ -337,7 +391,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       serialized = value
     }
 
-    return this.escapeCellValue(serialized)
+    // Measured after escaping, because the text marker is part of what the
+    // cell has to hold. Only strings can overflow — a number, boolean or Date
+    // has no length to speak of.
+    const cell = this.escapeCellValue(serialized)
+    if (typeof cell === 'string' && cell.length > MAX_CELL_LENGTH) {
+      throw new CellSizeLimitError(column, cell.length, MAX_CELL_LENGTH, this.sheetName)
+    }
+
+    return cell
   }
 
   /** Serialize value based on column type */
@@ -374,6 +436,43 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   /**
+   * Run one **idempotent** Sheets API call with bounded retry (#136).
+   *
+   * Use for reads and for `setValues` over a range whose coordinates were
+   * computed before the call: repeating either writes the same cells with the
+   * same values, so a repeat after a spurious failure is indistinguishable
+   * from the first attempt having worked.
+   *
+   * Placement is per call, not per public method. Wrapping a whole locked
+   * method would re-run its read-then-write sequence — including the id
+   * allocation — which is exactly the race the lock exists to prevent.
+   *
+   * Trade-off: because these calls sit inside the script lock, a retry sleeps
+   * while holding it. That is accepted and bounded — 1.5s worst case per
+   * guarded call with the defaults. It is not bounded *per operation*: a
+   * scattered `batchUpdate` retries once per contiguous run, so a sustained
+   * quota storm can stretch the lock hold. The per-operation deadline guard
+   * is the other half of #136.
+   */
+  private sheetsCall<R>(fn: () => R): R {
+    return withRetries(fn)
+  }
+
+  /**
+   * Run one **non-idempotent** Sheets API call: classify its failure, never
+   * repeat it (#136).
+   *
+   * `appendRow`, `deleteRow`, `insertSheet` and `insertColumnBefore` change
+   * the sheet's shape. A timeout from one of them does not say whether the
+   * mutation landed, so retrying risks a second append (in auto id mode, a
+   * duplicate row under a duplicate id) or a second deleted row. Losing the
+   * operation is recoverable; silently doubling it is not.
+   */
+  private sheetsCallOnce<R>(fn: () => R): R {
+    return withRetries(fn, { attempts: 1 })
+  }
+
+  /**
    * Read the id of a client-mode row, throwing when the caller omitted it.
    */
   private requireClientId(data: Omit<T, 'id'> | T): string | number {
@@ -393,7 +492,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     if (lastRow <= 1) return keys
 
     const idColIndex = this.columns.indexOf(this.idColumn) + 1
-    const ids = sheet.getRange(2, idColIndex, lastRow - 1, 1).getValues().flat()
+    const ids = this.sheetsCall(() =>
+      sheet.getRange(2, idColIndex, lastRow - 1, 1).getValues()
+    ).flat()
     for (const id of ids) {
       if (id === '' || id === null || id === undefined) continue
       keys.add(String(id))
@@ -435,7 +536,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
     const idColIndex = this.columns.indexOf(this.idColumn) + 1
     const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
-    const ids = idRange.getValues().flat().filter(id => typeof id === 'number' && !isNaN(id))
+    const ids = this.sheetsCall(() => idRange.getValues())
+      .flat()
+      .filter(id => typeof id === 'number' && !isNaN(id))
 
     if (ids.length === 0) return 0
     return Math.max(...ids as number[])
@@ -451,7 +554,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const idColIndex = this.columns.indexOf(this.idColumn) + 1
     const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
     // Unescape so a stored id keeps matching the id the caller passes (#130).
-    const ids = idRange.getValues().flat().map(rowId => this.unescapeCellValue(rowId))
+    const ids = this.sheetsCall(() => idRange.getValues())
+      .flat()
+      .map(rowId => this.unescapeCellValue(rowId))
 
     // Support both string and number comparison
     const rowOffset = ids.findIndex(rowId => rowId === id || String(rowId) === String(id))
@@ -472,7 +577,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     }
 
     const dataRange = sheet.getRange(2, 1, lastRow - 1, this.columns.length)
-    const values = dataRange.getValues()
+    const values = this.sheetsCall(() => dataRange.getValues())
 
     this._dataCache = values
       .filter(row => row.some(cell => cell !== ''))
@@ -486,7 +591,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     if (rowIndex === -1) return undefined
     
     const sheet = this.getSheet()
-    const values = sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()[0]
+    const values = this.sheetsCall(() =>
+      sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()
+    )[0]
     return this.rowToObject(values)
   }
 
@@ -532,7 +639,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         this.assertClientIdsAvailable([id])
         const newRow = data as T
         const rowValues = this.objectToRow(newRow)
-        sheet.appendRow(rowValues)
+        this.sheetsCallOnce(() => sheet.appendRow(rowValues))
         return newRow
       })
     } else {
@@ -542,7 +649,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         const id = this.getNextId()
         const newRow = { ...data, [this.idColumn]: id } as T
         const rowValues = this.objectToRow(newRow)
-        sheet.appendRow(rowValues)
+        this.sheetsCallOnce(() => sheet.appendRow(rowValues))
         return newRow
       })
     }
@@ -559,7 +666,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       if (rowIndex === -1) return undefined
 
       this.invalidateDataCache()
-      const currentValues = sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()[0]
+      const currentValues = this.sheetsCall(() =>
+        sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()
+      )[0]
 
       // Cheap re-verification of the row we are about to overwrite — free here
       // because the row was read anyway, and it still guards the unlocked
@@ -575,7 +684,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         (currentRow as Record<string, unknown>)[this.idColumn]
       const rowValues = this.objectToRow(updatedRow)
 
-      sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([rowValues])
+      // Fixed range, fixed values: repeating this write is a no-op, so it is
+      // safe to retry through a transient backend failure (#136).
+      this.sheetsCall(() =>
+        sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([rowValues])
+      )
 
       return updatedRow
     })
@@ -591,7 +704,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       if (rowIndex === -1) return false
 
       this.invalidateDataCache()
-      sheet.deleteRow(rowIndex)
+      // deleteRow shifts every row below it up, so a repeat after a spurious
+      // failure removes a second, innocent row. Attempt it exactly once.
+      this.sheetsCallOnce(() => sheet.deleteRow(rowIndex))
 
       return true
     })
@@ -606,8 +721,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // Batch write all rows at once, appending after the current last row.
     const writeRows = (rows: unknown[][]) => {
       const lastRow = sheet.getLastRow()
-      sheet.getRange(lastRow + 1, 1, rows.length, this.columns.length)
-        .setValues(rows)
+      // The range is pinned before the call, so retrying rewrites the same
+      // cells rather than appending a second copy of the batch (#136).
+      this.sheetsCall(() =>
+        sheet.getRange(lastRow + 1, 1, rows.length, this.columns.length).setValues(rows)
+      )
     }
 
     if (this.idMode === 'client') {
@@ -734,9 +852,13 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       if (!endOfRun) continue
 
       const run = rows.slice(runStart, i)
-      sheet
-        .getRange(run[0].rowIndex, 1, run.length, this.columns.length)
-        .setValues(run.map(({ values }) => values))
+      // Each run is an idempotent fixed-range write, so it is retried
+      // individually rather than re-running the whole batch (#136).
+      this.sheetsCall(() =>
+        sheet
+          .getRange(run[0].rowIndex, 1, run.length, this.columns.length)
+          .setValues(run.map(({ values }) => values))
+      )
       runStart = i
     }
   }
@@ -744,24 +866,30 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   reset(data: T[] = []): void {
     this.invalidateDataCache()
     const sheet = this.getSheet()
-    
+
+    // Serialize before clearing. A cell-size rejection discovered after
+    // clear() would have destroyed the existing rows in exchange for a failed
+    // write — the guard has to run while the old data is still there (#136).
+    const rows = data.map(row => this.objectToRow(row))
+
     // Clear all data except header
     sheet.clear()
-    
+
     // Write header
-    sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
-    
+    this.sheetsCall(() => sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns]))
+
     // Write data
-    if (data.length > 0) {
-      const rows = data.map(row => this.objectToRow(row))
-      sheet.getRange(2, 1, rows.length, this.columns.length).setValues(rows)
+    if (rows.length > 0) {
+      this.sheetsCall(() =>
+        sheet.getRange(2, 1, rows.length, this.columns.length).setValues(rows)
+      )
     }
   }
 
   /** Get raw sheet data (for debugging) */
   getRawData(): unknown[][] {
     const sheet = this.getSheet()
-    return sheet.getDataRange().getValues()
+    return this.sheetsCall(() => sheet.getDataRange().getValues())
   }
 
   /**
@@ -786,6 +914,12 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       throw new UnknownColumnError(column, this.sheetName, [...this.columns])
     }
 
+    // Serialize the default up front, so an oversized one is rejected before
+    // the sheet is restructured rather than after (#136).
+    const defaultCell = options?.default === undefined
+      ? undefined
+      : this.serializeCell(column, options.default)
+
     const sheet = this.getSheet()
     const header = this.readHeader()
     const headerIndex = header.indexOf(column)
@@ -803,16 +937,17 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       if (position <= header.length) {
         // Mid-schema insert: shift the existing columns right so their values
         // stay under their own header instead of sliding one column left.
-        sheet.insertColumnBefore(position)
+        // Not idempotent — a retry would shift the sheet twice.
+        this.sheetsCallOnce(() => sheet.insertColumnBefore(position))
       }
       // Rewrite the whole header from the schema to guarantee alignment.
-      sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns])
+      this.sheetsCall(() => sheet.getRange(1, 1, 1, this.columns.length).setValues([this.columns]))
       this.invalidateDataCache()
     } else if (headerIndex !== targetIndex) {
       throw new SchemaMismatchError(this.sheetName, header, [...this.columns])
     }
 
-    this.backfillColumn(column, targetIndex + 1, options?.default)
+    this.backfillColumn(targetIndex + 1, defaultCell)
   }
 
   /** Read the current header row, trailing empty cells trimmed. */
@@ -821,7 +956,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const lastColumn = sheet.getLastColumn()
     if (lastColumn < 1) return []
 
-    const values = sheet.getRange(1, 1, 1, lastColumn).getValues()[0]
+    const values = this.sheetsCall(() => sheet.getRange(1, 1, 1, lastColumn).getValues())[0]
     const header = values.map(value => (isEmptyCellValue(value) ? '' : String(value)))
     while (header.length > 0 && header[header.length - 1] === '') {
       header.pop()
@@ -830,20 +965,23 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   /**
-   * Write `defaultValue` into every empty cell of a column with one ranged
-   * write. Without a default nothing is written, so a re-run converges instead
-   * of rewriting all N rows every time.
+   * Write the already-serialized `cell` into every empty cell of a column with
+   * one ranged write. Without a default nothing is written, so a re-run
+   * converges instead of rewriting all N rows every time.
+   *
+   * Takes the serialized cell rather than the raw default so that
+   * {@link addColumn} can reject an oversized value before it restructures the
+   * sheet (#136).
    */
-  private backfillColumn(column: string, position: number, defaultValue: unknown): void {
-    if (defaultValue === undefined) return
+  private backfillColumn(position: number, cell: unknown): void {
+    if (cell === undefined) return
 
     const sheet = this.getSheet()
     const lastRow = sheet.getLastRow()
     if (lastRow <= 1) return
 
     const range = sheet.getRange(2, position, lastRow - 1, 1)
-    const current = range.getValues()
-    const cell = this.serializeCell(column, defaultValue)
+    const current = this.sheetsCall(() => range.getValues())
 
     let emptyCount = 0
     const filled = current.map(([value]) => {
@@ -856,7 +994,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
     if (emptyCount === 0) return
 
-    range.setValues(filled)
+    this.sheetsCall(() => range.setValues(filled))
     this.invalidateDataCache()
   }
 }

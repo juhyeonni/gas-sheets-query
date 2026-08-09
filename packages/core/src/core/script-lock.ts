@@ -8,6 +8,7 @@
  * sequence. LockService is absent outside GAS (Node tests, bundlers), in which
  * case these helpers degrade to running the callback unlocked.
  */
+import { classifyGasError, LockTimeoutError } from './errors'
 
 /** Default time (ms) to wait for the script lock before giving up. */
 export const DEFAULT_LOCK_TIMEOUT_MS = 10000
@@ -22,11 +23,34 @@ export const DEFAULT_LOCK_TIMEOUT_MS = 10000
  */
 let lockDepth = 0
 
-/** Acquires the script lock, or returns null when LockService is unavailable. */
+/**
+ * Acquires the script lock, or returns null when LockService is unavailable.
+ *
+ * `waitLock` is documented as "timing out with an exception", and that
+ * exception used to escape as a raw `Error` — indistinguishable from a bug,
+ * so callers could not tell "someone else is writing, come back later" from
+ * "your code is broken" (#136). It is classified here instead: a recognized
+ * non-lock platform failure keeps its own type, and anything else from
+ * `waitLock` is a failed acquisition, because that is the method's only
+ * documented failure mode.
+ *
+ * No lock is held when this throws, so the caller's operation was not
+ * attempted at all.
+ */
 function acquireLock(timeoutMs: number): GoogleAppsScript.Lock.Lock | null {
   if (typeof LockService === 'undefined') return null
   const lock = LockService.getScriptLock()
-  lock.waitLock(timeoutMs)
+  try {
+    lock.waitLock(timeoutMs)
+  } catch (error) {
+    const classified = classifyGasError(error)
+    if (classified !== undefined && !(classified instanceof LockTimeoutError)) {
+      throw classified
+    }
+    // Re-created rather than rethrown so the error reports the wait budget
+    // the caller actually asked for, which is not in the platform message.
+    throw new LockTimeoutError(timeoutMs, error)
+  }
   return lock
 }
 
