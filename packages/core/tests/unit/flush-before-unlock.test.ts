@@ -5,8 +5,9 @@
  * the live platform by the E2E burst test: 2×25 locked inserts → 49 rows,
  * both callers reporting success).
  *
- * These tests pin the ordering contract: flush() is invoked inside the
- * critical section boundary, strictly before releaseLock().
+ * These tests pin the ordering contract: flush() runs right after the
+ * outermost acquisition (synchronizing this execution's view, #186) and
+ * again strictly before releaseLock() (committing our writes, #164).
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { SheetsAdapter } from '../../src/adapters/sheets-adapter'
@@ -68,7 +69,7 @@ describe('flush before unlock (#164)', () => {
       recorder.events.push('work')
     })
 
-    expect(recorder.events).toEqual(['acquire', 'work', 'flush', 'release'])
+    expect(recorder.events).toEqual(['acquire', 'flush', 'work', 'flush', 'release'])
   })
 
   it('withScriptLock flushes even when the callback throws', () => {
@@ -82,7 +83,7 @@ describe('flush before unlock (#164)', () => {
       })
     ).toThrow('boom')
 
-    expect(recorder.events).toEqual(['acquire', 'work', 'flush', 'release'])
+    expect(recorder.events).toEqual(['acquire', 'flush', 'work', 'flush', 'release'])
   })
 
   it('withScriptLockAsync flushes before releasing', async () => {
@@ -93,7 +94,7 @@ describe('flush before unlock (#164)', () => {
       recorder.events.push('work')
     })
 
-    expect(recorder.events).toEqual(['acquire', 'work', 'flush', 'release'])
+    expect(recorder.events).toEqual(['acquire', 'flush', 'work', 'flush', 'release'])
   })
 
   it('nested locks flush once, at the outermost release', () => {
@@ -107,7 +108,7 @@ describe('flush before unlock (#164)', () => {
       recorder.events.push('outer')
     })
 
-    expect(recorder.events).toEqual(['acquire', 'inner', 'outer', 'flush', 'release'])
+    expect(recorder.events).toEqual(['acquire', 'flush', 'inner', 'outer', 'flush', 'release'])
   })
 
   it('SheetsAdapter.insert commits its append before the lock is released', () => {

@@ -87,6 +87,14 @@ export function withScriptLock<R>(fn: () => R, timeoutMs: number = DEFAULT_LOCK_
 
   const lock = acquireLock(timeoutMs)
   lockDepth++
+  // Synchronize this execution's view before the critical section reads:
+  // another execution's flush-on-release guarantees its writes committed,
+  // but not that OUR first read inside the lock observes them — a stale
+  // read here minted a duplicate auto id once in 50 contended inserts on
+  // the live platform (#186). flush() also refreshes the read state, so
+  // the canonical GAS pattern is lock -> flush -> read -> write -> flush
+  // -> release.
+  flushPendingWrites()
   try {
     return fn()
   } finally {
@@ -118,6 +126,8 @@ export async function withScriptLockAsync<R>(
 
   const lock = acquireLock(timeoutMs)
   lockDepth++
+  // See withScriptLock: synchronize the view on acquisition (#186).
+  flushPendingWrites()
   try {
     return await fn()
   } finally {
