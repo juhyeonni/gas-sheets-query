@@ -14,6 +14,35 @@ import { SheetsAdapter } from '@gsquery/core'
 import type { ColumnType } from '@gsquery/core'
 import { assertEq, assertOk, assertThrows, test } from './runner'
 
+/**
+ * Structural views used to feature-detect real-GAS-only methods.
+ *
+ * The in-repo fakes implement an allowlisted subset of the Sheets surface and
+ * deliberately omit what they cannot simulate faithfully (`Range.sort`,
+ * `Sheet.insertRowBefore`). The human-interference probes below therefore test
+ * for the method before using it and skip only that sub-assertion under fakes —
+ * a missing fake method must never turn the local check red.
+ */
+interface SortableRange {
+  sort?: (spec: { column: number; ascending: boolean }) => unknown
+}
+interface RowInsertingSheet {
+  insertRowBefore?: (rowIndex: number) => unknown
+}
+interface ColumnInsertingSheet {
+  insertColumnBefore?: (columnIndex: number) => unknown
+}
+
+/** A cell as read back, normalized to a string so number/string cell coercion differences don't matter. */
+function cellText(value: unknown): string {
+  return value === null || value === undefined ? '' : String(value)
+}
+
+/** MigrationRunner's emptiness test, inlined (it is not exported from core). */
+function isEmptyValue(value: unknown): boolean {
+  return value === undefined || value === null || value === ''
+}
+
 export interface HarnessContext {
   spreadsheetId: string
   runId: string
@@ -236,6 +265,365 @@ export function registerTests(ctx: HarnessContext): void {
     adapter.clearCache()
     const all = adapter.findAll()
     assertEq(all.length, 100, '100 rows read back')
+  })
+
+  // ── Shared helpers for the production scenarios (S2–S4) ──────────────────
+
+  /** Open a sheet by name; throws (via the caller's assertOk) when absent. */
+  const openSheet = (name: string): GoogleAppsScript.Spreadsheet.Sheet | null =>
+    SpreadsheetApp.openById(ctx.spreadsheetId).getSheetByName(name)
+
+  /**
+   * Read a rectangle of the physical grid as strings.
+   *
+   * The assertions below are about *layout* — which value sits under which
+   * header — so they must bypass the adapter's positional mapping entirely,
+   * and must not care whether GAS hands back `1` or `'1'` for a numeric cell.
+   */
+  const rawCells = (
+    sheet: GoogleAppsScript.Spreadsheet.Sheet,
+    row: number,
+    col: number,
+    numRows: number,
+    numCols: number
+  ): string[][] => {
+    const values = sheet.getRange(row, col, numRows, numCols).getValues() as unknown[][]
+    return values.map(line => line.map(cellText))
+  }
+
+  const rawRow = (
+    sheet: GoogleAppsScript.Spreadsheet.Sheet,
+    row: number,
+    numCols: number
+  ): string[] => rawCells(sheet, row, 1, 1, numCols)[0]
+
+  // ══ S2. Human interference ═══════════════════════════════════════════════
+  // Production sheets are not owned by the script: people open them and sort,
+  // insert rows, add their own columns. These three probes seed data through
+  // the adapter and then edit the sheet the way a human would — directly via
+  // SpreadsheetApp — to find out which edits the positional adapter survives.
+
+  // ── 12. Human sorts the data range by a non-id column ────────────────────
+  test('human edit: sorting the data range by a non-id column keeps update/findById on target', t => {
+    const adapter = makeAdapter('humansort', ['id', 'name', 'score'])
+    const rows = adapter.batchInsert(
+      // Descending score, so an ascending sort by score reverses every row.
+      Array.from({ length: 6 }, (_, i) => ({ name: `p${i}`, score: 50 - i * 10 }))
+    )
+    const sheet = openSheet(`e2e_${ctx.runId}_humansort`)
+    assertOk(sheet, 'seeded sheet exists')
+    if (!sheet) return
+
+    const range = sheet.getRange(2, 1, rows.length, 3)
+    const sortable = range as unknown as SortableRange
+    if (typeof sortable.sort === 'function') {
+      sortable.sort({ column: 3, ascending: true })
+      const scores = rawCells(sheet, 2, 3, rows.length, 1).map(([value]) => Number(value))
+      assertEq(scores, [0, 10, 20, 30, 40, 50], 'the human sort really did reorder the physical rows')
+    } else {
+      t.info('skipped Range.sort (not implemented by the fakes)')
+    }
+
+    // The adapter resolves rows by scanning the id column, so physical order
+    // must be irrelevant to both reads and writes.
+    adapter.clearCache()
+    assertEq(adapter.findAll().length, 6, 'all rows still readable after the sort')
+    assertEq(adapter.findById(rows[0].id)?.name, 'p0', 'findById still resolves the first-inserted row')
+    assertEq(adapter.findById(rows[5].id)?.name, 'p5', 'findById still resolves the last-inserted row')
+
+    adapter.update(rows[2].id, { name: 'p2-updated' })
+    assertEq(adapter.findById(rows[2].id)?.name, 'p2-updated', 'update landed on the intended record')
+    assertEq(adapter.findById(rows[1].id)?.name, 'p1', 'neighbour above untouched')
+    assertEq(adapter.findById(rows[3].id)?.name, 'p3', 'neighbour below untouched')
+    assertEq(adapter.findAll().length, 6, 'no row gained or lost')
+  })
+
+  // ── 13. Human inserts a blank row in the middle ──────────────────────────
+  test('human edit: a blank row inserted mid-table is skipped by reads and does not corrupt neighbours', t => {
+    const adapter = makeAdapter('humanrow', ['id', 'name'])
+    const rows = adapter.batchInsert(Array.from({ length: 5 }, (_, i) => ({ name: `r${i}` })))
+    const sheet = openSheet(`e2e_${ctx.runId}_humanrow`)
+    assertOk(sheet, 'seeded sheet exists')
+    if (!sheet) return
+
+    const inserter = sheet as unknown as RowInsertingSheet
+    let blankRowIndex = -1
+    if (typeof inserter.insertRowBefore === 'function') {
+      // Physical row 4 holds r2 (row 1 is the header) — the blank lands between
+      // r1 and r2, i.e. in the middle of the record block.
+      blankRowIndex = 4
+      inserter.insertRowBefore(blankRowIndex)
+      assertEq(rawRow(sheet, blankRowIndex, 2), ['', ''], 'the inserted row really is blank')
+    } else {
+      t.info('skipped Sheet.insertRowBefore (not implemented by the fakes)')
+    }
+
+    adapter.clearCache()
+    const all = adapter.findAll()
+    assertEq(all.length, 5, 'the all-empty row is filtered out of reads')
+    assertOk(all.every(row => !isEmptyValue(row.id)), 'no phantom row with an empty id leaked into the result')
+
+    // A write below the gap must still land on its own record.
+    adapter.update(rows[3].id, { name: 'r3-updated' })
+    assertEq(adapter.findById(rows[3].id)?.name, 'r3-updated', 'update below the blank row hit the right record')
+    assertEq(adapter.findById(rows[2].id)?.name, 'r2', 'record above the write untouched')
+    assertEq(adapter.findById(rows[4].id)?.name, 'r4', 'record below the write untouched')
+
+    // ...and the human's blank row must survive the write untouched.
+    if (blankRowIndex > 0) {
+      assertEq(rawRow(sheet, blankRowIndex, 2), ['', ''], 'the blank row was not overwritten by the update')
+      assertEq(adapter.findAll().length, 5, 'still five records, blank row still ignored')
+    }
+  })
+
+  // ── 14. Human inserts a foreign column in the middle — EXPECTED TO BREAK ──
+  // This adapter is positional: `rowToObject` maps cell index i to
+  // `columns[i]`. A column inserted to the LEFT of an existing one shifts every
+  // value one place right, and nothing in the read path re-checks the header.
+  // The point of this test is to pin down HOW it breaks (silent misread, no
+  // error) with exact evidence, not to fix it. Do not "repair" the adapter here.
+  test('human edit: a foreign column inserted mid-table silently misaligns reads and writes [documents #TBD]', t => {
+    const adapter = makeAdapter('humancol', ['id', 'name', 'score'])
+    const rows = adapter.batchInsert([
+      { name: 'p0', score: 10 },
+      { name: 'p1', score: 20 },
+      { name: 'p2', score: 30 }
+    ])
+    const sheet = openSheet(`e2e_${ctx.runId}_humancol`)
+    assertOk(sheet, 'seeded sheet exists')
+    if (!sheet) return
+
+    const inserter = sheet as unknown as ColumnInsertingSheet
+    if (typeof inserter.insertColumnBefore !== 'function') {
+      t.info('skipped Sheet.insertColumnBefore (not implemented by this runtime)')
+      return
+    }
+
+    // The human adds their own "owner" column between `id` and `name`.
+    inserter.insertColumnBefore(2)
+    sheet.getRange(1, 2, 1, 1).setValues([['owner']])
+    sheet.getRange(2, 2, 3, 1).setValues([['alice'], ['bob'], ['carol']])
+    assertEq(rawRow(sheet, 1, 4), ['id', 'owner', 'name', 'score'], 'the sheet now has a column the schema knows nothing about')
+
+    adapter.clearCache()
+
+    // CHARACTERIZED BEHAVIOR (read side): no error, no warning — the adapter
+    // reads three cells positionally and every field after `id` is off by one.
+    const all = adapter.findAll()
+    assertEq(all.length, 3, 'CURRENT: row count still looks correct — the corruption is silent')
+    const first = adapter.findById(rows[0].id)
+    assertOk(first, 'CURRENT: findById still resolves — the id column did not move')
+    assertEq(cellText(first?.name), 'alice', "CURRENT: `name` reads the human's `owner` cell")
+    assertEq(cellText(first?.score), 'p0', 'CURRENT: `score` reads the old `name` cell')
+    assertEq(cellText(all[2]?.score), 'p2', 'CURRENT: every row is shifted the same way, so nothing looks anomalous')
+    t.info('read side: silent misread (no error), every field right of `id` shifted by one column')
+
+    // CHARACTERIZED BEHAVIOR (write side): the update writes columns 1..3, so
+    // it destroys the human's column and never touches the real `score`.
+    const updated = adapter.update(rows[0].id, { name: 'renamed' })
+    assertOk(updated, 'CURRENT: update reports success')
+    assertEq(
+      rawRow(sheet, 2, 4),
+      [cellText(rows[0].id), 'renamed', 'p0', '10'],
+      "CURRENT: the write overwrote the human's `owner` cell; the real `score` column (4) is left stale"
+    )
+    assertEq(
+      rawCells(sheet, 3, 2, 2, 1).map(([value]) => value),
+      ['bob', 'carol'],
+      'CURRENT: only the row that was written is damaged — untouched rows keep their owner value'
+    )
+    t.info('write side: clobbers the foreign column, real trailing column left stale — silent data loss')
+  })
+
+  // ══ S3. Volume budget ════════════════════════════════════════════════════
+
+  // ── 15. 2,000 rows: correctness plus loose ceilings ──────────────────────
+  // One shared sheet for the whole scenario — re-seeding per assertion would
+  // dominate the suite's wall clock. The bounds are ceilings, not targets: they
+  // exist to catch an egregious blowup (a per-row write path sneaking back into
+  // batchInsert), not to benchmark Google's backend.
+  test('volume: 2,000-row table — batchInsert, findAll, filter, scattered batchUpdate, single update', t => {
+    const ROW_COUNT = 2000
+    const adapter = makeAdapter('vol', ['id', 'name', 'bucket', 'score'])
+
+    const insertStart = Date.now()
+    const inserted = adapter.batchInsert(
+      Array.from({ length: ROW_COUNT }, (_, i) => ({ name: `v${i}`, bucket: `b${i % 10}`, score: i }))
+    )
+    const insertMs = Date.now() - insertStart
+    assertEq(inserted.length, ROW_COUNT, 'batchInsert returned every row')
+    const insertedIds = inserted.map(row => Number(row.id)).sort((a, b) => a - b)
+    assertEq(
+      insertedIds[ROW_COUNT - 1] - insertedIds[0],
+      ROW_COUNT - 1,
+      'ids are one contiguous run — a single locked allocation, not 2,000 of them'
+    )
+
+    adapter.clearCache()
+    const findAllStart = Date.now()
+    const all = adapter.findAll()
+    const findAllMs = Date.now() - findAllStart
+    assertEq(all.length, ROW_COUNT, 'findAll read every row back')
+
+    const filterStart = Date.now()
+    const filtered = adapter.find({ where: [{ field: 'bucket', operator: '=', value: 'b7' }], orderBy: [] })
+    const filterMs = Date.now() - filterStart
+    assertEq(filtered.length, ROW_COUNT / 10, 'filtered query returned exactly the matching decile')
+    assertOk(filtered.every(row => row.bucket === 'b7'), 'no non-matching row leaked into the filtered result')
+
+    // 200 deliberately non-adjacent rows: every run is length 1, which is the
+    // worst case for writeRowRuns (one ranged write per dirty row).
+    const targets = Array.from({ length: 200 }, (_, i) => i * 9 + 3)
+    const batchStart = Date.now()
+    adapter.batchUpdate(targets.map(i => ({ id: inserted[i].id, data: { name: `u${i}` } })))
+    const batchMs = Date.now() - batchStart
+
+    const lastIndex = ROW_COUNT - 1
+    const updateStart = Date.now()
+    adapter.update(inserted[lastIndex].id, { name: 'tail' })
+    const updateMs = Date.now() - updateStart
+
+    adapter.clearCache()
+    const after = adapter.findAll()
+    assertEq(after.length, ROW_COUNT, 'row count unchanged by the updates')
+    const byId: Record<string, string> = {}
+    for (const row of after) byId[String(row.id)] = cellText(row.name)
+
+    for (const i of targets) {
+      assertEq(byId[String(inserted[i].id)], `u${i}`, `scattered batchUpdate landed on row ${i}`)
+    }
+    assertEq(byId[String(inserted[lastIndex].id)], 'tail', 'single update landed on the tail row')
+
+    const touched: Record<number, true> = {}
+    for (const i of targets) touched[i] = true
+    touched[lastIndex] = true
+    for (let i = 0; i < ROW_COUNT; i += 37) {
+      if (!touched[i]) assertEq(byId[String(inserted[i].id)], `v${i}`, `untouched row ${i} kept its value`)
+    }
+
+    t.info(
+      `batchInsert(${ROW_COUNT})=${insertMs}ms findAll=${findAllMs}ms filter=${filterMs}ms ` +
+      `batchUpdate(200 scattered)=${batchMs}ms update(1)=${updateMs}ms`
+    )
+
+    // Loose ceilings — only an egregious regression trips these.
+    assertOk(insertMs < 60_000, `batchInsert(${ROW_COUNT}) took ${insertMs}ms (ceiling 60000ms)`)
+    assertOk(findAllMs < 45_000, `findAll took ${findAllMs}ms (ceiling 45000ms)`)
+    assertOk(filterMs < 45_000, `filtered query took ${filterMs}ms (ceiling 45000ms)`)
+    assertOk(batchMs < 120_000, `batchUpdate(200 scattered) took ${batchMs}ms (ceiling 120000ms)`)
+    assertOk(updateMs < 20_000, `single update took ${updateMs}ms (ceiling 20000ms)`)
+  })
+
+  // ══ S4. Live migration chain v1 → v3 ═════════════════════════════════════
+
+  // ── 16. addColumn → renameColumn → removeColumn over live data ───────────
+  // MigrationRunner.migrate() is async (withScriptLockAsync), and the web-app
+  // request path must stay synchronous (see runner.ts), so this drives the
+  // adapter operations a chain would issue, in the same order, asserting the
+  // physical layout after every step.
+  //
+  // Only `addColumn` reaches the adapter as a schema operation; `renameColumn`
+  // and `removeColumn` are VALUE operations in MigrationRunner (they update
+  // cells and never touch the header). Against a positional adapter that is a
+  // meaningful difference, and the assertions below pin down exactly what it
+  // costs. Characterization, not repair — hence the tag.
+  test('migration chain v1→v3 on live data: addColumn is physical, rename/remove are value-only [documents #TBD]', t => {
+    const name = sheetName('chain')
+    const makeStore = (columns: string[]): SheetsAdapter<E2ERow> =>
+      new SheetsAdapter<E2ERow>({ spreadsheetId: ctx.spreadsheetId, sheetName: name, columns })
+
+    // v0 — the shape production is already running.
+    const v0 = makeStore(['id', 'name', 'legacy'])
+    const ann = v0.insert({ name: 'ann', legacy: 'L1' })
+    const bob = v0.insert({ name: 'bob', legacy: 'L2' })
+
+    const sheet = openSheet(name)
+    assertOk(sheet, 'chain sheet exists')
+    if (!sheet) return
+    assertEq(rawRow(sheet, 1, 3), ['id', 'name', 'legacy'], 'v0 header')
+
+    // ── v1: addColumn('status', default 'active') ────────────────────────────
+    const v1 = makeStore(['id', 'name', 'legacy', 'status'])
+    v1.addColumn('status', { default: 'active' })
+
+    assertEq(rawRow(sheet, 1, 4), ['id', 'name', 'legacy', 'status'], 'v1: header physically extended')
+    assertEq(rawRow(sheet, 2, 4), [cellText(ann.id), 'ann', 'L1', 'active'], 'v1: data still under its own headers')
+    assertEq(rawRow(sheet, 3, 4), [cellText(bob.id), 'bob', 'L2', 'active'], 'v1: second row aligned too')
+    assertEq(v1.findById(ann.id)?.status, 'active', 'v1: the backfilled default reads back')
+    v1.update(bob.id, { status: 'archived' })
+    assertEq(v1.findById(bob.id)?.status, 'archived', 'v1: writes to the new column land')
+    assertEq(v1.findById(bob.id)?.name, 'bob', 'v1: the write did not disturb the other columns')
+
+    // ── v2: renameColumn('name' → 'displayName') ────────────────────────────
+    // MigrationRunner semantics: for each row, when the old field has a value
+    // and the new one is empty, move the value across with update().
+    const v2 = makeStore(['id', 'displayName', 'legacy', 'status'])
+    let renameWrites = 0
+    for (const row of v2.findAll()) {
+      const record = row as Record<string, unknown>
+      if (!isEmptyValue(record['name']) && isEmptyValue(record['displayName'])) {
+        v2.update(row.id, { name: undefined, displayName: record['name'] })
+        renameWrites++
+      }
+    }
+
+    assertEq(
+      renameWrites,
+      0,
+      'CURRENT: the value-level rename is a no-op here — the adapter already reads column 2 as `displayName`, ' +
+      'so the "old" field is never present and the copy condition is never true'
+    )
+    assertEq(
+      rawRow(sheet, 1, 4),
+      ['id', 'name', 'legacy', 'status'],
+      'CURRENT: the physical header still says `name` — renameColumn never touches it, so header and schema now disagree'
+    )
+    assertEq(v2.findById(ann.id)?.displayName, 'ann', 'CURRENT: reads work anyway — position, not the header, decides the mapping')
+    v2.update(ann.id, { displayName: 'ann2' })
+    assertEq(
+      rawRow(sheet, 2, 4),
+      [cellText(ann.id), 'ann2', 'L1', 'active'],
+      'CURRENT: a write under the new name lands in the column still headed `name`'
+    )
+    t.info('v2 rename: value-op is a no-op; data survives by position; header left stale (`name` vs schema `displayName`)')
+
+    // ── v3: removeColumn('legacy') ──────────────────────────────────────────
+    const v3 = makeStore(['id', 'displayName', 'legacy', 'status'])
+    let clearedCells = 0
+    for (const row of v3.findAll()) {
+      if (!isEmptyValue((row as Record<string, unknown>)['legacy'])) {
+        v3.update(row.id, { legacy: undefined })
+        clearedCells++
+      }
+    }
+    assertEq(clearedCells, 2, 'v3: the value-level removeColumn cleared both legacy cells')
+    assertEq(
+      rawRow(sheet, 1, 4),
+      ['id', 'name', 'legacy', 'status'],
+      'CURRENT: removeColumn leaves the physical column and its header in place — it only blanks the values'
+    )
+    assertEq(rawRow(sheet, 2, 4), [cellText(ann.id), 'ann2', '', 'active'], 'v3: values cleared, layout unchanged')
+    assertEq(rawRow(sheet, 3, 4), [cellText(bob.id), 'bob', '', 'archived'], 'v3: second row cleared the same way')
+
+    // The dangerous part: the NEXT deploy declares the post-v3 schema, with
+    // `legacy` gone. The sheet still has four physical columns.
+    const v3Narrow = makeStore(['id', 'displayName', 'status'])
+    const narrowed = v3Narrow.findById(ann.id)
+    assertOk(narrowed, 'CURRENT: the narrowed adapter still finds the row — the id column is still column 1')
+    assertEq(cellText(narrowed?.displayName), 'ann2', 'CURRENT: columns left of the drop still read correctly')
+    assertEq(
+      cellText(narrowed?.status),
+      '',
+      'CURRENT: `status` silently reads the abandoned (now-empty) `legacy` column; the real status in column 4 is unreachable'
+    )
+
+    v3Narrow.update(ann.id, { status: 'live' })
+    assertEq(
+      rawRow(sheet, 2, 4),
+      [cellText(ann.id), 'ann2', 'live', 'active'],
+      'CURRENT: the write lands in the abandoned `legacy` column while the real `status` column keeps its stale value'
+    )
+    t.info('v3 remove: value-op only; a schema that later drops the column misreads and miswrites every column to its right')
   })
 
   // Expose for cleanup by the harness entrypoint.

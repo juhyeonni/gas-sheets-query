@@ -102,6 +102,22 @@ jobs:
           echo "$CHECK" | python3 -m json.tool
           echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
 
+      - name: Mixed concurrent workload — parallel insert/update/delete/batch
+        env:
+          URL: ${{ secrets.GAS_E2E_URL }}
+          TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
+        run: |
+          set -euo pipefail
+          AUTH="Authorization: Bearer $ACCESS_TOKEN"
+          curl -sSL -H "$AUTH" "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
+          curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=left&seed=11&token=${TOKEN}" > mixed-left.json &
+          curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=right&seed=29&token=${TOKEN}" > mixed-right.json &
+          wait
+          cat mixed-left.json mixed-right.json
+          CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=mixedCheck&tags=left,right&token=${TOKEN}")
+          echo "$CHECK" | python3 -m json.tool
+          echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+
       - name: Cleanup test sheets
         if: always()
         env:

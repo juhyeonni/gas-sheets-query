@@ -8,6 +8,19 @@ Runs a golden test suite for `@gsquery/core` **inside a real Apps Script runtime
 - Physical migration `addColumn` on a live sheet (header insert + single-pass backfill, #127)
 - `DuplicateIdError`, batch write correctness, stale-index safety — all against the live API
 
+### Production scenarios
+
+On top of the golden suite, four scenarios model what a real deployment does to a sheet:
+
+| # | Scenario | Where | What it proves |
+|---|---|---|---|
+| S1 | **Mixed concurrent workload** | `?action=mixedBurst&tag=&seed=` ×2 in parallel, then `?action=mixedCheck` | Two callers each run 10 inserts + 5 updates + 3 deletes + 1 batchUpdate against one sheet. Each touches only its own rows and its op sets are disjoint, so the per-tag end state is fixed *whatever the interleaving*: 7 survivors, slots 0–1 `u`, slots 2–6 `b`, slots 7–9 gone. The check asserts that, plus no duplicate ids/keys and no **cross-tag contamination** (a row whose `key` no longer reconstructs from its own `tag`+`slot` was partially overwritten). `seed` shuffles op order to explore different interleavings without changing the end state. |
+| S2 | **Human interference** | `?action=run` (3 tests) | People edit production sheets. Sorting the data range by a non-id column and inserting a blank row mid-table are both survivable (the adapter resolves rows by scanning the id column, and all-empty rows are filtered out). Inserting a **foreign column** mid-table is not — it is tagged `[documents #TBD]` and asserts the *current* failure mode rather than fixing it. |
+| S3 | **Volume budget** | `?action=run` (1 test, one shared 2,000-row sheet) | batchInsert / findAll / filtered query / 200-row scattered batchUpdate / single update stay correct at 2k rows, within loose ceilings that only trip on an egregious blowup. Per-operation timings are reported in the result's `info` field. This test dominates the suite's wall clock. |
+| S4 | **Live migration chain** | `?action=run` (1 test) | v1 `addColumn` → v2 `renameColumn` → v3 `removeColumn` driven synchronously in the order a chain would issue them, asserting the physical header and grid alignment after every step. Also `[documents #TBD]`: only `addColumn` is a physical schema op. |
+
+`Range.sort` and `Sheet.insertRowBefore` are not implemented by the fakes, so S2's first two probes feature-detect them and record a skip note in `info`; every other assertion in those tests still runs locally.
+
 The same suite also runs locally against the in-repo fakes (`local-check.test.ts`), so a red result in real GAS indicts a platform assumption, not the test code.
 
 ## Test spreadsheet
@@ -62,7 +75,8 @@ Then: **Actions → "GAS E2E (real Apps Script)" → Run workflow.** It also run
 2. *(full mode)* Bundles the harness (`esbuild` IIFE — library + tests in one `Code.js`), `clasp push`es it, and redeploys the web app to the new version.
 3. `GET ?action=run` — full golden suite, asserts `ok: true` from the JSON report.
 4. Fires two parallel `?action=burst&n=25` requests, then `?action=burstCheck&expect=50` — verifies the real script lock: 50 rows, 50 unique ids, no overwrites.
-5. `?action=cleanup` — removes all `e2e_*` sheets.
+5. Fires two parallel `?action=mixedBurst` requests (S1), then `?action=mixedCheck` — verifies the mixed-workload invariants.
+6. `?action=cleanup` — removes all `e2e_*` sheets.
 
 ## Calling the web app manually
 
@@ -86,4 +100,8 @@ pnpm --filter @gsquery/gas-e2e-harness build       # produces dist/Code.js
 | `formula escape` test fails only in GAS | The `USER_ENTERED` apostrophe assumption in `escapeCellValue`/`unescapeCellValue` doesn't match real Sheets — a real finding, fix the adapter |
 | `burstCheck` reports duplicate ids | Real `LockService` isn't protecting the insert path — regression of #128 |
 | `date columnType` fails only in GAS | Timezone/serial-number coercion differs from the fakes — extend `deserializeByType` |
+| `mixedCheck` reports `contaminated` rows | A write landed on a row number resolved before a concurrent delete shifted it — the stale-index race of #128/#155 |
+| `mixedCheck` reports `wrongStates`/`missingSlots` | An update, delete or batchUpdate was silently lost under contention |
+| A `[documents #TBD]` test fails | The characterized behavior *changed* — re-read the assertion, then update it (or the issue) rather than "fixing" the test |
+| `volume` trips a time ceiling | A per-row write path crept back into a batch operation — the ceilings are ~10x the expected cost, not tight benchmarks |
 | Suite green locally, HTTP error in CI | Deployment/auth issue (redeploy the web app, check token), not a library bug |
