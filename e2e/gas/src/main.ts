@@ -66,6 +66,7 @@ function cleanupRunSheets(spreadsheetId: string, runId: string): void {
         ss.deleteSheet(sheet)
       }
     }
+    purgeMetaRows(ss, `e2e_${runId}_`)
   } catch {
     // Cleanup is best-effort; leftover sheets are removed by ?action=cleanup.
   }
@@ -94,7 +95,38 @@ function deleteAllE2ESheets(spreadsheetId: string): number {
       deleted++
     }
   }
+  purgeMetaRows(ss, 'e2e_')
   return deleted
+}
+
+/**
+ * Drops `_gsquery_meta` id-counter rows (#177) belonging to deleted e2e
+ * tables, so the shared test spreadsheet's meta sheet doesn't accumulate a
+ * row per run forever. Best-effort and bottom-up (deleteRow shifts rows up).
+ */
+function purgeMetaRows(ss: unknown, prefix: string): void {
+  try {
+    const container = ss as {
+      getSheetByName?: (name: string) => {
+        getLastRow: () => number
+        getRange: (r: number, c: number, nr: number, nc: number) => { getValues: () => unknown[][] }
+        deleteRow: (r: number) => void
+      } | null
+    }
+    if (typeof container.getSheetByName !== 'function') return
+    const meta = container.getSheetByName('_gsquery_meta')
+    if (!meta) return
+    const lastRow = meta.getLastRow()
+    if (lastRow < 2) return
+    const tables = meta.getRange(2, 1, lastRow - 1, 1).getValues()
+    for (let i = tables.length - 1; i >= 0; i--) {
+      if (String(tables[i][0]).indexOf(prefix) === 0) {
+        meta.deleteRow(i + 2)
+      }
+    }
+  } catch {
+    // Leftover counter rows are harmless; never fail a run over cleanup.
+  }
 }
 
 /**
