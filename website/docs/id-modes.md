@@ -33,7 +33,11 @@ console.log(user2.id) // 2
 ### How It Works
 
 - **MockAdapter**: Maintains an internal counter, auto-increments on each insert
-- **SheetsAdapter**: Reads the max ID from the sheet and increments; uses GAS `LockService` for concurrency safety
+- **SheetsAdapter**: Allocates from a persistent per-table counter stored in a hidden `_gsquery_meta` sheet inside the spreadsheet, under the GAS `LockService` script lock
+
+Like a SQL `AUTO_INCREMENT`, the counter only moves forward: **deleting a row never frees its id for reuse**, so a foreign key pointing at a deleted record stays a visible orphan instead of silently re-binding to whatever row is inserted next. Expect gaps in the id sequence after deletions — that is by design.
+
+The `_gsquery_meta` sheet is safe to leave alone and safe to lose: if someone deletes it, the next insert recreates it and re-bootstraps the counter from the current max id (ids still only move forward from there). The counter lives in the spreadsheet — not in script properties — so every script project that opens the spreadsheet shares one counter, and a copied spreadsheet carries its counter along.
 
 ## Client Mode
 

@@ -139,6 +139,23 @@ export function registerTests(ctx: HarnessContext): void {
     assertEq(adapter.findAll().length, 1, 'one row remains')
   })
 
+  // ── 3b. Monotonic auto ids (#177) ─────────────────────────────────────────
+  test('auto ids are never reused after deleting the max row (#177)', () => {
+    const adapter = makeAdapter('noreuse', ['id', 'name'])
+    adapter.insert({ name: 'a' })
+    adapter.insert({ name: 'b' })
+    const c = adapter.insert({ name: 'c' })
+
+    adapter.delete(c.id)
+    const d = adapter.insert({ name: 'd' })
+    assertOk(Number(d.id) > Number(c.id), `id ${d.id} allocated after deleted max ${c.id} — no reuse`)
+
+    // Delete everything: the persisted counter must outlive the data.
+    for (const row of adapter.findAll()) adapter.delete(row.id)
+    const e = adapter.insert({ name: 'e' })
+    assertOk(Number(e.id) > Number(d.id), `id ${e.id} still moves forward on an emptied table`)
+  })
+
   // ── 4. Client-mode duplicate ID rejection (#128) ─────────────────────────
   test('client idMode: duplicate ID insert throws DuplicateIdError', () => {
     const adapter = makeAdapter('dup', ['id', 'name'], { idMode: 'client' })

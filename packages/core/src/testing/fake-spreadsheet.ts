@@ -1,6 +1,7 @@
 /**
  * FakeSpreadsheet — named-sheet container mirroring GAS `Spreadsheet`'s
- * allowlisted surface (`getSheetByName`, `insertSheet`, `getSheets`, `getName`).
+ * allowlisted surface (`getSheetByName`, `insertSheet`, `deleteSheet`,
+ * `getSheets`, `getName`).
  */
 import { FakeSheet } from './fake-sheet'
 
@@ -30,6 +31,22 @@ export class FakeSpreadsheet {
     const sheet = new FakeSheet(name)
     this.sheets.set(name, sheet)
     return sheet
+  }
+
+  /**
+   * Removes a sheet. Throws when the sheet is not part of this spreadsheet or
+   * when it is the last remaining sheet (GAS parity — a spreadsheet always
+   * keeps at least one sheet).
+   */
+  deleteSheet(sheet: FakeSheet): void {
+    const name = sheet.getName()
+    if (this.sheets.get(name) !== sheet) {
+      throw new Error(`deleteSheet: sheet "${name}" does not belong to this spreadsheet`)
+    }
+    if (this.sheets.size === 1) {
+      throw new Error('deleteSheet: a spreadsheet must contain at least one sheet')
+    }
+    this.sheets.delete(name)
   }
 
   /** Sheets in insertion order. */

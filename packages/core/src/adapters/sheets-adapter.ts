@@ -54,6 +54,25 @@ const TEXT_PREFIX = "'"
  */
 export const MAX_CELL_LENGTH = 50000
 
+/**
+ * Hidden sheet that persists per-table monotonic id counters (#177).
+ *
+ * Auto-mode ids used to be `max(current ids) + 1`, so deleting the
+ * highest-numbered row freed its id for the very next insert — and any
+ * foreign key still holding that id silently re-pointed at the new record
+ * (deterministic repro in the S7 referential-integrity scenario). The
+ * counter lives in the spreadsheet itself, not PropertiesService, because
+ * the sheet is the database: a second script project opening the same
+ * spreadsheet must see the same counter, and a copied spreadsheet must
+ * carry it along.
+ *
+ * Layout: header `[table, nextId]`, one row per table. Missing sheet or
+ * row just means "no counter yet" — allocation bootstraps from the current
+ * max and only ever moves forward, so a user deleting this sheet degrades
+ * to pre-counter behavior until the next insert recreates it.
+ */
+export const META_SHEET_NAME = '_gsquery_meta'
+
 /** SheetsAdapter configuration options */
 export interface SheetsAdapterOptions {
   /** Spreadsheet ID (optional - uses active spreadsheet if not provided) */
@@ -166,6 +185,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
   // Sheet reference cache
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
+  private _metaSheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null
   // Data cache - invalidated on write operations
   private _dataCache: T[] | null = null
@@ -284,6 +304,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   /** Clear all caches (sheet references and data) */
   clearCache(): void {
     this._sheet = null
+    this._metaSheet = null
     this._spreadsheet = null
     this._dataCache = null
     // The sheet may have been edited since the last check — re-arm the guard.
@@ -672,12 +693,95 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   /**
-   * Get the next available ID by scanning the current max.
-   * Must be called inside withLock() together with the row write so that
-   * ID allocation and the write are atomic.
+   * Resolve the {@link META_SHEET_NAME} sheet, creating it on first use.
+   *
+   * Creation follows the #178 pattern exactly (locked re-check through a
+   * fresh handle, adopt-on-failure, no matching of localized error text) —
+   * two executions inserting into a spreadsheet that has no meta sheet yet
+   * race on insertSheet the same way they race on a not-yet-created table.
    */
-  private getNextId(): number {
-    return this.readMaxId() + 1
+  private getMetaSheet(): GoogleAppsScript.Spreadsheet.Sheet {
+    if (this._metaSheet) return this._metaSheet
+
+    const ss = this.getSpreadsheet()
+    let sheet = this.sheetsCall(() => ss.getSheetByName(META_SHEET_NAME))
+
+    if (!sheet) {
+      sheet = this.withLock(() => {
+        const fresh = this.reopenSpreadsheet()
+        const existing = this.sheetsCall(() => fresh.getSheetByName(META_SHEET_NAME))
+        if (existing) return existing
+        try {
+          const created = this.sheetsCallOnce(() => fresh.insertSheet(META_SHEET_NAME))
+          this.sheetsCall(() => created.getRange(1, 1, 1, 2).setValues([['table', 'nextId']]))
+          // Cosmetic only, and not implemented by the testing fakes.
+          if (typeof created.hideSheet === 'function') {
+            try {
+              created.hideSheet()
+            } catch {
+              // A hidden-sheet restriction must not fail the insert.
+            }
+          }
+          return created
+        } catch (err) {
+          const adopted = this.sheetsCall(() => this.reopenSpreadsheet().getSheetByName(META_SHEET_NAME))
+          if (adopted) return adopted
+          throw err
+        }
+      })
+    }
+
+    this._metaSheet = sheet
+    return sheet
+  }
+
+  /**
+   * Allocate `count` consecutive auto ids and persist the advanced counter,
+   * returning the first id of the run (#177).
+   *
+   * `max(stored, current max + 1)` is what makes the counter self-healing:
+   * a missing sheet/row (first use on an existing table, or a user deleted
+   * the meta sheet) bootstraps from the data, and a manually entered high id
+   * is absorbed instead of colliding. The one accepted limit: deletions that
+   * happened BEFORE the counter first existed cannot be compensated
+   * retroactively.
+   *
+   * Must be called inside withLock() together with the row write — the
+   * read-allocate-persist sequence is exactly the kind of critical section
+   * the lock exists for, and flush-on-acquire (#186) keeps the meta read
+   * fresh across executions.
+   */
+  private allocateAutoIds(count: number): number {
+    const meta = this.getMetaSheet()
+    const lastRow = meta.getLastRow()
+
+    let rowIndex = -1
+    let stored = 0
+    if (lastRow >= 2) {
+      const rows = this.sheetsCall(() => meta.getRange(2, 1, lastRow - 1, 2).getValues())
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i][0]) === this.sheetName) {
+          rowIndex = i + 2
+          const value = Number(rows[i][1])
+          if (!isNaN(value)) stored = value
+          break
+        }
+      }
+    }
+
+    const first = Math.max(stored, this.readMaxId() + 1)
+    const next = first + count
+
+    if (rowIndex === -1) {
+      // A spurious-failure retry could append a duplicate table row; the
+      // lookup above takes the first match, and max() with the live data
+      // keeps a stale duplicate harmless — but don't create one knowingly.
+      this.sheetsCallOnce(() => meta.appendRow([this.sheetName, next]))
+    } else {
+      this.sheetsCall(() => meta.getRange(rowIndex, 2).setValues([[next]]))
+    }
+
+    return first
   }
 
   /** Read the current max ID from the sheet */
@@ -806,7 +910,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       // Auto mode: allocate the ID and write the row atomically under the lock,
       // otherwise concurrent executions can allocate the same ID.
       return this.withLock(() => {
-        const id = this.getNextId()
+        const id = this.allocateAutoIds(1)
         const newRow = { ...data, [this.idColumn]: id } as T
         const rowValues = this.objectToRow(newRow)
         this.sheetsCallOnce(() => sheet.appendRow(rowValues))
@@ -917,7 +1021,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     return this.withLock(() => {
       const results: T[] = []
       const rowsToInsert: unknown[][] = []
-      let nextId = this.getNextId()
+      // One counter read/write covers the whole batch (#177).
+      let nextId = this.allocateAutoIds(items.length)
       for (const data of items) {
         const newRow = { ...data, [this.idColumn]: nextId } as T
         results.push(newRow)

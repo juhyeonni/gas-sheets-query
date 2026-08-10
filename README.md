@@ -85,6 +85,7 @@ Google Sheets is not a database engine — know what you're trading:
 - **Local-first client is single-tab** — two tabs sharing the same namespace can clobber each other's queued mutations.
 - **Formula escaping is on by default** — user-supplied strings are stored as literal text (never executed as formulas); opt out per adapter with `allowFormulas: true` if you intentionally store formulas.
 - **Columns are mapped by position** — if somebody inserts or reorders a column in the sheet, the layout no longer matches the schema. Every read and write checks the header row once per execution and throws `SchemaMismatchError` instead of silently reading and writing the wrong columns; opt out per adapter with `skipHeaderCheck: true`.
+- **A hidden `_gsquery_meta` sheet holds id counters** — auto `idMode` persists a per-table monotonic counter there so a deleted row's id is never reused (expect gaps after deletions, like any SQL auto-increment). Deleting the sheet is safe: it is recreated and the counter re-bootstraps from the current max.
 
 ## 🤖 AI Coding Assistants
 

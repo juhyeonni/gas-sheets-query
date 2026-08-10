@@ -99,6 +99,7 @@ pnpm --filter @gsquery/gas-e2e-harness build       # produces dist/Code.js
 |---|---|
 | `formula escape` test fails only in GAS | The `USER_ENTERED` apostrophe assumption in `escapeCellValue`/`unescapeCellValue` doesn't match real Sheets — a real finding, fix the adapter |
 | `burstCheck` reports duplicate ids | Real `LockService` isn't protecting the insert path — regression of #128 |
+| `auto ids are never reused` fails | The persistent id counter (#177) regressed — allocation fell back to `max+1`, or the `_gsquery_meta` read/write inside the lock is broken |
 | `date columnType` fails only in GAS | Timezone/serial-number coercion differs from the fakes — extend `deserializeByType` |
 | `mixedCheck` reports `contaminated` rows | A write landed on a row number resolved before a concurrent delete shifted it — the stale-index race of #128/#155 |
 | `mixedCheck` reports `wrongStates`/`missingSlots` | An update, delete or batchUpdate was silently lost under contention |

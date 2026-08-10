@@ -7,14 +7,13 @@
  * into a SheetsDB and queried with `joinQuery()`.
  *
  * The scenario exercises the interaction nobody tests in isolation: `auto` ids
- * are allocated as `max(id) + 1` (SheetsAdapter.getNextId), so deleting the
- * highest-numbered row hands its id straight to the next insert. Any row in
- * another table still pointing at the deleted id silently re-points at the new
- * occupant. Nothing in the library detects this — there are no foreign keys,
- * no cascade, and no tombstones.
- *
- * These tests pin the behavior as it is today; they do not assert what a
- * relational database would do.
+ * used to be allocated as `max(id) + 1`, so deleting the highest-numbered row
+ * handed its id straight to the next insert, and any row in another table
+ * still pointing at the deleted id silently re-pointed at the new occupant
+ * (#177). Since the fix, allocation goes through a persistent monotonic
+ * counter (the `_gsquery_meta` sheet), so a deleted id is never re-issued: the
+ * orphaned FK stays a visible orphan (left join → null, inner join → dropped)
+ * instead of silently rebinding.
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { SheetsAdapter, createSheetsDB } from '../../src/index'
@@ -145,16 +144,16 @@ describe('S7 referential integrity under id reuse', () => {
   })
 
   it(
-    'silently re-points an orphaned order at the new owner of a reused id ' +
-      '[documents: id-reuse-dangling-join]',
+    'never hands a deleted max id to a new insert — the orphan stays visible ' +
+      '[regression: #177]',
     () => {
       harness = setupHarness()
       const { db } = harness
 
       seedUsersAndOrders(db)
 
-      // Eve is the highest-numbered user. Deleting her frees id 5 — auto mode
-      // allocates max(id) + 1, and after the delete max(id) is 4.
+      // Eve is the highest-numbered user. Deleting her used to free id 5 for
+      // the very next insert (allocation was max(id) + 1).
       db.from('users').delete(5)
       expect(db.from('users').findAll().map(u => u.id)).toEqual([1, 2, 3, 4])
 
@@ -163,43 +162,39 @@ describe('S7 referential integrity under id reuse', () => {
       expect(db.from('users').repo.exists(5)).toBe(false)
       expect(joinedUser(ordersWithUser(db)[4])).toBeNull()
 
-      // A brand-new, unrelated signup. No error, no warning: it receives the
-      // id the deleted user used to own.
+      // A brand-new, unrelated signup. The persistent counter remembers id 5
+      // was issued, so Frank gets 6 — Eve's order cannot rebind to him.
       const frank = db.from('users').create({ name: 'Frank', email: 'frank@corp.test' })
-      expect(frank.id).toBe(5)
+      expect(frank.id).toBe(6)
 
       const joined = ordersWithUser(db)
 
-      // THE DEFECT: order 5 was Eve's. It now reports Frank as its user, with
-      // no error, no null, and no way for the caller to tell.
+      // Order 5 remains a loud, honest orphan instead of silently becoming
+      // Frank's — this exact rebinding happened before the fix.
       expect(joined[4]).toEqual({
         id: 5,
         userId: 5,
         item: 'item-5',
         amount: 50,
-        user: { id: 5, name: 'Frank', email: 'frank@corp.test' },
+        user: null,
       })
-      expect(joinedUser(joined[4])?.name).toBe('Frank')
 
-      // Every other order is unaffected, so nothing about the result set looks
-      // suspicious — the corruption is a single silently-rebound row.
-      expect(joined.map(o => [o.id, joinedUser(o)?.name])).toEqual([
+      expect(joined.map(o => [o.id, joinedUser(o)?.name ?? null])).toEqual([
         [1, 'Alice'],
         [2, 'Bob'],
         [3, 'Carol'],
         [4, 'Dave'],
-        [5, 'Frank'],
+        [5, null],
       ])
 
-      // An inner join keeps it too: the FK resolves, so it is not filtered out.
+      // The inner join drops the orphan rather than resolving it to Frank.
       const inner = db
         .from('orders')
         .joinQuery()
         .innerJoin('users', 'userId', 'id', { as: 'user' })
         .orderBy('id')
         .exec()
-      expect(inner).toHaveLength(5)
-      expect(joinedUser(inner[4])?.name).toBe('Frank')
+      expect(inner.map(o => o.id)).toEqual([1, 2, 3, 4])
     }
   )
 
@@ -263,25 +258,24 @@ describe('S7 referential integrity under id reuse', () => {
     ).toBe(4)
   })
 
-  it('reuses the id again after the reused row is itself deleted', () => {
+  it('keeps ids unique under repeated delete-max churn [regression: #177]', () => {
     harness = setupHarness()
     const { db } = harness
 
     seedUsersAndOrders(db)
 
-    // Repeated churn at the tail keeps handing out the same id, so a table
-    // that only ever appends at the end can bind one FK value to a whole
-    // sequence of unrelated records over its lifetime.
+    // Repeated churn at the tail used to hand out id 5 over and over, binding
+    // one FK value to a whole sequence of unrelated records. The counter only
+    // moves forward: every re-signup gets a fresh id.
+    let expected = 5
     for (const name of ['Frank', 'Grace', 'Heidi']) {
-      db.from('users').delete(5)
+      db.from('users').delete(expected)
       const created = db.from('users').create({ name, email: `${name.toLowerCase()}@corp.test` })
-      expect(created.id).toBe(5)
+      expected += 1
+      expect(created.id).toBe(expected)
     }
 
-    expect(joinedUser(ordersWithUser(db)[4])).toEqual({
-      id: 5,
-      name: 'Heidi',
-      email: 'heidi@corp.test',
-    })
+    // Eve's order still points at id 5, which no user ever holds again.
+    expect(joinedUser(ordersWithUser(db)[4])).toBeNull()
   })
 })

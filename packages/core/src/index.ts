@@ -45,7 +45,7 @@ export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOption
 // Adapters
 export { MockAdapter } from './adapters/mock-adapter'
 export type { MockAdapterOptions } from './adapters/mock-adapter'
-export { SheetsAdapter, MAX_CELL_LENGTH } from './adapters/sheets-adapter'
+export { SheetsAdapter, MAX_CELL_LENGTH, META_SHEET_NAME } from './adapters/sheets-adapter'
 export type { ColumnType, SheetsAdapterOptions } from './adapters/sheets-adapter'
 
 // Query utilities

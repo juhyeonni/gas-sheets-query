@@ -13,8 +13,16 @@
  * a second creation.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { SheetsAdapter } from '../../src/adapters/sheets-adapter'
+import { META_SHEET_NAME, SheetsAdapter } from '../../src/adapters/sheets-adapter'
 import { FakeSpreadsheet, installGasFakes } from '../../src/testing'
+
+/** Sheet names present, sorted — auto inserts also create the #177 meta sheet. */
+function sheetNames(spreadsheet: FakeSpreadsheet): string[] {
+  return spreadsheet
+    .getSheets()
+    .map(s => s.getName())
+    .sort()
+}
 
 interface Row {
   id: number
@@ -68,8 +76,9 @@ describe('sheet auto-creation race (#178)', () => {
     expect(rows.map(r => r.name).sort()).toEqual(['loser-row', 'winner-row'])
     expect(rows.find(r => r.id === inserted.id)?.name).toBe('loser-row')
 
-    // Exactly one physical sheet was created.
-    expect(spreadsheet.getSheets().length).toBe(1)
+    // Exactly one physical 'users' sheet was created (plus the id-counter
+    // meta sheet that auto-mode inserts maintain, #177).
+    expect(sheetNames(spreadsheet)).toEqual([META_SHEET_NAME, 'users'])
     // The winner's header row survived intact (no clobber by a second creation).
     expect(spreadsheet.getSheetByName('users')?.getRange(1, 1, 1, 2).getValues()[0]).toEqual(['id', 'name'])
   })
@@ -108,7 +117,7 @@ describe('sheet auto-creation race (#178)', () => {
     expect(rows.length).toBe(2)
     expect(rows.map(r => r.name).sort()).toEqual(['loser-row', 'winner-row'])
     expect(rows.find(r => r.id === inserted.id)?.name).toBe('loser-row')
-    expect(spreadsheet.getSheets().length).toBe(1)
+    expect(sheetNames(spreadsheet)).toEqual([META_SHEET_NAME, 'users'])
   })
 
   it('creates the sheet exactly once when it truly does not exist', () => {
@@ -119,7 +128,7 @@ describe('sheet auto-creation race (#178)', () => {
     const adapter = makeAdapter()
     adapter.insert({ name: 'first' })
 
-    expect(spreadsheet.getSheets().length).toBe(1)
+    expect(sheetNames(spreadsheet)).toEqual([META_SHEET_NAME, 'users'])
     expect(adapter.findAll().length).toBe(1)
   })
 })
