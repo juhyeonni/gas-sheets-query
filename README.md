@@ -36,10 +36,12 @@ const db = defineSheetsDB({
   tables: {
     users: {
       columns: ['id', 'name', 'email', 'role'] as const,
+      // Sample values declare each column's TYPE (0 → number, '' → string):
+      // they are never written anywhere, they only drive inference.
       types: { id: 0, name: '', email: '', role: '' }
     }
   },
-  mock: true  // in-memory for tests; use stores: { users: new SheetsAdapter({...}) } on GAS
+  mock: true  // in-memory; see below for wiring real sheets on GAS
 })
 
 const user = db.from('users').create({ name: 'John', email: 'john@example.com', role: 'USER' })
@@ -50,6 +52,28 @@ const admins = db.from('users')
   .orderBy('name', 'asc')
   .limit(10)
   .exec()
+```
+
+**On GAS (real sheets)**: name the table schema so its inferred row type can be handed to the adapter — `InferRowFromSchema` closes the loop:
+
+```typescript
+import { defineSheetsDB, SheetsAdapter } from '@gsquery/core'
+import type { InferRowFromSchema } from '@gsquery/core'
+
+const users = {
+  columns: ['id', 'name', 'email', 'role'] as const,
+  types: { id: 0, name: '', email: '', role: '' }
+}
+
+const db = defineSheetsDB({
+  tables: { users },
+  stores: {
+    users: new SheetsAdapter<InferRowFromSchema<typeof users>>({
+      sheetName: 'users',
+      columns: [...users.columns]
+    })
+  }
+})
 ```
 
 Schema-first instead? Define `schema.gsq.yaml` and run `npx gsquery generate` — see [Quick Start](https://juhyeonni.github.io/gas-sheets-query/quick-start) and [Schema Definition](https://juhyeonni.github.io/gas-sheets-query/schema-definition).
@@ -71,6 +95,7 @@ Details: [CLI Reference](https://juhyeonni.github.io/gas-sheets-query/cli-refere
 - [Installation](https://juhyeonni.github.io/gas-sheets-query/installation) · [Quick Start](https://juhyeonni.github.io/gas-sheets-query/quick-start)
 - [Query Builder](https://juhyeonni.github.io/gas-sheets-query/query-builder) · [JOIN](https://juhyeonni.github.io/gas-sheets-query/join-queries) · [Aggregation](https://juhyeonni.github.io/gas-sheets-query/aggregation)
 - [Adapters](https://juhyeonni.github.io/gas-sheets-query/adapters) · [ID Modes](https://juhyeonni.github.io/gas-sheets-query/id-modes) · [Error Handling](https://juhyeonni.github.io/gas-sheets-query/error-handling)
+- [Testing Without GAS](https://juhyeonni.github.io/gas-sheets-query/testing) · [Deploying to Apps Script](https://juhyeonni.github.io/gas-sheets-query/installation#deploying-to-apps-script)
 - [Typed Client](https://juhyeonni.github.io/gas-sheets-query/typed-client) · [Indexing & Performance](https://juhyeonni.github.io/gas-sheets-query/indexing-and-performance)
 - [API Reference](https://juhyeonni.github.io/gas-sheets-query/api-reference)
 

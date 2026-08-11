@@ -65,28 +65,29 @@ users.delete(2)
 
 ## 6. Connect to Google Sheets (Production)
 
-Replace `mock: true` with a `SheetsAdapter` to connect to real Google Sheets:
+Replace `mock: true` with a `SheetsAdapter` to connect to real Google Sheets. Name the table schema as a `const` and hand its inferred row type to the adapter with `InferRowFromSchema` — an untyped `new SheetsAdapter({...})` defaults to `SheetsAdapter<RowWithId>` and will not typecheck against the inferred store type:
 
 ```ts
 import { defineSheetsDB, SheetsAdapter } from '@gsquery/core'
+import type { InferRowFromSchema } from '@gsquery/core'
+
+const users = {
+  columns: ['id', 'name', 'email', 'age', 'active'] as const,
+  types: { id: 0, name: '', email: '', age: 0, active: true }
+}
 
 const db = defineSheetsDB({
-  tables: {
-    users: {
-      columns: ['id', 'name', 'email', 'age', 'active'] as const,
-      types: { id: 0, name: '', email: '', age: 0, active: true }
-    }
-  },
+  tables: { users },
   stores: {
-    users: new SheetsAdapter({
+    users: new SheetsAdapter<InferRowFromSchema<typeof users>>({
       sheetName: 'users',
-      columns: ['id', 'name', 'email', 'age', 'active']
+      columns: [...users.columns]
     })
   }
 })
 ```
 
-The API is identical -- no code changes required.
+The query API is identical -- no code changes required.
 
 ---
 

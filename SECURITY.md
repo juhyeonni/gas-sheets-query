@@ -6,8 +6,8 @@ Security updates are applied to the latest minor release line.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.9.x   | :white_check_mark: |
-| < 0.9   | :x:                |
+| 1.0.x (incl. rc) | :white_check_mark: |
+| < 1.0   | :x:                |
 
 ## Formula Injection Protection
 

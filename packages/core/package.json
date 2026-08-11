@@ -17,6 +17,7 @@
       "import": "./dist/testing.mjs",
       "require": "./dist/testing.cjs"
     },
+    "./gas": "./dist/gas/bundle.js",
     "./package.json": "./package.json"
   },
   "files": [
