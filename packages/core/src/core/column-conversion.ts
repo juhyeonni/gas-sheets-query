@@ -13,7 +13,7 @@
  * serialization work on that file lands, so there is exactly one
  * implementation.
  */
-import type { ColumnType } from '../adapters/sheets-adapter'
+import type { ColumnType } from '../adapters/sheets-adapter.js'
 
 /**
  * Convert a single raw value to its runtime representation for `colType`.

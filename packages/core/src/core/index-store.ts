@@ -8,7 +8,7 @@
  *   - Composite column: "field1|field2" → Map<JSON([val1, val2]), Set<rowIndex>>
  */
 
-import type { Row } from './types'
+import type { Row } from './types.js'
 
 /** Index definition */
 export interface IndexDefinition {

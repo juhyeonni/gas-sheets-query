@@ -29,34 +29,34 @@ export type {
   InferType,
   InferRowFromSchema,
   InferTablesFromConfig
-} from './core/types'
+} from './core/types.js'
 
 // Core classes
-export { Repository } from './core/repository'
-export { QueryBuilder, createQueryBuilder } from './core/query-builder'
-export type { AggSpec, AggResult, GroupedAggResult, HavingCondition } from './core/query-builder'
-export { JoinQueryBuilder, createJoinQueryBuilder } from './core/join-query-builder'
-export type { JoinConfig, StoreResolver } from './core/join-query-builder'
+export { Repository } from './core/repository.js'
+export { QueryBuilder, createQueryBuilder } from './core/query-builder.js'
+export type { AggSpec, AggResult, GroupedAggResult, HavingCondition } from './core/query-builder.js'
+export { JoinQueryBuilder, createJoinQueryBuilder } from './core/join-query-builder.js'
+export type { JoinConfig, StoreResolver } from './core/join-query-builder.js'
 
 // SheetsDB factory functions
-export { createSheetsDB, defineSheetsDB } from './core/sheets-db'
-export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOptions } from './core/sheets-db'
+export { createSheetsDB, defineSheetsDB } from './core/sheets-db.js'
+export type { SheetsDB, TableHandle, CreateSheetsDBOptions, DefineSheetsDBOptions } from './core/sheets-db.js'
 
 // Adapters
-export { MockAdapter } from './adapters/mock-adapter'
-export type { MockAdapterOptions } from './adapters/mock-adapter'
-export { SheetsAdapter, MAX_CELL_LENGTH, META_SHEET_NAME } from './adapters/sheets-adapter'
-export type { ColumnType, SheetsAdapterOptions } from './adapters/sheets-adapter'
+export { MockAdapter } from './adapters/mock-adapter.js'
+export type { MockAdapterOptions } from './adapters/mock-adapter.js'
+export { SheetsAdapter, MAX_CELL_LENGTH, META_SHEET_NAME } from './adapters/sheets-adapter.js'
+export type { ColumnType, SheetsAdapterOptions } from './adapters/sheets-adapter.js'
 
 // Query utilities
-export { evaluateCondition, compareRows } from './core/query-utils'
+export { evaluateCondition, compareRows } from './core/query-utils.js'
 
 // Column type conversion
-export { deserializeColumnValue, deserializeRow } from './core/column-conversion'
+export { deserializeColumnValue, deserializeRow } from './core/column-conversion.js'
 
 // Index Store
-export { IndexStore, createIndexKey, serializeValues } from './core/index-store'
-export type { IndexDefinition } from './core/index-store'
+export { IndexStore, createIndexKey, serializeValues } from './core/index-store.js'
+export type { IndexDefinition } from './core/index-store.js'
 
 // Errors
 export {
@@ -77,11 +77,11 @@ export {
   CellSizeLimitError,
   classifyGasError,
   isTransientGasError
-} from './core/errors'
+} from './core/errors.js'
 
 // Bounded retry with backoff for transient GAS failures (#136)
-export { withRetries, DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_BASE_DELAY_MS } from './core/gas-retry'
-export type { RetryOptions } from './core/gas-retry'
+export { withRetries, DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_BASE_DELAY_MS } from './core/gas-retry.js'
+export type { RetryOptions } from './core/gas-retry.js'
 
 // Migration System
 export {
@@ -90,7 +90,7 @@ export {
   MigrationVersionError,
   MigrationExecutionError,
   NoMigrationsToRollbackError
-} from './core/migration'
+} from './core/migration.js'
 export type {
   Migration,
   MigrationRecord,
@@ -102,4 +102,4 @@ export type {
   SchemaOperationType,
   ColumnOptions,
   StoreResolver as MigrationStoreResolver
-} from './core/migration'
+} from './core/migration.js'

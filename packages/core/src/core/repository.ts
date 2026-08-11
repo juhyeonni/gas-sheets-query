@@ -1,8 +1,8 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, UpdateData } from './types'
-import { RowNotFoundError } from './errors'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, UpdateData } from './types.js'
+import { RowNotFoundError } from './errors.js'
 
 /**
  * Repository provides a clean CRUD interface over any DataStore implementation

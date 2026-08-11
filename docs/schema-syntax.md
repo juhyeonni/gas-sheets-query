@@ -97,7 +97,9 @@ id: number @id
 
 ### @default(value)
 
-Sets the default value.
+Declares the field's default value.
+
+> ⚠️ **Not applied at runtime.** `@default` is parsed and carried through codegen as documentation of intent, but no adapter fills the value in: generated `create()` types still require the field, and your application code must supply it (the one exception is the primary key in auto `idMode`, which the adapter allocates regardless of this attribute). Runtime application is planned for a later release.
 
 | Value | Description |
 |-------|-------------|
@@ -126,7 +128,9 @@ email: string @unique
 
 ### @updatedAt
 
-Automatically updates to current time when record is modified.
+Declares that the field holds the record's last-modified time.
+
+> ⚠️ **Not applied at runtime.** Nothing auto-fills this on update today — set it from your application code (`update(id, { ..., updatedAt: new Date() })`). Runtime application is planned for a later release.
 
 ```yaml
 updatedAt: datetime @updatedAt

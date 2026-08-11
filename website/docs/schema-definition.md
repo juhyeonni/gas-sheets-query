@@ -96,9 +96,13 @@ tables:
 | Attribute | Description | Example |
 |-----------|-------------|---------|
 | `@id` | Primary key field | `id: number @id` |
-| `@default(value)` | Default value | `active: boolean @default(true)` |
-| `@unique` | Unique constraint | `email: string @unique` |
-| `@updatedAt` | Auto-update timestamp | `updatedAt: datetime @updatedAt` |
+| `@default(value)` | Declared default value (documentation only — see below) | `active: boolean @default(true)` |
+| `@unique` | Unique constraint (declarative only — not enforced at runtime) | `email: string @unique` |
+| `@updatedAt` | Declared update timestamp (documentation only — see below) | `updatedAt: datetime @updatedAt` |
+
+:::warning `@default` and `@updatedAt` are not applied at runtime
+These attributes are parsed and carried through codegen as documentation of intent, but **no adapter applies them**: generated `create()` types still require the fields, and nothing auto-fills timestamps on update. Supply the values from your application code (e.g. `create({ ..., createdAt: new Date() })`). Runtime application is planned for a later release.
+:::
 
 ### Block Attributes
 

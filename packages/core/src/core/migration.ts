@@ -3,9 +3,9 @@
  * 
  * Provides version-controlled schema changes with up/down migrations.
  */
-import type { Row, RowWithId, DataStore, BatchUpdateItem } from './types'
-import { SheetsQueryError } from './errors'
-import { withScriptLockAsync } from './script-lock'
+import type { Row, RowWithId, DataStore, BatchUpdateItem } from './types.js'
+import { SheetsQueryError } from './errors.js'
+import { withScriptLockAsync } from './script-lock.js'
 
 // ============================================================================
 // Migration Types
@@ -193,7 +193,7 @@ class RecordingSchemaBuilder implements SchemaBuilder {
  * Defined once in join-query-builder; imported and re-exported here to keep
  * this module's public surface (and the MigrationStoreResolver alias in index.ts).
  */
-import type { StoreResolver } from './join-query-builder'
+import type { StoreResolver } from './join-query-builder.js'
 export type { StoreResolver }
 
 /**

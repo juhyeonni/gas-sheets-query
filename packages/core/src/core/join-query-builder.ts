@@ -2,8 +2,8 @@
  * JoinQueryBuilder - Query builder with JOIN support
  * Simulates relational joins using batch fetching to prevent N+1 queries
  */
-import type { DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types'
-import { NoResultsError } from './errors'
+import type { DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types.js'
+import { NoResultsError } from './errors.js'
 
 /**
  * Join configuration
