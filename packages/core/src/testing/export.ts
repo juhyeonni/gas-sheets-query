@@ -3,11 +3,11 @@
  * grids, CSV, or a versioned JSON envelope. Free functions (not class
  * methods), mirroring {@link loaders}.
  */
-import { FakeSheet } from './fake-sheet'
-import { FakeSpreadsheet } from './fake-spreadsheet'
-import { serializeCsvCell } from './csv'
-import { tagDates } from './json'
-import type { SnapshotEnvelope } from './json'
+import { FakeSheet } from './fake-sheet.js'
+import { FakeSpreadsheet } from './fake-spreadsheet.js'
+import { serializeCsvCell } from './csv.js'
+import { tagDates } from './json.js'
+import type { SnapshotEnvelope } from './json.js'
 
 /**
  * A defensively-copied, rectangular grid of the sheet's content.

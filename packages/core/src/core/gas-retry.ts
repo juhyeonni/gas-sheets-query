@@ -20,7 +20,7 @@
  * sleeps, so the thundering-herd problem jitter solves does not apply at this
  * scale, and determinism keeps the policy testable.
  */
-import { classifyGasError, isTransientGasError } from './errors'
+import { classifyGasError, isTransientGasError } from './errors.js'
 
 /** Total number of calls (not extra retries) a guarded operation may make. */
 export const DEFAULT_RETRY_ATTEMPTS = 3

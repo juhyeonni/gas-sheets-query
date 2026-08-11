@@ -8,7 +8,7 @@
  * sequence. LockService is absent outside GAS (Node tests, bundlers), in which
  * case these helpers degrade to running the callback unlocked.
  */
-import { classifyGasError, LockTimeoutError } from './errors'
+import { classifyGasError, LockTimeoutError } from './errors.js'
 
 /** Default time (ms) to wait for the script lock before giving up. */
 export const DEFAULT_LOCK_TIMEOUT_MS = 10000

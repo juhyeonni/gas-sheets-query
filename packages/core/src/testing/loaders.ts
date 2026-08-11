@@ -4,11 +4,11 @@
  * so `FakeSheet`/`FakeSpreadsheet` keep exposing only their GAS-parity
  * allowlist.
  */
-import { FakeSheet } from './fake-sheet'
-import { FakeSpreadsheet } from './fake-spreadsheet'
-import { parseCsv, coerceCell } from './csv'
-import { untagDates } from './json'
-import type { SnapshotEnvelope } from './json'
+import { FakeSheet } from './fake-sheet.js'
+import { FakeSpreadsheet } from './fake-spreadsheet.js'
+import { parseCsv, coerceCell } from './csv.js'
+import { untagDates } from './json.js'
+import type { SnapshotEnvelope } from './json.js'
 
 /** Options for {@link fromCsv}. */
 export interface FromCsvOptions {

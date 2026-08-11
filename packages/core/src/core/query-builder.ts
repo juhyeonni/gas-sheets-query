@@ -1,8 +1,8 @@
 /**
  * Query Builder - fluent API for building queries
  */
-import type { RowWithId, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types'
-import { NoResultsError } from './errors'
+import type { RowWithId, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types.js'
+import { NoResultsError } from './errors.js'
 
 /**
  * Aggregation specification

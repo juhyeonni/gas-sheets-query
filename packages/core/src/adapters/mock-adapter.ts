@@ -1,11 +1,11 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types'
-import { IndexStore } from '../core/index-store'
-import type { IndexDefinition } from '../core/index-store'
-import { evaluateCondition, compareRows } from '../core/query-utils'
-import { DuplicateIdError } from '../core/errors'
+import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types.js'
+import { IndexStore } from '../core/index-store.js'
+import type { IndexDefinition } from '../core/index-store.js'
+import { evaluateCondition, compareRows } from '../core/query-utils.js'
+import { DuplicateIdError } from '../core/errors.js'
 
 /** MockAdapter configuration options */
 export interface MockAdapterOptions<T extends RowWithId = RowWithId> {

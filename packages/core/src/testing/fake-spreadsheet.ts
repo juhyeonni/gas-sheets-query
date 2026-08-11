@@ -3,7 +3,7 @@
  * allowlisted surface (`getSheetByName`, `insertSheet`, `deleteSheet`,
  * `getSheets`, `getName`).
  */
-import { FakeSheet } from './fake-sheet'
+import { FakeSheet } from './fake-sheet.js'
 
 export class FakeSpreadsheet {
   private readonly sheets = new Map<string, FakeSheet>()

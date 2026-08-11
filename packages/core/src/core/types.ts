@@ -1,8 +1,8 @@
 /**
  * Core types for gas-sheets-query
  */
-import type { ColumnType } from '../adapters/sheets-adapter'
-import type { IndexDefinition } from './index-store'
+import type { ColumnType } from '../adapters/sheets-adapter.js'
+import type { IndexDefinition } from './index-store.js'
 
 /**
  * ID generation mode for insert operations

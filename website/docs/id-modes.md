@@ -37,7 +37,7 @@ console.log(user2.id) // 2
 
 Like a SQL `AUTO_INCREMENT`, the counter only moves forward: **deleting a row never frees its id for reuse**, so a foreign key pointing at a deleted record stays a visible orphan instead of silently re-binding to whatever row is inserted next. Expect gaps in the id sequence after deletions — that is by design.
 
-The `_gsquery_meta` sheet is safe to leave alone and safe to lose: if someone deletes it, the next insert recreates it and re-bootstraps the counter from the current max id (ids still only move forward from there). The counter lives in the spreadsheet — not in script properties — so every script project that opens the spreadsheet shares one counter, and a copied spreadsheet carries its counter along.
+If someone deletes the `_gsquery_meta` sheet, the next insert recreates it and re-bootstraps the counter from the current max id. One caveat: while the counter is missing, allocation degrades to `max + 1` — so if the highest-id rows are also deleted **before** the next insert, those ids are re-issued in that window. Treat the meta sheet as part of your data, not as a disposable artifact. The counter lives in the spreadsheet — not in script properties — so every script project that opens the spreadsheet shares one counter, and a copied spreadsheet carries its counter along.
 
 ## Client Mode
 

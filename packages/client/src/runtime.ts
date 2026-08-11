@@ -140,7 +140,7 @@ export function createStore<T extends RowWithId>(
  * ```ts
  * // In generated client.ts:
  * import { createClientFactory } from '@gsquery/client'
- * import { schema, Tables } from './types'
+ * import { schema, Tables } from './types.js'
  * 
  * export const createClient = createClientFactory<Tables>(schema)
  * 

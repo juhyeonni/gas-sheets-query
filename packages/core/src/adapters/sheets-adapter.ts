@@ -10,16 +10,16 @@ import type {
   IdMode,
   UpdateData,
   AddColumnOptions
-} from '../core/types'
-import { evaluateCondition, compareRows } from '../core/query-utils'
+} from '../core/types.js'
+import { evaluateCondition, compareRows } from '../core/query-utils.js'
 import {
   CellSizeLimitError,
   DuplicateIdError,
   SchemaMismatchError,
   UnknownColumnError
-} from '../core/errors'
-import { withScriptLock } from '../core/script-lock'
-import { withRetries } from '../core/gas-retry'
+} from '../core/errors.js'
+import { withScriptLock } from '../core/script-lock.js'
+import { withRetries } from '../core/gas-retry.js'
 
 /** Column type definition for schema-based serialization */
 export type ColumnType = 

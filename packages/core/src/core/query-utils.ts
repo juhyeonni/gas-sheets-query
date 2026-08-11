@@ -2,7 +2,7 @@
  * Shared query utilities for evaluating conditions and sorting rows.
  * Used by both MockAdapter and SheetsAdapter (local strategy).
  */
-import type { Row, WhereCondition, OrderByCondition } from './types'
+import type { Row, WhereCondition, OrderByCondition } from './types.js'
 
 /**
  * Escape regex special characters in a string

@@ -2,7 +2,7 @@
  * Global shim: installs `SpreadsheetApp`/`LockService` on `globalThis` so
  * `SheetsAdapter` and consumer code run unmodified against fakes in Node.
  */
-import { FakeSpreadsheet } from './fake-spreadsheet'
+import { FakeSpreadsheet } from './fake-spreadsheet.js'
 
 /** Options for {@link installGasFakes}. */
 export interface InstallGasFakesOptions {
