@@ -229,6 +229,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
   private getSpreadsheet(): GoogleAppsScript.Spreadsheet.Spreadsheet {
     if (!this._spreadsheet) {
+      // The #1 newcomer mistake is running SheetsAdapter outside GAS; a raw
+      // "ReferenceError: SpreadsheetApp is not defined" explains nothing.
+      if (typeof SpreadsheetApp === 'undefined') {
+        throw new Error(
+          'SheetsAdapter requires the Google Apps Script runtime (SpreadsheetApp is not defined). ' +
+          "Outside GAS, use MockAdapter for in-memory data, or install the GAS fakes from " +
+          "'@gsquery/core/testing' (installGasFakes) to run SheetsAdapter against a simulated sheet."
+        )
+      }
       // Opening a document is a read, and one of the likeliest calls to hit a
       // transient backend timeout, so it is worth retrying (#136).
       const ss = this.sheetsCall(() => this.spreadsheetId

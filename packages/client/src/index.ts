@@ -122,7 +122,9 @@ export function createClient(_options?: {
     findAll(): never;
     findById(id: string | number): never;
     query(): never;
-    insert(data: Record<string, unknown>): never;
+    // Same method names as the real TableHandle (create, not insert), so the
+    // placeholder never teaches an API the generated client won't have.
+    create(data: Record<string, unknown>): never;
     update(id: string | number, data: Record<string, unknown>): never;
     delete(id: string | number): never;
   };
@@ -141,7 +143,7 @@ export function createClient(_options?: {
         findAll: handler,
         findById: handler,
         query: handler,
-        insert: handler,
+        create: handler,
         update: handler,
         delete: handler,
       };

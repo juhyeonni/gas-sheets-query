@@ -29,6 +29,16 @@ on:
       - '.github/workflows/gas-e2e.yml'
 
 jobs:
+  # A disabled GAS_E2E_ENABLED must not look like a pass: the skipped e2e job
+  # shows as neutral, so this always-on job stamps a loud warning annotation
+  # on every run that went unverified on the real platform.
+  gate-check:
+    runs-on: ubuntu-latest
+    if: ${{ vars.GAS_E2E_ENABLED != 'true' }}
+    steps:
+      - run: |
+          echo "::warning title=GAS E2E skipped::GAS_E2E_ENABLED is not 'true' — this push was NOT verified against real Apps Script. The lock/flush/migration guarantees are only fake-tested until the variable is restored."
+
   gas-e2e:
     runs-on: ubuntu-latest
     if: ${{ vars.GAS_E2E_ENABLED == 'true' }}

@@ -23,6 +23,7 @@ const sidebars: SidebarsConfig = {
         'join-queries',
         'aggregation',
         'batch-operations',
+        'testing',
       ],
     },
     {
