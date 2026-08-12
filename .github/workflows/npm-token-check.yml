@@ -1,0 +1,25 @@
+name: NPM token check
+
+# Pre-flight for releases: verifies the NPM_TOKEN secret exists and is
+# still accepted by the registry (classic tokens were mass-revoked by npm
+# in late 2025, so age alone can kill it). Never publishes anything.
+on:
+  workflow_dispatch:
+
+jobs:
+  whoami:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - name: npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is empty or not set"
+            exit 1
+          fi
+          npm whoami
