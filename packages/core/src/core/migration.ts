@@ -3,8 +3,9 @@
  * 
  * Provides version-controlled schema changes with up/down migrations.
  */
-import type { Row, RowWithId, DataStore } from './types'
-import { SheetsQueryError } from './errors'
+import type { Row, RowWithId, DataStore, BatchUpdateItem } from './types.js'
+import { SheetsQueryError } from './errors.js'
+import { withScriptLockAsync } from './script-lock.js'
 
 // ============================================================================
 // Migration Types
@@ -138,6 +139,19 @@ export class NoMigrationsToRollbackError extends SheetsQueryError {
 // ============================================================================
 
 /**
+ * Whether a column value counts as "not set" for schema operations.
+ *
+ * `undefined` is not storable in a Sheets cell — SheetsAdapter writes it as
+ * `''` and reads it back as `''` — so guards that test only for `undefined`
+ * hold in memory but silently no-op against a real sheet (#112). Treating
+ * empty-string as empty is the only definition implementable identically
+ * across MockAdapter, LocalAdapter and SheetsAdapter.
+ */
+function isEmptyCell(value: unknown): boolean {
+  return value === undefined || value === null || value === ''
+}
+
+/**
  * SchemaBuilder that records operations
  */
 class RecordingSchemaBuilder implements SchemaBuilder {
@@ -175,9 +189,12 @@ class RecordingSchemaBuilder implements SchemaBuilder {
 // ============================================================================
 
 /**
- * Resolver to get DataStore for a table
+ * Resolver to get DataStore for a table.
+ * Defined once in join-query-builder; imported and re-exported here to keep
+ * this module's public surface (and the MigrationStoreResolver alias in index.ts).
  */
-export type StoreResolver = <T extends RowWithId>(tableName: string) => DataStore<T>
+import type { StoreResolver } from './join-query-builder.js'
+export type { StoreResolver }
 
 /**
  * Migration runner configuration
@@ -294,80 +311,144 @@ export class MigrationRunner {
   private applyOperation(operation: SchemaOperation): void {
     const store = this.storeResolver<RowWithId>(operation.table)
 
-    // Prefer physical schema ops when the store supports them (e.g. Sheets adapter).
-    // Positional stores MUST use these so the header and column layout stay aligned;
-    // a row-by-row update cannot insert/remove a physical column without corrupting it.
     switch (operation.type) {
       case 'addColumn':
-        if (store.addColumn) {
-          store.addColumn(operation.column!, operation.options?.default)
-          return
-        }
-        break
+        this.applyAddColumn(store, operation)
+        return
       case 'removeColumn':
-        if (store.removeColumn) {
-          store.removeColumn(operation.column!)
-          return
-        }
-        break
+        this.applyRemoveColumn(store, operation)
+        return
       case 'renameColumn':
-        if (store.renameColumn) {
-          store.renameColumn(operation.oldColumn!, operation.newColumn!)
-          return
-        }
-        break
+        this.applyRenameColumn(store, operation)
+        return
+    }
+  }
+
+  /**
+   * Apply a removeColumn operation.
+   *
+   * Same capability probe as {@link MigrationRunner.applyAddColumn} (#127): a
+   * store whose columns are physical and positional (SheetsAdapter) has to drop
+   * the column itself, because clearing values leaves the column — and the next
+   * deploy, whose schema no longer declares it, then maps every column to its
+   * right one position off (#180).
+   *
+   * Name-keyed stores (MockAdapter, LocalAdapter) have no physical column, so
+   * the value clear below is the whole operation: the key is left `undefined`
+   * (Sheets: the cell blanked). addColumn's empty-cell guard (#99) lets a later
+   * re-add re-apply its default over the cleared value.
+   */
+  private applyRemoveColumn(store: DataStore<RowWithId>, operation: SchemaOperation): void {
+    const column = operation.column!
+
+    if (store.removeColumn) {
+      store.removeColumn(column)
+      return
     }
 
-    // Fallback for stores that map columns by name (in-memory / mock): update rows.
-    const rows = store.findAll()
-    switch (operation.type) {
-      case 'addColumn': {
-        const defaultValue = operation.options?.default
-        for (const row of rows) {
-          if (!(operation.column! in row)) {
-            store.update(row.id as string | number, {
-              [operation.column!]: defaultValue
-            })
-          }
-        }
-        break
-      }
-
-      case 'removeColumn': {
-        for (const row of rows) {
-          if (operation.column! in row) {
-            store.update(row.id as string | number, {
-              [operation.column!]: undefined
-            })
-          }
-        }
-        break
-      }
-
-      case 'renameColumn': {
-        for (const row of rows) {
-          if (operation.oldColumn! in row && !(operation.newColumn! in row)) {
-            const value = (row as Record<string, unknown>)[operation.oldColumn!]
-            const updates: Record<string, unknown> = {
-              [operation.oldColumn!]: undefined,
-              [operation.newColumn!]: value
-            }
-            store.update(row.id as string | number, updates)
-          }
-        }
-        break
+    for (const row of store.findAll()) {
+      if (!isEmptyCell((row as Record<string, unknown>)[column])) {
+        store.update(row.id as string | number, { [column]: undefined })
       }
     }
   }
-  
+
+  /**
+   * Apply a renameColumn operation.
+   *
+   * Same capability probe as {@link MigrationRunner.applyAddColumn} (#127): on
+   * a positional store the value move below cannot rename anything — the cell
+   * is already read under the new name, so the copy condition is never true and
+   * the sheet header keeps the old name (#180). Such a store renames its own
+   * header.
+   *
+   * On name-keyed stores the value move IS the rename: it fires when the source
+   * has a value and the target is empty (missing, or cleared by a prior op) —
+   * an emptiness test rather than `in`, consistent with the addColumn guard
+   * (#99). Using `in` here would wrongly skip the rename when the target key
+   * lingers from an earlier removeColumn/rename.
+   */
+  private applyRenameColumn(store: DataStore<RowWithId>, operation: SchemaOperation): void {
+    const oldColumn = operation.oldColumn!
+    const newColumn = operation.newColumn!
+
+    if (store.renameColumn) {
+      store.renameColumn(oldColumn, newColumn)
+      return
+    }
+
+    for (const row of store.findAll()) {
+      const r = row as Record<string, unknown>
+      if (!isEmptyCell(r[oldColumn]) && isEmptyCell(r[newColumn])) {
+        store.update(row.id as string | number, {
+          [oldColumn]: undefined,
+          [newColumn]: r[oldColumn]
+        })
+      }
+    }
+  }
+
+  /**
+   * Apply an addColumn operation.
+   *
+   * Stores whose column set is physical and positional (SheetsAdapter) must add
+   * the column themselves: writing values through `update()` cannot create a
+   * column there, so the migration silently did nothing while still recording
+   * itself as applied (#127). The store also owns the backfill, keeping it to a
+   * single ranged write instead of one update per row.
+   *
+   * Name-keyed stores (MockAdapter, LocalAdapter) have no physical schema, so
+   * the value backfill below is the whole operation. It writes only where the
+   * cell is empty — so a default is re-applied after a prior removeColumn
+   * cleared it (#99, #112) — and only when a default exists, so a no-default
+   * addColumn converges instead of rewriting every row on every run.
+   */
+  private applyAddColumn(store: DataStore<RowWithId>, operation: SchemaOperation): void {
+    const column = operation.column!
+    const defaultValue = operation.options?.default
+
+    if (store.addColumn) {
+      store.addColumn(column, { default: defaultValue })
+      return
+    }
+
+    if (defaultValue === undefined) return
+
+    const patches: BatchUpdateItem<RowWithId>[] = store
+      .findAll()
+      .filter(row => isEmptyCell((row as Record<string, unknown>)[column]))
+      .map(row => ({ id: row.id, data: { [column]: defaultValue } }))
+
+    if (patches.length === 0) return
+
+    // One batched write when the store supports it; per-row updates are the
+    // last resort (they are what made a 5,000-row backfill ~20,000 API calls).
+    if (store.batchUpdate) {
+      store.batchUpdate(patches)
+      return
+    }
+    for (const patch of patches) {
+      store.update(patch.id, patch.data)
+    }
+  }
+
   /**
    * Run all pending migrations
    * @param options - Optional: specify target version
+   *
+   * Holds the script lock for the whole run so two concurrent GAS executions
+   * cannot apply the same migration twice. The pending list is read *after*
+   * the lock is acquired, because another execution may have applied
+   * migrations while this one was waiting (#128).
    */
   async migrate(options?: { to?: number }): Promise<MigrationResult> {
+    return withScriptLockAsync(() => this.runMigrations(options))
+  }
+
+  private async runMigrations(options?: { to?: number }): Promise<MigrationResult> {
     const pending = this.getPendingMigrations()
     const applied: { version: number; name: string }[] = []
-    
+
     for (const migration of pending) {
       // Stop if we've reached the target version
       if (options?.to !== undefined && migration.version > options.to) {
@@ -409,10 +490,18 @@ export class MigrationRunner {
   
   /**
    * Rollback the last applied migration
+   *
+   * Locked for the same reason as migrate(): the applied list is re-read after
+   * the lock is acquired so a migration another execution already rolled back
+   * is not rolled back twice (#128).
    */
   async rollback(): Promise<RollbackResult> {
+    return withScriptLockAsync(() => this.runRollback())
+  }
+
+  private async runRollback(): Promise<RollbackResult> {
     const applied = this.getAppliedMigrations()
-    
+
     if (applied.length === 0) {
       throw new NoMigrationsToRollbackError()
     }
@@ -458,17 +547,21 @@ export class MigrationRunner {
    * Rollback all migrations (reset to version 0)
    */
   async rollbackAll(): Promise<{ rolledBack: { version: number; name: string }[]; currentVersion: number }> {
-    const rolledBack: { version: number; name: string }[] = []
-    
-    while (this.getCurrentVersion() > 0) {
-      const result = await this.rollback()
-      rolledBack.push(result.rolledBack)
-    }
-    
-    return {
-      rolledBack,
-      currentVersion: 0
-    }
+    // One lock for the whole sequence (the per-rollback lock is re-entrant), so
+    // the schema is never observed half-rolled-back by another execution.
+    return withScriptLockAsync(async () => {
+      const rolledBack: { version: number; name: string }[] = []
+
+      while (this.getCurrentVersion() > 0) {
+        const result = await this.rollback()
+        rolledBack.push(result.rolledBack)
+      }
+
+      return {
+        rolledBack,
+        currentVersion: 0
+      }
+    })
   }
   
   /**

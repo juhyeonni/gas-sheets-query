@@ -35,7 +35,7 @@ export function getClaudeSkillFiles(): SkillFile[] {
     { name: 'joins-and-aggregation.md', relativePath: 'references/joins-and-aggregation.md', absolutePath: join(CLAUDE_SKILLS_DIR, 'references', 'joins-and-aggregation.md') },
     { name: 'adapters-and-config.md', relativePath: 'references/adapters-and-config.md', absolutePath: join(CLAUDE_SKILLS_DIR, 'references', 'adapters-and-config.md') },
     { name: 'migration-and-cli.md', relativePath: 'references/migration-and-cli.md', absolutePath: join(CLAUDE_SKILLS_DIR, 'references', 'migration-and-cli.md') },
-    { name: 'errors-and-viz.md', relativePath: 'references/errors-and-viz.md', absolutePath: join(CLAUDE_SKILLS_DIR, 'references', 'errors-and-viz.md') },
+    { name: 'errors.md', relativePath: 'references/errors.md', absolutePath: join(CLAUDE_SKILLS_DIR, 'references', 'errors.md') },
   ]
 }
 

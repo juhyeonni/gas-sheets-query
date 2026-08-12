@@ -73,6 +73,15 @@ describe('LocalAdapter', () => {
       expect(adapter.update('missing', { value: 1 })).toBeUndefined()
     })
 
+    it('update ignores attempts to change the id (#98)', () => {
+      adapter.insert({ id: 'c1', value: 0, updatedAt: '2024-01-01' })
+      const updated = adapter.update('c1', { id: 'c99', value: 5 } as Partial<Counter>)
+      expect(updated?.id).toBe('c1') // id unchanged
+      expect(updated?.value).toBe(5)
+      expect(adapter.findById('c1')?.value).toBe(5) // no ghost row
+      expect(adapter.findById('c99')).toBeUndefined()
+    })
+
     it('delete removes row', () => {
       adapter.insert({ id: 'c1', value: 0, updatedAt: '' })
       expect(adapter.delete('c1')).toBe(true)

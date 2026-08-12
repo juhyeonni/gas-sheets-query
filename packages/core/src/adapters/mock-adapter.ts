@@ -1,13 +1,22 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode } from '../core/types'
-import { IndexStore, IndexDefinition } from '../core/index-store'
-import { evaluateCondition, compareRows } from '../core/query-utils'
+import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types.js'
+import { IndexStore } from '../core/index-store.js'
+import type { IndexDefinition } from '../core/index-store.js'
+import { evaluateCondition, compareRows } from '../core/query-utils.js'
+import { DuplicateIdError } from '../core/errors.js'
 
 /** MockAdapter configuration options */
 export interface MockAdapterOptions<T extends RowWithId = RowWithId> {
-  /** Initial data */
+  /**
+   * Initial data.
+   *
+   * Seeded verbatim: unlike insert()/batchInsert() it is not checked for
+   * duplicate ids, so a caller can still seed a store with colliding ids
+   * (same for `reset()`). That mirrors SheetsAdapter, which likewise cannot
+   * vouch for rows that were already on the sheet (#154).
+   */
   initialData?: T[]
   /** Index definitions (schema-based) */
   indexes?: IndexDefinition[]
@@ -217,21 +226,57 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     return this.data[index]
   }
 
+  /**
+   * Read the id of a client-mode row, throwing when the caller omitted it.
+   */
+  private requireClientId(data: Omit<T, 'id'> | T): string | number {
+    if (!('id' in data)) {
+      throw new Error(`ID is required in client mode (idMode: 'client')`)
+    }
+    return (data as T).id
+  }
+
+  /** Every id currently held, keyed as strings so 1 and '1' collide. */
+  private readExistingIdKeys(): Set<string> {
+    const keys = new Set<string>()
+    for (const row of this.data) {
+      keys.add(String(row.id))
+    }
+    return keys
+  }
+
+  /**
+   * Reject client-supplied ids that already exist, or that repeat within the
+   * same batch. Called before any mutation so a rejected write leaves the
+   * store untouched — same contract as SheetsAdapter, which the mock stands in
+   * for during tests (#128/#154).
+   */
+  private assertClientIdsAvailable(ids: (string | number)[]): void {
+    const existing = this.readExistingIdKeys()
+    for (const id of ids) {
+      const key = String(id)
+      if (existing.has(key)) {
+        throw new DuplicateIdError(id)
+      }
+      existing.add(key)
+    }
+  }
+
   insert(data: Omit<T, 'id'> | T): T {
     let newRow: T
-    
+
     if (this.idMode === 'client') {
-      // Client mode: use client-provided ID
-      if (!('id' in data)) {
-        throw new Error(`ID is required in client mode (idMode: 'client')`)
-      }
+      // Client mode: use client-provided ID, rejecting one that is taken
+      // before anything is written.
+      const id = this.requireClientId(data)
+      this.assertClientIdsAvailable([id])
       newRow = data as T
     } else {
       // Auto mode: server generates numeric ID (default, backward compatible)
       const id = this.nextId++
       newRow = { ...data, id } as T
     }
-    
+
     const index = this.data.length
     this.data.push(newRow)
     this.idIndex.set(newRow.id, index)
@@ -243,14 +288,16 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   /**
    * Update a row by ID - O(1) using index
    */
-  update(id: string | number, data: Partial<T>): T | undefined {
+  update(id: string | number, data: UpdateData<T>): T | undefined {
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
     
     const oldRow = this.data[index]
-    const newRow = { ...oldRow, ...data }
+    // id is immutable via update; ignore any attempt to change it so the
+    // idIndex stays consistent and behavior matches SheetsAdapter (#98).
+    const newRow = { ...oldRow, ...data, id: oldRow.id }
     this.data[index] = newRow
-    
+
     // Update column indexes
     this.indexStore.updateIndex(index, oldRow, newRow)
     
@@ -285,33 +332,36 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
    * More efficient than calling insert() in a loop
    */
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
-    const results: T[] = []
-    const startIndex = this.data.length
-    
-    for (let i = 0; i < items.length; i++) {
-      let newRow: T
-      
-      if (this.idMode === 'client') {
-        // Client mode: use client-provided ID
-        if (!('id' in items[i])) {
-          throw new Error(`ID is required in client mode (idMode: 'client')`)
-        }
-        newRow = items[i] as T
-      } else {
-        // Auto mode: server generates numeric ID
-        const id = this.nextId++
-        newRow = { ...items[i], id } as T
+    // Resolve and validate every row before touching the store: a rejected
+    // batch must mutate nothing, matching SheetsAdapter (#128/#154).
+    const newRows: T[] = []
+
+    if (this.idMode === 'client') {
+      // Client mode: use client-provided IDs
+      const ids: (string | number)[] = []
+      for (const item of items) {
+        ids.push(this.requireClientId(item))
+        newRows.push(item as T)
       }
-      
+      this.assertClientIdsAvailable(ids)
+    } else {
+      // Auto mode: server generates numeric IDs
+      for (const item of items) {
+        newRows.push({ ...item, id: this.nextId++ } as T)
+      }
+    }
+
+    const startIndex = this.data.length
+    for (let i = 0; i < newRows.length; i++) {
+      const newRow = newRows[i]
       const rowIndex = startIndex + i
       this.data.push(newRow)
       this.idIndex.set(newRow.id, rowIndex)
       // Update column indexes
       this.indexStore.addToIndex(rowIndex, newRow)
-      results.push(newRow)
     }
-    
-    return results
+
+    return newRows
   }
 
   /**
@@ -326,19 +376,22 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
       if (index === undefined) continue
       
       const oldRow = this.data[index]
-      const newRow = { ...oldRow, ...data }
+      // Same immutability guard update() has (#98/#113) — without it the row
+      // keeps its old idIndex entry and becomes a ghost: findById(oldId)
+      // returns it, findById(newId) does not.
+      const newRow = { ...oldRow, ...data, id: oldRow.id }
       this.data[index] = newRow
-      
+
       // Update column indexes
       this.indexStore.updateIndex(index, oldRow, newRow)
-      
+
       results.push(newRow)
     }
     
     return results
   }
 
-  /** Test helper: reset all data */
+  /** Test helper: reset all data (seeded verbatim, see {@link MockAdapterOptions.initialData}) */
   reset(data: T[] = []): void {
     this.data = [...data]
     this.rebuildIndex()

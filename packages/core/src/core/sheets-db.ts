@@ -7,13 +7,16 @@ import type {
   SheetsDBConfig,
   TableSchemaTyped,
   InferRowFromSchema,
-  InferTablesFromConfig
-} from './types'
-import { Repository } from './repository'
-import { QueryBuilder, createQueryBuilder } from './query-builder'
-import { JoinQueryBuilder, createJoinQueryBuilder, StoreResolver } from './join-query-builder'
-import { TableNotFoundError, MissingStoreError } from './errors'
-import { MockAdapter } from '../adapters/mock-adapter'
+  InferTablesFromConfig,
+  UpdateData,
+  BatchUpdateItem
+} from './types.js'
+import { Repository } from './repository.js'
+import { QueryBuilder, createQueryBuilder } from './query-builder.js'
+import { JoinQueryBuilder, createJoinQueryBuilder } from './join-query-builder.js'
+import type { StoreResolver } from './join-query-builder.js'
+import { TableNotFoundError, MissingStoreError } from './errors.js'
+import { MockAdapter } from '../adapters/mock-adapter.js'
 
 /**
  * Table handle providing Repository and QueryBuilder access
@@ -38,7 +41,7 @@ export interface TableHandle<T extends RowWithId> {
   findAll(): T[]
 
   /** Shorthand: update by id */
-  update(id: string | number, data: Partial<T>): T
+  update(id: string | number, data: UpdateData<T>): T
 
   /** Shorthand: delete by id */
   delete(id: string | number): void
@@ -46,8 +49,8 @@ export interface TableHandle<T extends RowWithId> {
   /** Batch insert multiple rows at once */
   batchInsert(data: (T | Omit<T, 'id'>)[]): T[]
 
-  /** Batch update multiple rows at once */
-  batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[]
+  /** Batch update multiple rows at once (`data` excludes the immutable `id`) */
+  batchUpdate(items: BatchUpdateItem<T>[]): T[]
 }
 
 /**
@@ -173,7 +176,13 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
 export interface DefineSheetsDBOptions<
   TableSchemas extends Record<string, TableSchemaTyped>
 > {
-  /** Spreadsheet ID (optional) */
+  /**
+   * Spreadsheet ID.
+   * @deprecated No-op in defineSheetsDB — store creation here uses the provided
+   * stores or a MockAdapter and does not read this. Configure the spreadsheet on
+   * the adapter/client instead. Kept for backward compatibility with the legacy
+   * config shape; will be removed in a future major.
+   */
   spreadsheetId?: string
   /** Table schemas with optional type hints */
   tables: TableSchemas

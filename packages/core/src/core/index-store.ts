@@ -8,7 +8,7 @@
  *   - Composite column: "field1|field2" → Map<JSON([val1, val2]), Set<rowIndex>>
  */
 
-import type { Row } from './types'
+import type { Row } from './types.js'
 
 /** Index definition */
 export interface IndexDefinition {
@@ -196,23 +196,6 @@ export class IndexStore<T extends Row> {
 
     const serialized = serializeValues(values)
     return index.get(serialized) // Set or undefined
-  }
-
-  /**
-   * Find index starting with specific fields (prefix matching)
-   * Used for prefix matching in composite indexes
-   */
-  findIndexByPrefix(fields: string[]): IndexDefinition | undefined {
-    const prefix = fields.join('|')
-
-    for (const def of this.definitions) {
-      const key = createIndexKey(def.fields)
-      if (key === prefix || key.startsWith(prefix + '|')) {
-        return def
-      }
-    }
-
-    return undefined
   }
 
   /**

@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/skills",
-  "version": "0.9.2",
+  "version": "1.0.0-rc3",
   "description": "AI coding assistant context files for gas-sheets-query",
   "type": "module",
   "main": "dist/index.js",
@@ -14,16 +14,23 @@
       "import": "./dist/index.js"
     },
     "./skills": "./skills",
-    "./cheatsheet": "./skills/generic/gsquery-cheatsheet.md"
+    "./skills/*": "./skills/*",
+    "./cheatsheet": "./skills/generic/gsquery-cheatsheet.md",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "bin",
-    "skills"
+    "skills",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
+    "prepublishOnly": "node ../../scripts/check-publish-manifest.mjs && pnpm clean && pnpm build",
     "build": "tsc",
     "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
@@ -45,12 +52,10 @@
     "url": "https://github.com/juhyeonni/gas-sheets-query.git",
     "directory": "packages/skills"
   },
-  "peerDependencies": {
-    "@gsquery/core": ">=0.9.0"
-  },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=18"

@@ -1,6 +1,6 @@
 {
   "name": "gas-sheets-query-monorepo",
-  "version": "0.9.0",
+  "version": "1.0.0-rc3",
   "private": true,
   "description": "Monorepo for gas-sheets-query",
   "scripts": {
@@ -10,6 +10,7 @@
     "test:coverage": "pnpm -r exec vitest run --coverage",
     "typecheck": "pnpm -r typecheck",
     "clean": "pnpm -r clean",
+    "verify:pack": "node scripts/verify-publish-artifacts.mjs",
     "dev": "pnpm --filter gsquery dev",
     "release": "pnpm build && pnpm -r publish --access public"
   },
@@ -31,6 +32,8 @@
     "node": ">=18"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.0.18"
+    "@vitest/coverage-v8": "^4.0.18",
+    "fs-extra": "^11.3.6",
+    "js-yaml": "^4.1.1"
   }
 }

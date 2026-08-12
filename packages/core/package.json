@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/core",
-  "version": "0.9.2",
+  "version": "1.0.0-rc3",
   "description": "TypeScript library for using Google Sheets as a database in GAS projects",
   "type": "module",
   "main": "dist/index.cjs",
@@ -11,12 +11,22 @@
       "types": "./dist/types/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./testing": {
+      "types": "./dist/types/testing/index.d.ts",
+      "import": "./dist/testing.mjs",
+      "require": "./dist/testing.cjs"
+    },
+    "./gas": "./dist/gas/bundle.js",
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
+    "prepublishOnly": "node ../../scripts/check-publish-manifest.mjs && pnpm clean && pnpm build",
     "build": "node build.mjs && tsc --emitDeclarationOnly",
     "build:gas": "node build.mjs",
     "dev": "vitest",
@@ -48,5 +58,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

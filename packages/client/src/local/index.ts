@@ -5,8 +5,8 @@ export type { MutationQueueOptions, MutationStorage } from './mutation-queue.js'
 export { LocalAdapter, openSharedIDB } from './local-adapter.js'
 export type { LocalAdapterOptions } from './local-adapter.js'
 
-export { SyncEngine } from './sync-engine.js'
-export type { SyncEngineOptions } from './sync-engine.js'
+export { SyncEngine, SyncError } from './sync-engine.js'
+export type { SyncEngineOptions, TableSyncError } from './sync-engine.js'
 
 export { createClientDB } from './create-client-db.js'
 export type { CreateClientDBOptions, ClientDBResult, ClientDBSchema } from './create-client-db.js'
@@ -14,6 +14,7 @@ export type { CreateClientDBOptions, ClientDBResult, ClientDBSchema } from './cr
 // Types
 export type {
   SyncTransport,
+  SyncPushResult,
   Mutation,
   MutationType,
   MergedMutation,
@@ -22,4 +23,8 @@ export type {
   SyncEvent,
   SyncEventType,
   SyncEventListener,
+  PoisonedMutationInfo,
+  PoisonedMutationAction,
+  PoisonedMutationHandler,
+  RejectedMutationIds,
 } from './sync-transport.js'

@@ -118,7 +118,7 @@ describe('MutationQueue', () => {
       })
     })
 
-    it('delete + insert → update (re-creation)', () => {
+    it('delete + insert → insert (re-creation as upsert, safe vs strict-update servers)', () => {
       queue.push('delete', 'a')
       queue.push('insert', 'a', undefined, { id: 'a', name: 'Reborn', value: 42 })
 
@@ -126,7 +126,7 @@ describe('MutationQueue', () => {
       expect(merged).toHaveLength(1)
       expect(merged[0]).toEqual({
         id: 'a',
-        type: 'update',
+        type: 'insert',
         data: { id: 'a', name: 'Reborn', value: 42 },
       })
     })
@@ -191,6 +191,85 @@ describe('MutationQueue', () => {
         type: 'insert',
         data: { id: 'a', name: 'A', value: 10 },
       })
+    })
+  })
+
+  // ── Cancelled pairs ────────────────────────────────────────────────
+
+  describe('purgeCancelled [#175]', () => {
+    it('drops the raw mutations of a row that cancelled itself out', () => {
+      queue.push('insert', 'a', undefined, { id: 'a', name: 'A', value: 1 })
+      queue.push('delete', 'a')
+      expect(queue.length).toBe(2)
+
+      queue.purgeCancelled()
+
+      expect(queue.length).toBe(0)
+      expect(queue.getMerged()).toEqual([])
+      expect(storage.store.has('gsquery:test:mutations')).toBe(false)
+    })
+
+    it('leaves rows that still have a net effect alone', () => {
+      queue.push('insert', 'a', undefined, { id: 'a', name: 'A', value: 1 })
+      queue.push('delete', 'a')
+      queue.push('update', 'b', { value: 2 })
+      queue.push('delete', 'c')
+
+      queue.purgeCancelled()
+
+      expect(queue.getMerged().map(m => m.id)).toEqual(['b', 'c'])
+      expect(queue.length).toBe(2)
+    })
+
+    it('keeps a pair that is not fully below the boundary', () => {
+      queue.push('insert', 'a', undefined, { id: 'a', name: 'A', value: 1 })
+      const boundary = queue.currentSeq()
+      queue.push('delete', 'a')
+
+      // The delete arrived after the boundary, so the pair is not settled by
+      // the push that boundary belongs to.
+      queue.purgeCancelled(boundary)
+      expect(queue.length).toBe(2)
+
+      queue.purgeCancelled(queue.currentSeq())
+      expect(queue.length).toBe(0)
+    })
+
+    it('re-creation after a cancelling pair is not collected', () => {
+      queue.push('insert', 'a', undefined, { id: 'a', name: 'A', value: 1 })
+      queue.push('delete', 'a')
+      queue.push('insert', 'a', undefined, { id: 'a', name: 'A again', value: 2 })
+
+      queue.purgeCancelled(queue.currentSeq())
+
+      // The net effect is an insert, so every raw mutation behind it stays.
+      expect(queue.getMerged()).toHaveLength(1)
+      expect(queue.length).toBe(3)
+    })
+
+    it('is a no-op on an empty queue', () => {
+      queue.purgeCancelled(queue.currentSeq())
+      expect(queue.length).toBe(0)
+    })
+  })
+
+  describe('hasPending reflects the merged view [#175]', () => {
+    it('is false when every mutation cancels out', () => {
+      queue.push('insert', 'a', undefined, { id: 'a', name: 'A', value: 1 })
+      queue.push('delete', 'a')
+
+      // Raw mutations are still there (they are only collected at a push
+      // boundary), but there is no work left to send.
+      expect(queue.length).toBe(2)
+      expect(queue.hasPending).toBe(false)
+    })
+
+    it('is true again as soon as real work is queued', () => {
+      queue.push('insert', 'a', undefined, { id: 'a', name: 'A', value: 1 })
+      queue.push('delete', 'a')
+      queue.push('update', 'b', { value: 2 })
+
+      expect(queue.hasPending).toBe(true)
     })
   })
 

@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/cli",
-  "version": "0.9.2",
+  "version": "1.0.0-rc3",
   "description": "CLI for gas-sheets-query schema generation",
   "type": "module",
   "main": "dist/index.js",
@@ -10,9 +10,12 @@
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
+    "prepublishOnly": "node ../../scripts/check-publish-manifest.mjs && pnpm clean && pnpm build",
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
@@ -46,9 +49,12 @@
     "vitest": "^4.0.18"
   },
   "peerDependencies": {
-    "@gsquery/core": "workspace:*"
+    "@gsquery/core": "workspace:^"
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

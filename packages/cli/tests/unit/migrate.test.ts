@@ -150,6 +150,42 @@ describe('migrate command', () => {
     expect(result.applied).toHaveLength(1)
   })
 
+  it('should load compiled .js migrations (#82)', async () => {
+    mkdirSync('migrations')
+    writeFileSync('migrations/0001_test.js', `
+      export const migration = {
+        version: 1,
+        name: 'test',
+        up: () => {},
+        down: () => {},
+      }
+    `)
+
+    const result = await runMigrate({})
+
+    expect(result.success).toBe(true)
+    expect(result.applied).toHaveLength(1)
+  })
+
+  it('should not double-apply when both .ts and .js exist for one migration (#82)', async () => {
+    mkdirSync('migrations')
+    const body = `
+      export const migration = {
+        version: 1,
+        name: 'test',
+        up: () => {},
+        down: () => {},
+      }
+    `
+    writeFileSync('migrations/0001_test.ts', body)
+    writeFileSync('migrations/0001_test.js', body)
+
+    const result = await runMigrate({})
+
+    expect(result.success).toBe(true)
+    expect(result.applied).toHaveLength(1) // deduped, no duplicate version
+  })
+
   it('should read directory from config file', async () => {
     writeFileSync('gsquery.config.json', JSON.stringify({
       migrationsDir: 'custom_migrations',

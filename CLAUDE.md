@@ -9,7 +9,6 @@ TypeScript library for using Google Sheets as a database in GAS projects.
 | When | Skill | Path |
 |------|-------|------|
 | Starting a task / GitHub sync | `development-flow` | `.claude/skills/development-flow/SKILL.md` |
-| Working on issues/PRs | `project-management` | `.claude/skills/project-management/SKILL.md` |
 | Designing APIs / Publishing | `library-dev` | `.claude/skills/library-dev/SKILL.md` |
 | GAS-specific code / Deploy | `gas-environment` | `.claude/skills/gas-environment/SKILL.md` |
 | Creating new skills | `skill-creator` | `.claude/skills/skill-creator/SKILL.md` |
@@ -17,7 +16,6 @@ TypeScript library for using Google Sheets as a database in GAS projects.
 ### Skill Triggers
 
 - **"let's start working"** → Read `development-flow`, sync GitHub issues
-- **Creating/updating issues** → Read `project-management`
 - **Designing public API** → Read `library-dev`
 - **Sheets optimization / clasp** → Read `gas-environment`
 
@@ -121,21 +119,28 @@ git push --follow-tags  # Push with tags (triggers auto-publish)
 
 ## Architecture
 
+pnpm monorepo with four packages:
+
 ```
-src/
-├── core/
-│   ├── repository.ts    # DataStore interface + implementation
-│   ├── query-builder.ts # Fluent query API
-│   └── types.ts         # Core types
-├── adapters/
-│   ├── gas-adapter.ts   # Google Sheets adapter
-│   └── mock-adapter.ts  # In-memory adapter for testing
-├── features/
-│   ├── indexing.ts      # Column indexing
-│   ├── batch.ts         # Batch operations
-│   └── migration.ts     # Schema migrations
-└── index.ts             # Public API
+packages/
+├── core/                # @gsquery/core
+│   └── src/
+│       ├── core/        # repository, query-builder, join-query-builder,
+│       │                # migration, sheets-db, index-store, script-lock,
+│       │                # column-conversion, types, errors
+│       ├── adapters/    # sheets-adapter (GAS), mock-adapter (in-memory)
+│       └── testing/     # GAS fakes (FakeSheet, ...), CSV/JSON loaders
+├── cli/                 # @gsquery/cli — gsquery init/generate/migration:*
+│   └── src/             # commands/, parser/ (schema AST), generator/
+├── client/              # @gsquery/client — browser runtime
+│   └── src/
+│       ├── local/       # local-adapter (IndexedDB), mutation-queue,
+│       │                # sync-engine, create-client-db
+│       └── transports/  # gas-api-transport, mock-transport
+└── skills/              # @gsquery/skills — AI assistant context files
 ```
+
+Docs live in `website/` (Docusaurus wiki, deployed to GitHub Pages) and `docs/` (repo-local guides).
 
 ## Core Rules
 

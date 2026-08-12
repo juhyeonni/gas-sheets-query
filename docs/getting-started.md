@@ -50,7 +50,8 @@ This command creates a `gsquery.config.json` file:
   "spreadsheetId": "YOUR_SPREADSHEET_ID",
   "migrationsDir": "migrations",
   "generatedDir": "generated",
-  "schemaFile": "schema.gsq.yaml"
+  "schemaFile": "schema.gsq.yaml",
+  "clientDir": "generated/client"
 }
 ```
 

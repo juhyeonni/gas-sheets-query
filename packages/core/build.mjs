@@ -36,4 +36,28 @@ await esbuild.build({
   sourcemap: false
 })
 
+// Testing subpath (@gsquery/core/testing) — ESM build
+await esbuild.build({
+  entryPoints: ['src/testing/index.ts'],
+  bundle: true,
+  outfile: 'dist/testing.mjs',
+  format: 'esm',
+  platform: 'neutral',
+  target: 'es2020',
+  sourcemap: true,
+  external: []
+})
+
+// Testing subpath (@gsquery/core/testing) — CJS build
+await esbuild.build({
+  entryPoints: ['src/testing/index.ts'],
+  bundle: true,
+  outfile: 'dist/testing.cjs',
+  format: 'cjs',
+  platform: 'neutral',
+  target: 'es2020',
+  sourcemap: true,
+  external: []
+})
+
 console.log('✅ Build complete')
