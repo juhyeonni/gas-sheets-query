@@ -5,7 +5,7 @@
   "separate-pull-requests": false,
   "packages": {
     ".": {
-      "package-name": "gas-sheets-query",
+      "package-name": "",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         { "type": "json", "path": "packages/core/package.json", "jsonpath": "$.version" },
