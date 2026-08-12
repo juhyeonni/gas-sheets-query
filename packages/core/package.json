@@ -1,6 +1,6 @@
 {
   "name": "@gsquery/core",
-  "version": "1.0.0-rc3",
+  "version": "1.0.0",
   "description": "TypeScript library for using Google Sheets as a database in GAS projects",
   "type": "module",
   "main": "dist/index.cjs",
