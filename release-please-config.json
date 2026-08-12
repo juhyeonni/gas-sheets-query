@@ -6,7 +6,6 @@
   "packages": {
     ".": {
       "package-name": "",
-      "release-as": "1.0.0",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         { "type": "json", "path": "packages/core/package.json", "jsonpath": "$.version" },
