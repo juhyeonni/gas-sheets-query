@@ -54,7 +54,7 @@ function getRelationType(field: FieldAST): string | null {
   if (!relationAttr || typeof relationAttr.args[0] !== 'string') return null
   const target = relationAttr.args[0]
   const alias = `${target}Id`
-  if (field.type === 'string[]') return `${alias}[]`
+  if (field.type.endsWith('[]')) return `${alias}[]`
   return alias
 }
 

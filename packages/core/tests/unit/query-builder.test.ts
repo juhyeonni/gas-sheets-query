@@ -191,6 +191,21 @@ describe('QueryBuilder', () => {
     })
   })
 
+  describe('builder reuse after first()/exists() (#96)', () => {
+    it('first() does not mutate the builder limit', () => {
+      const qb = query.where('active', '=', true) // matches 3 rows
+      expect(qb.exec().length).toBe(3)
+      qb.first()
+      expect(qb.exec().length).toBe(3) // still 3, not truncated to 1
+    })
+
+    it('exists() does not mutate the builder limit', () => {
+      const qb = query.where('active', '=', true)
+      expect(qb.exists()).toBe(true)
+      expect(qb.exec().length).toBe(3)
+    })
+  })
+
   describe('clone', () => {
     it('should create independent copy', () => {
       const original = query.where('active', '=', true)

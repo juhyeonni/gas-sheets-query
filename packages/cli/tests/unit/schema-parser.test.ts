@@ -586,6 +586,43 @@ describe('validateSchema', () => {
     )
   })
 
+  // Rule 2b (1.0 contract, #101): @id field must be named 'id'
+  it("should error when the @id field is not named 'id'", () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'userId', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("@id field must be named 'id'") })
+    )
+  })
+
+  it("should not error when the @id field is named 'id'", () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).not.toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("@id field must be named 'id'") })
+    )
+  })
+
   // Rule 3: @default arguments must be valid
   it('should error on invalid @default function', () => {
     const errors = validateSchema({
@@ -991,7 +1028,58 @@ describe('validateSchema @relation rules', () => {
     )
   })
 
-  it('should error when @relation is used on non-string field', () => {
+  it('should allow a numeric @relation when the target id is numeric [#117]', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'assigneeId', type: 'number', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+            { name: 'watcherIds', type: 'number[]', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toEqual([])
+  })
+
+  it('should error when a string @relation points at a numeric id [#117]', () => {
+    const errors = validateSchema({
+      enums: {},
+      tables: {
+        User: {
+          name: 'User',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+          ],
+          blockAttributes: [],
+        },
+        Task: {
+          name: 'Task',
+          fields: [
+            { name: 'id', type: 'number', optional: false, attributes: [{ name: 'id', args: [] }] },
+            { name: 'assigneeId', type: 'string', optional: true, attributes: [{ name: 'relation', args: ['User'] }] },
+          ],
+          blockAttributes: [],
+        },
+      },
+    })
+    expect(errors).toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("must match the type of the id it references") })
+    )
+  })
+
+  it('should error when @relation type does not match the target id type', () => {
     const errors = validateSchema({
       enums: {},
       tables: {
@@ -1013,7 +1101,7 @@ describe('validateSchema @relation rules', () => {
       },
     })
     expect(errors).toContainEqual(
-      expect.objectContaining({ message: expect.stringContaining("only allowed on string-based fields") })
+      expect.objectContaining({ message: expect.stringContaining("must match the type of the id it references") })
     )
   })
 

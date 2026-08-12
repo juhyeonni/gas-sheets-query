@@ -16,21 +16,32 @@ import type {
   WhereCondition,
   BatchUpdateItem,
   IdMode,
+  UpdateData,
 } from '@gsquery/core'
-import { IndexStore, evaluateCondition, compareRows } from '@gsquery/core'
-import type { IndexDefinition } from '@gsquery/core'
+import {
+  IndexStore,
+  evaluateCondition,
+  compareRows,
+  deserializeRow,
+  DuplicateIdError,
+} from '@gsquery/core'
+import type { IndexDefinition, ColumnType } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
 import type { MutationStorage } from './mutation-queue.js'
+import { composeName } from './naming.js'
 
 /**
  * Open the gsquery IndexedDB with all required object stores in a single
  * upgrade transaction. This avoids the race condition where multiple
  * adapters independently try to open/upgrade the same database.
+ *
+ * `dbName` defaults to `'gsquery'` (the rc2 name) so omitting it is
+ * byte-identical to the pre-namespace behavior.
  */
-export function openSharedIDB(tableNames: string[]): Promise<IDBDatabase> {
+export function openSharedIDB(tableNames: string[], dbName = 'gsquery'): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     // First, open without a version to discover the current version
-    const probe = indexedDB.open('gsquery')
+    const probe = indexedDB.open(dbName)
     probe.onsuccess = () => {
       const existing = probe.result
       const currentVersion = existing.version
@@ -50,7 +61,7 @@ export function openSharedIDB(tableNames: string[]): Promise<IDBDatabase> {
       // Need an upgrade — close this connection and reopen with bumped version
       existing.close()
       const nextVersion = currentVersion + 1
-      const upgrade = indexedDB.open('gsquery', nextVersion)
+      const upgrade = indexedDB.open(dbName, nextVersion)
       upgrade.onupgradeneeded = () => {
         const db = upgrade.result
         for (const name of tableNames) {
@@ -67,7 +78,7 @@ export function openSharedIDB(tableNames: string[]): Promise<IDBDatabase> {
     }
     probe.onerror = () => {
       // DB doesn't exist yet — create fresh with version 1
-      const fresh = indexedDB.open('gsquery', 1)
+      const fresh = indexedDB.open(dbName, 1)
       fresh.onupgradeneeded = () => {
         const db = fresh.result
         for (const name of tableNames) {
@@ -85,6 +96,11 @@ export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
   tableName: string
   initialData?: T[]
   indexes?: IndexDefinition[]
+  /**
+   * Column types for schema-driven deserialization of rows arriving from the
+   * server (see replaceAll). Without it, pulled values are stored verbatim.
+   */
+  columnTypes?: Record<string, ColumnType>
   idMode?: IdMode
   /** Custom storage for MutationQueue (defaults to localStorage) */
   mutationStorage?: MutationStorage
@@ -92,6 +108,8 @@ export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
   disableIDB?: boolean
   /** Pre-opened shared IDBDatabase handle (from openSharedIDB) */
   idbDb?: IDBDatabase
+  /** Caller-supplied partition key, threaded into the MutationQueue storage key */
+  namespace?: string
 }
 
 export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
@@ -100,6 +118,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private idIndex: Map<string | number, number> = new Map()
   private indexStore: IndexStore<T>
   private idMode: IdMode
+  private readonly columnTypes: Record<string, ColumnType> | undefined
 
   readonly tableName: string
   readonly queue: MutationQueue<T>
@@ -107,12 +126,16 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private idbEnabled: boolean
   private idbDb: IDBDatabase | null = null
   private persistScheduled = false
+  private persistChain: Promise<void> = Promise.resolve()
+  private readonly namespace: string | undefined
 
   constructor(options: LocalAdapterOptions<T>) {
     this.tableName = options.tableName
     this.idMode = options.idMode ?? 'client'
     this.idbEnabled = !options.disableIDB && typeof indexedDB !== 'undefined'
     this.indexStore = new IndexStore<T>(options.indexes ?? [])
+    this.columnTypes = options.columnTypes
+    this.namespace = options.namespace
 
     // Accept pre-opened shared IDB handle
     if (options.idbDb) {
@@ -122,6 +145,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.queue = new MutationQueue<T>({
       tableName: options.tableName,
       storage: options.mutationStorage,
+      namespace: options.namespace,
     })
 
     if (options.initialData) {
@@ -137,14 +161,35 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     try {
       // If a shared DB handle was provided, just hydrate from it
       if (!this.idbDb) {
-        this.idbDb = await openSharedIDB([this.tableName])
+        this.idbDb = await openSharedIDB([this.tableName], composeName('gsquery', this.namespace))
       }
 
+      const seqBefore = this.queue.currentSeq()
       const rows = await this.readAllFromIDB()
-      if (rows.length > 0) {
+      if (rows.length === 0) return
+
+      const wroteDuringRead = this.queue.currentSeq() > seqBefore
+      if (!wroteDuringRead && this.data.length === 0) {
         this.data = rows
         this.rebuildIndex()
+        return
       }
+
+      // Anything already in memory — initialData, or a write that landed while
+      // the read was in flight — is newer than this snapshot, so hydrate
+      // underneath it rather than over it (#106). Note replaceAll() bypasses
+      // the queue, so a pull landing mid-init() would not trip wroteDuringRead;
+      // unreachable today since registerTable runs after init().
+      const merged = new Map<string | number, T>(rows.map(r => [r.id, r]))
+      for (const row of this.data) merged.set(row.id, row)
+      if (wroteDuringRead) {
+        for (const m of this.queue.getMerged()) {
+          if (m.type === 'delete') merged.delete(m.id)
+        }
+      }
+      this.data = [...merged.values()]
+      this.rebuildIndex()
+      this.schedulePersist()
     } catch {
       // IndexedDB unavailable - continue in-memory only
       this.idbEnabled = false
@@ -226,13 +271,50 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     return this.data[index]
   }
 
+  /** Read the id of a client-mode row, throwing when the caller omitted it. */
+  private requireClientId(data: Omit<T, 'id'> | T): string | number {
+    if (!('id' in data)) {
+      throw new Error(`ID is required in client mode (idMode: 'client')`)
+    }
+    return (data as T).id
+  }
+
+  /** Every id currently held, keyed as strings so 1 and '1' collide. */
+  private readExistingIdKeys(): Set<string> {
+    const keys = new Set<string>()
+    for (const row of this.data) {
+      keys.add(String(row.id))
+    }
+    return keys
+  }
+
+  /**
+   * Reject client-supplied ids that already exist locally, or that repeat
+   * within the same batch — the same contract SheetsAdapter enforces on the
+   * server (#128/#154). Called before any mutation, so a rejected write leaves
+   * the rows, the MutationQueue and IndexedDB untouched: the duplicate fails
+   * at the call site instead of being pushed and dead-lettered (#132).
+   *
+   * Rows arriving through replaceAll()/reset() are seeded verbatim and are not
+   * checked, mirroring rows that were already on the sheet.
+   */
+  private assertClientIdsAvailable(ids: (string | number)[]): void {
+    const existing = this.readExistingIdKeys()
+    for (const id of ids) {
+      const key = String(id)
+      if (existing.has(key)) {
+        throw new DuplicateIdError(id, this.tableName)
+      }
+      existing.add(key)
+    }
+  }
+
   insert(data: Omit<T, 'id'> | T): T {
     let newRow: T
 
     if (this.idMode === 'client') {
-      if (!('id' in data)) {
-        throw new Error(`ID is required in client mode (idMode: 'client')`)
-      }
+      const id = this.requireClientId(data)
+      this.assertClientIdsAvailable([id])
       newRow = data as T
     } else {
       const id = this.nextId++
@@ -251,17 +333,19 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     return newRow
   }
 
-  update(id: string | number, data: Partial<T>): T | undefined {
+  update(id: string | number, data: UpdateData<T>): T | undefined {
     const index = this.idIndex.get(id)
     if (index === undefined) return undefined
 
     const oldRow = this.data[index]
-    const newRow = { ...oldRow, ...data }
+    // id is immutable via update; preserve it so the idIndex stays consistent
+    // and behavior matches the other adapters (#98).
+    const newRow = { ...oldRow, ...data, id: oldRow.id }
     this.data[index] = newRow
     this.indexStore.updateIndex(index, oldRow, newRow)
 
     // Record mutation and persist
-    this.queue.push('update', id, data)
+    this.queue.push('update', id, data as Partial<T>)
     this.schedulePersist()
 
     return newRow
@@ -290,33 +374,36 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
-    const results: T[] = []
-    const startIndex = this.data.length
+    // Resolve and validate every row up front: a rejected batch must leave the
+    // rows, the queue and IndexedDB untouched, matching SheetsAdapter (#154).
+    const newRows: T[] = []
 
-    for (let i = 0; i < items.length; i++) {
-      let newRow: T
-
-      if (this.idMode === 'client') {
-        if (!('id' in items[i])) {
-          throw new Error(`ID is required in client mode (idMode: 'client')`)
-        }
-        newRow = items[i] as T
-      } else {
-        const id = this.nextId++
-        newRow = { ...items[i], id } as T
+    if (this.idMode === 'client') {
+      const ids: (string | number)[] = []
+      for (const item of items) {
+        ids.push(this.requireClientId(item))
+        newRows.push(item as T)
       }
+      this.assertClientIdsAvailable(ids)
+    } else {
+      for (const item of items) {
+        newRows.push({ ...item, id: this.nextId++ } as T)
+      }
+    }
 
+    const startIndex = this.data.length
+    for (let i = 0; i < newRows.length; i++) {
+      const newRow = newRows[i]
       const rowIndex = startIndex + i
       this.data.push(newRow)
       this.idIndex.set(newRow.id, rowIndex)
       this.indexStore.addToIndex(rowIndex, newRow)
 
       this.queue.push('insert', newRow.id, undefined, newRow)
-      results.push(newRow)
     }
 
     this.schedulePersist()
-    return results
+    return newRows
   }
 
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
@@ -327,11 +414,11 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       if (index === undefined) continue
 
       const oldRow = this.data[index]
-      const newRow = { ...oldRow, ...data }
+      const newRow = { ...oldRow, ...data, id: oldRow.id } // id immutable (#98)
       this.data[index] = newRow
       this.indexStore.updateIndex(index, oldRow, newRow)
 
-      this.queue.push('update', id, data)
+      this.queue.push('update', id, data as Partial<T>)
       results.push(newRow)
     }
 
@@ -341,9 +428,20 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   // ── Additional methods for SyncEngine ──────────────────────────────
 
-  /** Replace all data (called by SyncEngine after pull) */
+  /**
+   * Replace all data (called by SyncEngine after pull).
+   *
+   * Rows coming off the wire carry transport representations (a datetime is an
+   * ISO string, a string[] is JSON text), so they are run through the same
+   * schema-driven conversion the server path applies — otherwise the local
+   * values contradict the generated model types (#135). The conversion is
+   * idempotent, so already-typed rows (locally created, or replayed from a
+   * conflict resolution) pass through untouched.
+   */
   replaceAll(rows: T[]): void {
-    this.data = [...rows]
+    this.data = this.columnTypes
+      ? rows.map(row => deserializeRow(row, this.columnTypes))
+      : [...rows]
     this.rebuildIndex()
     this.schedulePersist()
   }
@@ -435,14 +533,29 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   // ── IndexedDB persistence ──────────────────────────────────────────
 
+  /**
+   * Await the pending and in-flight persist, if any. Rejects if the last
+   * persist failed — the fire-and-forget path swallows that error, so this is
+   * the only way a caller can see it. Teardown must await this before closing
+   * the IDB connection, or a queued write is destroyed (#105).
+   */
+  flush(): Promise<void> {
+    return this.persistChain
+  }
+
   private schedulePersist(): void {
     if (!this.idbEnabled || this.persistScheduled) return
     this.persistScheduled = true
-    queueMicrotask(() => {
+    // Assigned synchronously (the chained .then() *is* the debounce microtask)
+    // so close() can see a persist that has been scheduled but not yet started.
+    const next = this.persistChain.catch(() => {}).then(() => {
       this.persistScheduled = false
-      this.persistToIDB().catch(() => {
-        // Silently fail - data is still in memory
-      })
+      return this.persistToIDB()
+    })
+    this.persistChain = next
+    next.catch(() => {
+      // Silently fail - data is still in memory. Callers wanting the error
+      // await flush().
     })
   }
 

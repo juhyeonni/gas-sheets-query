@@ -96,7 +96,7 @@ const store = new SheetsAdapter<User>({
   sheetName: 'Users',               // required — name of the sheet tab
   columns: ['id', 'name', 'email', 'age', 'active'],  // required — column order
   createIfNotExists: true,          // default: true — creates sheet if missing
-  idColumn: 'id',                   // default: 'id'
+  // idColumn is deprecated — 1.0 fixes the primary key at 'id' (#101)
   idMode: 'auto',                   // default: 'auto'
   columnTypes: {                    // optional — type-aware serialization
     age: 'number',
@@ -115,9 +115,11 @@ interface SheetsAdapterOptions {
   sheetName: string
   columns: string[]
   createIfNotExists?: boolean
-  idColumn?: string
+  idColumn?: string                 // deprecated — 1.0 fixes it at 'id'
   idMode?: IdMode
   columnTypes?: Record<string, ColumnType>
+  allowFormulas?: boolean           // default: false — see Formula safety
+  skipHeaderCheck?: boolean         // default: false — see Header drift
 }
 
 type ColumnType =
@@ -137,6 +139,14 @@ type ColumnType =
 - **LockService**: Concurrent-safe auto-increment ID generation
 - **Column types**: Automatic serialization/deserialization (JSON for arrays/objects, booleans, dates)
 - **Auto-detect JSON**: Parses JSON strings in cells automatically
+- **Formula safety**: Strings starting with `=`, `+`, `-`, `@`, tab or CR are written as literal
+  text (Sheets would otherwise run them as formulas) and read back unchanged. Opt out per
+  adapter with `allowFormulas: true` — script-authored formulas only, never user input.
+- **Header drift**: the mapping is positional, so every read and write checks once per execution
+  that row 1 still matches `columns` and throws `SchemaMismatchError` (`SCHEMA_MISMATCH`) naming
+  the first diverging column — a human-inserted column no longer corrupts data silently. A header
+  that is a prefix of `columns`, extra columns to the right of the schema, and a header-less sheet
+  all pass. Opt out with `skipHeaderCheck: true` (decorative header rows only).
 
 ### Sheets-Specific Methods
 
@@ -207,7 +217,7 @@ const store = new MockAdapter<User>()
 
 // WRONG: columns array doesn't include 'id'
 new SheetsAdapter({ sheetName: 'T', columns: ['name', 'email'] })
-// RIGHT: first column should be 'id' (or set idColumn)
+// RIGHT: first column must be 'id' — 1.0 fixes the primary key name
 new SheetsAdapter({ sheetName: 'T', columns: ['id', 'name', 'email'] })
 
 // WRONG: index fields not matching actual field names

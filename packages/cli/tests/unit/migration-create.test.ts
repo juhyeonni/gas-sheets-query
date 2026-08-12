@@ -146,6 +146,14 @@ describe('migration:create command', () => {
     expect(result.error).toContain("'*/'")
   })
 
+  it('should reject name with path separators / traversal (#100)', () => {
+    for (const evil of ['../../../evil', 'a/b', 'a\\b', 'evil.ts', '..']) {
+      const result = runMigrationCreate(evil, {})
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/'\/'|control|empty/)
+    }
+  })
+
   it('should reject name exceeding 128 characters', () => {
     const longName = 'a'.repeat(129)
     const result = runMigrationCreate(longName, {})

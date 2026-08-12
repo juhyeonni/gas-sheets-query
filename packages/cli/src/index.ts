@@ -3,8 +3,20 @@
  */
 
 // Generate command
-export { generateCommand, runGenerate, generateIndex } from './commands/generate.js'
-export type { GenerateOptions, GenerateResult } from './commands/generate.js'
+export {
+  generateCommand,
+  runGenerate,
+  generateIndex,
+  resolveGenerateOptions,
+  DEFAULT_SCHEMA_FILE,
+  DEFAULT_OUTPUT_DIR,
+  DEFAULT_CLIENT_SUBDIR,
+} from './commands/generate.js'
+export type {
+  GenerateOptions,
+  GenerateCliOptions,
+  GenerateResult,
+} from './commands/generate.js'
 
 // Init command
 export { initCommand, runInit, loadConfig } from './commands/init.js'

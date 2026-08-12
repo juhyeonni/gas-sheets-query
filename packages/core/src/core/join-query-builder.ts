@@ -2,8 +2,8 @@
  * JoinQueryBuilder - Query builder with JOIN support
  * Simulates relational joins using batch fetching to prevent N+1 queries
  */
-import type { DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types'
-import { NoResultsError } from './errors'
+import type { DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition, RowWithId } from './types.js'
+import { NoResultsError } from './errors.js'
 
 /**
  * Join configuration
@@ -322,8 +322,14 @@ export class JoinQueryBuilder<T extends RowWithId> {
    * Execute and return the first result or undefined
    */
   first(): (T & Record<string, unknown>) | undefined {
-    const results = this.limit(1).exec()
-    return results[0]
+    // Apply limit 1 without permanently mutating this builder, so it stays reusable.
+    const savedLimit = this.limitValue
+    this.limitValue = 1
+    try {
+      return this.exec()[0]
+    } finally {
+      this.limitValue = savedLimit
+    }
   }
 
   /**

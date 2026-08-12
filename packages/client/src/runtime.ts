@@ -9,7 +9,9 @@ import type {
   RowWithId,
   DataStore,
   SheetsDBConfig,
-  IdMode
+  IdMode,
+  RuntimeSchema,
+  RuntimeTableSchema
 } from '@gsquery/core'
 import { 
   createSheetsDB, 
@@ -41,13 +43,12 @@ export interface ClientOptions {
 
 /**
  * Generated schema interface (provided by generate command)
+ *
+ * Alias of the shared {@link RuntimeSchema}: the exact shape `createClientDB`
+ * consumes, so a generated schema drives both the server and the local-first
+ * path with the same `columnTypes` and `indexes` (#135).
  */
-export interface GeneratedSchema {
-  tables: Record<string, {
-    columns: readonly string[]
-    sheetName?: string
-  }>
-}
+export type GeneratedSchema = RuntimeSchema
 
 /**
  * Client factory result type
@@ -82,14 +83,14 @@ export function isNodeEnvironment(): boolean {
  */
 export function createStore<T extends RowWithId>(
   tableName: string,
-  tableSchema: { columns: readonly string[]; sheetName?: string },
+  tableSchema: RuntimeTableSchema,
   options: ClientOptions
 ): DataStore<T> {
   const idMode = options.idMode || 'auto'
 
   // Mock mode always uses MockAdapter
   if (options.mock) {
-    return new MockAdapter<T>({ idMode })
+    return new MockAdapter<T>({ idMode, indexes: tableSchema.indexes })
   }
 
   // If spreadsheetId is provided, use SheetsAdapter
@@ -112,12 +113,18 @@ export function createStore<T extends RowWithId>(
       spreadsheetId: options.spreadsheetId,
       sheetName,
       columns: [...tableSchema.columns],
+      columnTypes: tableSchema.columnTypes,
       idMode
     }) as DataStore<T>
   }
 
-  // Fallback to MockAdapter for Node.js (dev/test)
-  return new MockAdapter<T>({ idMode })
+  // No spreadsheetId, not in GAS, and mock not requested. Refuse to silently
+  // use an in-memory MockAdapter — production writes would vanish. Require an
+  // explicit opt-in (#84).
+  throw new Error(
+    `Cannot create a store for table '${tableName}': no spreadsheetId provided and not running in Google Apps Script. ` +
+    `Pass a spreadsheetId, or set mock: true to use the in-memory adapter for development/testing.`
+  )
 }
 
 // =============================================================================
@@ -133,7 +140,7 @@ export function createStore<T extends RowWithId>(
  * ```ts
  * // In generated client.ts:
  * import { createClientFactory } from '@gsquery/client'
- * import { schema, Tables } from './types'
+ * import { schema, Tables } from './types.js'
  * 
  * export const createClient = createClientFactory<Tables>(schema)
  * 
@@ -229,4 +236,8 @@ export type {
   DataStore,
   SheetsDB,
   TableHandle,
+  RuntimeSchema,
+  RuntimeTableSchema,
 }
+
+export type { ColumnType, IndexDefinition } from '@gsquery/core'

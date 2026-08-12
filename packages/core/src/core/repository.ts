@@ -1,8 +1,8 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem } from './types'
-import { RowNotFoundError } from './errors'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, UpdateData } from './types.js'
+import { RowNotFoundError } from './errors.js'
 
 /**
  * Repository provides a clean CRUD interface over any DataStore implementation
@@ -57,7 +57,7 @@ export class Repository<T extends RowWithId> {
    * Update a row by ID
    * @throws RowNotFoundError if not found
    */
-  update(id: string | number, data: Partial<T>): T {
+  update(id: string | number, data: UpdateData<T>): T {
     const updated = this.store.update(id, data)
     if (!updated) {
       throw new RowNotFoundError(id, this.tableName)
@@ -68,7 +68,7 @@ export class Repository<T extends RowWithId> {
   /**
    * Update a row by ID, returns undefined if not found
    */
-  updateOrNull(id: string | number, data: Partial<T>): T | undefined {
+  updateOrNull(id: string | number, data: UpdateData<T>): T | undefined {
     return this.store.update(id, data)
   }
 
@@ -119,10 +119,14 @@ export class Repository<T extends RowWithId> {
   /**
    * Batch update multiple rows at once
    * Skips rows that don't exist (no error thrown)
+   *
+   * `data` excludes `id` (via {@link UpdateData}) for the same reason
+   * `update()` does — the primary key is immutable (#98/#113). A widened
+   * `Partial<T>` here let an id through the ordinary public API with no cast.
    */
-  batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[] {
+  batchUpdate(items: BatchUpdateItem<T>[]): T[] {
     if (this.store.batchUpdate) {
-      return this.store.batchUpdate(items as BatchUpdateItem<T>[])
+      return this.store.batchUpdate(items)
     }
     // Fallback: update one by one
     const results: T[] = []

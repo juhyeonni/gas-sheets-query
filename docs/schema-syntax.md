@@ -91,9 +91,15 @@ Designates the field as primary key. Only one per table.
 id: number @id
 ```
 
+> **Contract (1.0):** the `@id` field **must be named `id`**. Schema validation rejects any other name (e.g. `userId: number @id`) with a clear error. Custom primary-key column names are planned for a future release. This keeps the generated types, both adapters, and the runtime consistent.
+>
+> The `idColumn` option on `SheetsAdapterOptions` / `TableSchema` predates this contract and is **deprecated**. Only `SheetsAdapter` honors it; `MockAdapter` and `LocalAdapter` have no such option, `defineSheetsDB` stores it without reading it, and `InferRowFromSchema` always types rows as `& { id }` — so a custom name produces rows whose declared type does not match their runtime shape. Leave it unset.
+
 ### @default(value)
 
-Sets the default value.
+Declares the field's default value.
+
+> ⚠️ **Not applied at runtime.** `@default` is parsed and carried through codegen as documentation of intent, but no adapter fills the value in: generated `create()` types still require the field, and your application code must supply it (the one exception is the primary key in auto `idMode`, which the adapter allocates regardless of this attribute). Runtime application is planned for a later release.
 
 | Value | Description |
 |-------|-------------|
@@ -122,11 +128,55 @@ email: string @unique
 
 ### @updatedAt
 
-Automatically updates to current time when record is modified.
+Declares that the field holds the record's last-modified time.
+
+> ⚠️ **Not applied at runtime.** Nothing auto-fills this on update today — set it from your application code (`update(id, { ..., updatedAt: new Date() })`). Runtime application is planned for a later release.
 
 ```yaml
 updatedAt: datetime @updatedAt
 ```
+
+### @relation(Table)
+
+Marks a field as a foreign key referencing another table's `id`. The generator
+emits a type alias per referenced table and uses it as the field's type.
+
+```yaml
+tables:
+  User:
+    fields:
+      id: number @id @default(autoincrement)
+
+  Task:
+    fields:
+      id: number @id @default(autoincrement)
+      assigneeId: number? @relation(User)
+      watcherIds: number[]? @relation(User)
+```
+
+```typescript
+export type UserId = User['id']
+
+export interface Task {
+  id: number
+  assigneeId?: UserId
+  watcherIds?: UserId[]
+}
+```
+
+**The field's type must match the referenced table's `id` type.** `User.id` is
+`number` above, so the foreign keys are `number` / `number[]`; declaring
+`assigneeId: string @relation(User)` is rejected by schema validation, because
+the emitted `UserId` would resolve to `number` and contradict the declaration.
+
+> **Scope:** `@relation` is a **typing and documentation** aid. It does not add
+> runtime behaviour — no automatic JOIN, no foreign-key integrity check on
+> write, no cascade delete. Use `joinQuery()` to join explicitly.
+>
+> `UserId` is a plain type alias, not a branded type, so it is structurally
+> identical to `number` — nothing prevents assigning a raw `number` or a
+> `ProjectId` to a `UserId`. This is a deliberate 1.0 choice: branded types
+> would enforce the distinction but require a cast at every assignment site.
 
 ## Block Attributes
 

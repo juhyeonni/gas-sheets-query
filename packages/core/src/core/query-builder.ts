@@ -1,8 +1,8 @@
 /**
  * Query Builder - fluent API for building queries
  */
-import type { RowWithId, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types'
-import { NoResultsError } from './errors'
+import type { RowWithId, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types.js'
+import { NoResultsError } from './errors.js'
 
 /**
  * Aggregation specification
@@ -165,7 +165,8 @@ export class QueryBuilder<T extends RowWithId> {
    * Execute and return the first result or undefined
    */
   first(): T | undefined {
-    const results = this.limit(1).exec()
+    // Build with limit 1 without mutating this builder, so it stays reusable.
+    const results = this.store.find({ ...this.build(), limitValue: 1 })
     return results[0]
   }
 

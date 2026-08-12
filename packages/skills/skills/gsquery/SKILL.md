@@ -1,6 +1,6 @@
 ---
 skill: gsquery
-version: 0.9.0
+version: 1.0.0-rc3 # x-release-please-version
 triggers:
   - "Google Sheets database"
   - "gas-sheets-query"
@@ -12,18 +12,23 @@ references:
   - references/joins-and-aggregation.md
   - references/adapters-and-config.md
   - references/migration-and-cli.md
-  - references/errors-and-viz.md
+  - references/errors.md
 ---
 
 # gsquery — Google Sheets as a Database
 
 TypeScript library for using Google Sheets as a typed database in Google Apps Script projects.
 
+> **Hand-maintained context, synced to v1.0.0-rc3.** <!-- x-release-please-version -->
+> These files are written by hand, not generated from source, so they can lag behind the released
+> packages. If a symbol documented here is missing at runtime, trust the installed package's type
+> definitions over this file.
+
 ## Packages
 
 | Package | Purpose |
 |---------|---------|
-| `@gsquery/core` | Repository, QueryBuilder, Adapters, Migrations, Viz API |
+| `@gsquery/core` | Repository, QueryBuilder, Adapters, Migrations |
 | `@gsquery/client` | Typed client factory with environment auto-detection |
 | `@gsquery/cli` | Schema parsing, type generation, migration CLI |
 
@@ -138,4 +143,4 @@ users.query().page(1, 10).exec()
 - **Joins & Aggregation**: `references/joins-and-aggregation.md` — JoinQueryBuilder, groupBy, agg
 - **Adapters & Config**: `references/adapters-and-config.md` — DataStore, MockAdapter, SheetsAdapter, Indexes
 - **Migration & CLI**: `references/migration-and-cli.md` — MigrationRunner, SchemaBuilder, CLI commands
-- **Errors & Viz**: `references/errors-and-viz.md` — Error hierarchy, Visualization API
+- **Errors**: `references/errors.md` — Error hierarchy, codes, null-safe alternatives

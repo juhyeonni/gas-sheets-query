@@ -24,7 +24,10 @@ function generateLibraryImport(hasTables: boolean): string {
   if (!hasTables) {
     return "import { createSheetsDB, MockAdapter } from '@gsquery/core'"
   }
-  return "import { createSheetsDB, MockAdapter, DataStore } from '@gsquery/core'"
+  // `type` modifier: DataStore is a type-only export, and consumers with
+  // verbatimModuleSyntax (including this repo's own tsconfig, #134) reject a
+  // value import of it with TS1484 (#193).
+  return "import { createSheetsDB, MockAdapter, type DataStore } from '@gsquery/core'"
 }
 
 /**

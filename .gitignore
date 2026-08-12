@@ -8,3 +8,9 @@ coverage/
 .env.local
 *.tsbuildinfo
 generated/
+
+# specsmd local tooling
+.specsmd/
+memory-bank/
+.claude/agents/
+.claude/commands/
