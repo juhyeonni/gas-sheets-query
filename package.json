@@ -1,6 +1,6 @@
 {
   "name": "gas-sheets-query-monorepo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Monorepo for gas-sheets-query",
   "scripts": {

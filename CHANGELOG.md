@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.1](https://github.com/juhyeonni/gas-sheets-query/compare/v1.0.0...v1.0.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **ci:** let configure-pages enable the Pages site on first deploy ([#215](https://github.com/juhyeonni/gas-sheets-query/issues/215)) ([ca54b14](https://github.com/juhyeonni/gas-sheets-query/commit/ca54b146b3401fab786cb8281701a100bb993786))
+* **release:** drop package-name so the merged release PR matches ([6417b82](https://github.com/juhyeonni/gas-sheets-query/commit/6417b8219b197cec11a969e0c98ec9f2bc8e9fe1))
+* **release:** drop package-name so the merged release PR matches ([3642265](https://github.com/juhyeonni/gas-sheets-query/commit/364226583439d1c311af4aa82a5537b81c16f07c))
+* **release:** empty package-name so the standalone release PR component matches ([ac0fb79](https://github.com/juhyeonni/gas-sheets-query/commit/ac0fb79e10659bd1942eb513df14f573cc15ee76))
+* **release:** empty package-name so the standalone release PR component matches ([ba85c5b](https://github.com/juhyeonni/gas-sheets-query/commit/ba85c5b8f3b4bfcb6ac46569ced40ba60a91008c))
+
+
+### Documentation
+
+* dedupe 1.0.0 changelog entries ([#213](https://github.com/juhyeonni/gas-sheets-query/issues/213)) ([b62f1be](https://github.com/juhyeonni/gas-sheets-query/commit/b62f1be507f695eb3f350e05bfc95a6ae88a1917))
+
 ## [1.0.0](https://github.com/juhyeonni/gas-sheets-query/compare/v1.0.0-rc3...v1.0.0) (2026-08-12)
 
 
