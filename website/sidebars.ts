@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
         'typed-client',
         'local-first-client',
         'indexing-and-performance',
+        'operations',
         'ai-assistant-skills',
       ],
     },

@@ -40,7 +40,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   /** Column indexes for query optimization */
   private indexStore: IndexStore<T>
   /** ID generation mode */
-  private idMode: IdMode
+  readonly idMode: IdMode
 
   constructor(initialData?: T[] | MockAdapterOptions<T>) {
     // Support both array and options object for backward compatibility

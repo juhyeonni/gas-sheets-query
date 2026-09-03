@@ -36,6 +36,7 @@ users.create({ name: 'Alice', email: 'a@test.com', age: 30, active: true }) // o
 users.findAll()                    // T[]
 users.findById(1)                  // T — throws RowNotFoundError
 users.update(1, { age: 31 })      // T — throws RowNotFoundError
+users.upsert({ id: 1, age: 31 })   // T — update by id, else insert
 users.delete(1)                    // void — throws RowNotFoundError
 users.batchInsert([{...}, {...}])  // T[]
 users.batchUpdate([{ id: 1, data: { active: false } }])

@@ -178,7 +178,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private columns: string[]
   private idColumn: string
   private createIfNotExists: boolean
-  private idMode: IdMode
+  readonly idMode: IdMode
   private columnTypes: Record<string, ColumnType>
   private allowFormulas: boolean
   private skipHeaderCheck: boolean

@@ -35,6 +35,11 @@ users.findById(1)      // T — throws RowNotFoundError if missing
 // Update
 users.update(1, { age: 31 })  // throws RowNotFoundError if missing
 
+// Upsert — patch the row with this id, or insert it.
+// idMode 'client' honors the id; idMode 'auto' throws ValidationError when no
+// row carries it (omit the id to create there).
+users.upsert({ id: 1, age: 31 })
+
 // Delete
 users.delete(1)                // throws RowNotFoundError if missing
 
