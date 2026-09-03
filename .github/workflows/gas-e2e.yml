@@ -119,14 +119,29 @@ jobs:
         run: |
           set -euo pipefail
           AUTH="Authorization: Bearer $ACCESS_TOKEN"
-          curl -sSL -H "$AUTH" "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
-          curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=left&seed=11&token=${TOKEN}" > mixed-left.json &
-          curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=right&seed=29&token=${TOKEN}" > mixed-right.json &
-          wait
-          node e2e/gas/assert-burst-response.mjs mixed-left.json mixed-right.json
-          CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=mixedCheck&tags=left,right&token=${TOKEN}")
-          echo "$CHECK" | python3 -m json.tool
-          echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+          # Retried as a whole, not per request: a mixedBurst call whose response
+          # is lost may still have applied its work (observed twice — see #140),
+          # so re-firing just that request would double-apply it. `cleanup`
+          # deletes every e2e_* sheet, so each attempt starts from nothing and
+          # the invariant check only ever sees one attempt's writes.
+          #
+          # Only a transport failure is retried. A mixedCheck that reports
+          # ok:false is an invariant violation and fails immediately.
+          for attempt in 1 2 3; do
+            curl -sSL -H "$AUTH" "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
+            curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=left&seed=11&token=${TOKEN}" > mixed-left.json &
+            curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=right&seed=29&token=${TOKEN}" > mixed-right.json &
+            wait
+            if node e2e/gas/assert-burst-response.mjs mixed-left.json mixed-right.json; then
+              CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=mixedCheck&tags=left,right&token=${TOKEN}")
+              echo "$CHECK" | python3 -m json.tool
+              echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+              exit 0
+            fi
+            echo "::warning title=Mixed burst transport flake::attempt ${attempt}/3 lost a burst response (/exec served HTML with HTTP 200) — retrying from a clean slate. See #140."
+          done
+          echo "::error title=Mixed burst unreachable::three attempts in a row lost a burst response; the web app never answered with JSON."
+          exit 1
 
       - name: Cleanup test sheets
         if: always()
