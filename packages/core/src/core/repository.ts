@@ -1,8 +1,9 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, UpdateData } from './types.js'
-import { RowNotFoundError } from './errors.js'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, UpdateData, UpsertData } from './types.js'
+import { RowNotFoundError, ValidationError } from './errors.js'
+import { withScriptLock } from './script-lock.js'
 
 /**
  * Repository provides a clean CRUD interface over any DataStore implementation
@@ -70,6 +71,48 @@ export class Repository<T extends RowWithId> {
    */
   updateOrNull(id: string | number, data: UpdateData<T>): T | undefined {
     return this.store.update(id, data)
+  }
+
+  /**
+   * Insert a row, or patch the row that already carries the same id (#217).
+   *
+   * The branch is decided by the *result of the update*, not by a preceding
+   * read: attempting the update first is one Sheets round trip cheaper on the
+   * common (row exists) path, and leaves no window between deciding and
+   * writing.
+   *
+   * The whole sequence is held under one script lock so two concurrent
+   * executions cannot both miss and both insert. `withScriptLock` is
+   * re-entrant, so the store's own locking nests inside this one, and it is a
+   * plain call outside GAS. The flip side is a longer critical section than a
+   * single write: two store round trips on the create path.
+   *
+   * @throws ValidationError when an id is supplied, no row carries it, and the
+   * store allocates its own ids (`auto` idMode) — inserting there would write
+   * the row under a different id than the caller asked for, leaving every
+   * reference to the requested id dangling with no error. Omit the id to
+   * create a row in an `auto` store.
+   */
+  upsert(data: UpsertData<T>): T {
+    return withScriptLock(() => {
+      const id = (data as Partial<T>).id
+      if (id !== undefined) {
+        const patch = { ...(data as T) } as Record<string, unknown>
+        delete patch.id
+        const updated = this.store.update(id, patch as UpdateData<T>)
+        if (updated) return updated
+
+        if (this.store.idMode === 'auto') {
+          throw new ValidationError(
+            `upsert: no row with id ${String(id)}${this.tableName ? ` in "${this.tableName}"` : ''}, ` +
+            'and this store allocates ids ("auto" idMode), so it cannot create one under that id. ' +
+            'Omit the id to create a row, or use idMode "client".',
+            'id'
+          )
+        }
+      }
+      return this.store.insert(data as T | Omit<T, 'id'>)
+    })
   }
 
   /**

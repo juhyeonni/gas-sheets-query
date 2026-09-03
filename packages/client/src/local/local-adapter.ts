@@ -117,7 +117,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private nextId = 1
   private idIndex: Map<string | number, number> = new Map()
   private indexStore: IndexStore<T>
-  private idMode: IdMode
+  readonly idMode: IdMode
   private readonly columnTypes: Record<string, ColumnType> | undefined
 
   readonly tableName: string
