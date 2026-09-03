@@ -16,6 +16,10 @@ import {
   MigrationVersionError,
   MigrationExecutionError,
   NoMigrationsToRollbackError,
+  LockTimeoutError,
+  QuotaExceededError,
+  SheetsApiError,
+  CellSizeLimitError,
 } from '@gsquery/core'
 ```
 
@@ -33,6 +37,14 @@ import {
 | `MigrationVersionError` | `MIGRATION_VERSION_ERROR` | Duplicate/invalid version | `version` |
 | `MigrationExecutionError` | `MIGRATION_EXECUTION_ERROR` | Migration up/down fails | `version`, `migrationName`, `cause` |
 | `NoMigrationsToRollbackError` | `NO_MIGRATIONS_TO_ROLLBACK` | `rollback()` when empty | — |
+| `LockTimeoutError` | `LOCK_TIMEOUT` | Script lock held by another execution (10s budget) | `timeoutMs?`, `cause?` |
+| `QuotaExceededError` | `QUOTA_EXCEEDED` | GAS rate limit / daily quota / 6-min ceiling | `originalMessage`, `transient`, `cause?` |
+| `SheetsApiError` | `SHEETS_API_ERROR` | Sheets backend timeout or internal error | `originalMessage`, `transient`, `cause?` |
+| `CellSizeLimitError` | `CELL_SIZE_LIMIT` | Value over the 50,000-char cell limit | `column`, `length`, `limit`, `tableName`, `id?` |
+
+Transient failures (`SheetsApiError`, transient `QuotaExceededError`) are
+retried automatically — 3 attempts, 500ms doubling. `LockTimeoutError` is not:
+nothing was written, so retry it later rather than immediately.
 
 ### Error Handling Patterns
 

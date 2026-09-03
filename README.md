@@ -112,6 +112,9 @@ Google Sheets is not a database engine — know what you're trading:
 - **Columns are mapped by position** — if somebody inserts or reorders a column in the sheet, the layout no longer matches the schema. Every read and write checks the header row once per execution and throws `SchemaMismatchError` instead of silently reading and writing the wrong columns; opt out per adapter with `skipHeaderCheck: true`.
 - **A hidden `_gsquery_meta` sheet holds id counters** — auto `idMode` persists a per-table monotonic counter there so a deleted row's id is not reused (expect gaps after deletions, like any SQL auto-increment). If someone deletes the sheet, the next insert recreates it and re-bootstraps from the current max id — but rows deleted while the counter was missing can have their ids re-issued in that window, so treat the sheet as part of your data.
 
+Quotas, retry policy, script locking, and the cell/cache limits behind these
+trade-offs are documented in [Operations](https://juhyeonni.github.io/gas-sheets-query/operations).
+
 ## 🤖 AI Coding Assistants
 
 Install [`@gsquery/skills`](./packages/skills) so AI tools (Claude Code, Cursor, Copilot, etc.) write correct gsquery code:
