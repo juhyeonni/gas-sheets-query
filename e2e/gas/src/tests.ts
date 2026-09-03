@@ -10,7 +10,7 @@
  * spreadsheet and the harness deletes all `e2e_<runId>_*` sheets afterwards
  * (when the runtime supports sheet deletion — the Node fakes do not).
  */
-import { SheetsAdapter } from '@gsquery/core'
+import { Repository, SheetsAdapter } from '@gsquery/core'
 import type { ColumnType } from '@gsquery/core'
 import { assertEq, assertOk, assertThrows, test } from './runner'
 
@@ -162,6 +162,43 @@ export function registerTests(ctx: HarnessContext): void {
     adapter.insert({ id: 'u-1', name: 'first' })
     assertThrows(() => adapter.insert({ id: 'u-1', name: 'second' }), 'DUPLICATE_ID', 'second insert of u-1')
     assertEq(adapter.findAll().length, 1, 'no duplicate row was written')
+  })
+
+  // ── 4b. upsert on the live platform (#217) ────────────────────────────────
+  test('upsert: creates then patches under one real script lock, and refuses an unknown auto id', () => {
+    const clientAdapter = makeAdapter('upsert_client', ['id', 'name', 'note'], { idMode: 'client' })
+    const clientRepo = new Repository<E2ERow>(clientAdapter, 'upsert_client')
+
+    const created = clientRepo.upsert({ id: 'u-1', name: 'first', note: 'n1' })
+    assertEq(created.id, 'u-1', 'client id honored on the create branch')
+    assertEq(clientAdapter.findAll().length, 1, 'exactly one row appended')
+
+    // Patch: only `note` is supplied, so `name` must survive on the sheet.
+    const patched = clientRepo.upsert({ id: 'u-1', note: 'n2' })
+    assertEq(patched.name, 'first', 'unsupplied column kept its value')
+    assertEq(patched.note, 'n2', 'supplied column was written')
+
+    clientAdapter.clearCache()
+    const rows = clientAdapter.findAll()
+    assertEq(rows.length, 1, 'the patch updated the row instead of appending a second one')
+    assertEq(rows[0].name, 'first', 'sheet agrees: name intact after the patch')
+    assertEq(rows[0].note, 'n2', 'sheet agrees: note updated')
+
+    // Auto idMode allocates ids, so it cannot honor one the caller invents.
+    const autoAdapter = makeAdapter('upsert_auto', ['id', 'name'])
+    const autoRepo = new Repository<E2ERow>(autoAdapter, 'upsert_auto')
+
+    const autoCreated = autoRepo.upsert({ name: 'alpha' })
+    assertOk(Number(autoCreated.id) > 0, `auto id allocated on create (got ${autoCreated.id})`)
+    assertEq(autoRepo.upsert({ id: autoCreated.id, name: 'alpha2' }).name, 'alpha2', 'known auto id patches')
+
+    assertThrows(
+      () => autoRepo.upsert({ id: 9999, name: 'ghost' }),
+      'VALIDATION_ERROR',
+      'upsert with an id no row carries on an auto store'
+    )
+    autoAdapter.clearCache()
+    assertEq(autoAdapter.findAll().length, 1, 'the refused upsert wrote nothing')
   })
 
   // ── 5. batchInsert ────────────────────────────────────────────────────────
