@@ -107,7 +107,7 @@ jobs:
           curl -sSL -H "$AUTH" "${URL}?action=burst&tag=left&n=25&token=${TOKEN}" > left.json &
           curl -sSL -H "$AUTH" "${URL}?action=burst&tag=right&n=25&token=${TOKEN}" > right.json &
           wait
-          cat left.json right.json
+          node e2e/gas/assert-burst-response.mjs left.json right.json
           CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=burstCheck&expect=50&token=${TOKEN}")
           echo "$CHECK" | python3 -m json.tool
           echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
@@ -123,7 +123,7 @@ jobs:
           curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=left&seed=11&token=${TOKEN}" > mixed-left.json &
           curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=right&seed=29&token=${TOKEN}" > mixed-right.json &
           wait
-          cat mixed-left.json mixed-right.json
+          node e2e/gas/assert-burst-response.mjs mixed-left.json mixed-right.json
           CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=mixedCheck&tags=left,right&token=${TOKEN}")
           echo "$CHECK" | python3 -m json.tool
           echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
