@@ -37,6 +37,7 @@ tables:
 | `gsquery init` | Initialize project (creates `gsquery.config.json`) |
 | `gsquery generate` | Generate types/client code from schema (`--watch` to regenerate on change) |
 | `gsquery generate --client` | Also generate the typed client into your project |
+| `gsquery visualize` | Render the schema as a Mermaid ER diagram (`erd.md`, or `--stdout`) |
 | `gsquery migration:create <name>` | Create a migration file |
 | `gsquery migrate` / `gsquery rollback` | **Preview** migrations/rollbacks — execution happens in the GAS runtime via `MigrationRunner` |
 

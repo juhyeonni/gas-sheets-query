@@ -32,7 +32,22 @@ export type { MigrateOptions, MigrateResult } from './commands/migrate.js'
 export { rollbackCommand, runRollback } from './commands/rollback.js'
 export type { RollbackOptions, RollbackResult } from './commands/rollback.js'
 
+// Visualize command
+export {
+  visualizeCommand,
+  runVisualize,
+  resolveVisualizeOptions,
+  DEFAULT_ERD_FILE,
+} from './commands/visualize.js'
+export type {
+  VisualizeOptions,
+  VisualizeCliOptions,
+  VisualizeResult,
+} from './commands/visualize.js'
+
 // Parser and generators
 export { parseSchema, parseSchemaFile, validateSchema } from './parser/schema-parser.js'
 export { generateTypes } from './generator/types-generator.js'
 export { generateClient } from './generator/client-generator.js'
+export { generateErd } from './generator/erd-generator.js'
+export type { ErdResult } from './generator/erd-generator.js'

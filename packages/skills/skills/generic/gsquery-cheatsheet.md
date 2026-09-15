@@ -136,6 +136,7 @@ gsquery generate schema.gsq.yaml -o src/db       # generate types
 gsquery migrate                                  # run migrations
 gsquery rollback [--all]                         # undo migrations
 gsquery migration:create add-role                # new migration file
+gsquery visualize --stdout                       # Mermaid ERD (needs @relation)
 ```
 
 ## Errors

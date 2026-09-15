@@ -125,6 +125,9 @@ gsquery rollback [--all] [--config path]
 
 # Create a new timestamped migration file
 gsquery migration:create <name>
+
+# Render the schema as a Mermaid ER diagram (edges come from @relation)
+gsquery visualize [-s schema-file] [-o erd.md] [--stdout]
 ```
 
 ### Schema File (.gsq.yaml)
