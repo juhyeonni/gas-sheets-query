@@ -9,6 +9,7 @@ import type {
   InferRowFromSchema,
   InferTablesFromConfig,
   UpdateData,
+  UpsertData,
   BatchUpdateItem
 } from './types.js'
 import { Repository } from './repository.js'
@@ -42,6 +43,9 @@ export interface TableHandle<T extends RowWithId> {
 
   /** Shorthand: update by id */
   update(id: string | number, data: UpdateData<T>): T
+
+  /** Shorthand: insert, or patch the row that already carries this id */
+  upsert(data: UpsertData<T>): T
 
   /** Shorthand: delete by id */
   delete(id: string | number): void
@@ -85,6 +89,7 @@ function createTableHandle<T extends RowWithId>(
     findById: (id) => repo.findById(id),
     findAll: () => repo.findAll(),
     update: (id, data) => repo.update(id, data),
+    upsert: (data) => repo.upsert(data),
     delete: (id) => repo.delete(id),
     batchInsert: (data) => repo.batchInsert(data),
     batchUpdate: (items) => repo.batchUpdate(items)

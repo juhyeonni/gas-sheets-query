@@ -16,8 +16,16 @@ Error
       ├── InvalidOperatorError
       ├── MigrationVersionError
       ├── MigrationExecutionError
-      └── NoMigrationsToRollbackError
+      ├── NoMigrationsToRollbackError
+      ├── LockTimeoutError        (GAS platform)
+      ├── QuotaExceededError      (GAS platform)
+      ├── SheetsApiError          (GAS platform)
+      └── CellSizeLimitError      (GAS platform)
 ```
+
+The four platform errors are raised only when running on Apps Script. See
+[Operations](./operations.md) for the quota, retry, and locking behavior behind
+them.
 
 ## Error Types
 
@@ -213,6 +221,88 @@ try {
 }
 ```
 
+### LockTimeoutError
+
+The script lock could not be acquired within its 10-second wait budget: another
+execution is mid-write. **Nothing was written**, so the operation is safe to
+retry later — but not immediately, which is why the built-in retry deliberately
+skips this error.
+
+```ts
+class LockTimeoutError extends SheetsQueryError {
+  readonly timeoutMs?: number   // the wait budget that elapsed
+  readonly cause?: unknown      // the original platform exception
+}
+```
+
+### QuotaExceededError
+
+A GAS quota or rate limit was hit. `transient` separates a short-term rate limit
+(clears in seconds, retried automatically) from a daily quota or the 6-minute
+execution ceiling (cannot clear inside this execution, never retried).
+
+```ts
+class QuotaExceededError extends SheetsQueryError {
+  readonly originalMessage: string
+  readonly transient: boolean
+  readonly cause?: unknown
+}
+
+try {
+  db.from('users').batchInsert(rows)
+} catch (e) {
+  if (e instanceof QuotaExceededError) {
+    if (e.transient) scheduleRetry()   // rate limit
+    else parkUntilTomorrow()           // daily quota / execution ceiling
+  }
+}
+```
+
+### SheetsApiError
+
+A Sheets/Apps Script backend failure that is neither a quota nor a lock —
+service timeouts, internal errors, `Service unavailable`. These are
+overwhelmingly transient and are retried automatically before they reach you.
+
+```ts
+class SheetsApiError extends SheetsQueryError {
+  readonly originalMessage: string
+  readonly transient: boolean   // default true
+  readonly cause?: unknown
+}
+```
+
+### CellSizeLimitError
+
+A serialized value would not fit in one Sheets cell (50,000 characters). The
+guard runs over the whole batch **before** the first write, so the operation is
+all-or-nothing rather than aborting halfway.
+
+```ts
+class CellSizeLimitError extends SheetsQueryError {
+  readonly column: string
+  readonly length: number
+  readonly limit: number        // 50_000
+  readonly tableName: string
+  readonly id?: string | number
+}
+```
+
+## Classifying Platform Errors
+
+Raw Apps Script failures are strings. Two helpers turn them into the typed
+errors above, and are exported for use around your own Sheets calls:
+
+```ts
+import { classifyGasError, isTransientGasError } from '@gsquery/core'
+
+// undefined when the value is NOT a recognized platform failure —
+// an unrecognized error is a logical error and must not be relabelled.
+const typed = classifyGasError(error)
+
+if (isTransientGasError(error)) scheduleRetry()
+```
+
 ## Error Codes Reference
 
 | Code | Error Class | When |
@@ -221,13 +311,17 @@ try {
 | `ROW_NOT_FOUND` | `RowNotFoundError` | `findById(999)`, `update(999, ...)`, `delete(999)` |
 | `NO_RESULTS` | `NoResultsError` | `query.firstOrFail()` with no matches |
 | `MISSING_STORE` | `MissingStoreError` | Table config without matching store |
-| `VALIDATION_ERROR` | `ValidationError` | Input validation failure |
+| `VALIDATION_ERROR` | `ValidationError` | Input validation failure; also `upsert` with an id no row carries on an `auto` idMode store |
 | `INVALID_OPERATOR` | `InvalidOperatorError` | Invalid operator in where clause |
 | `UNKNOWN_COLUMN` | `UnknownColumnError` | `addColumn`, or `renameColumn`'s new name, for a column outside the store schema |
 | `SCHEMA_MISMATCH` | `SchemaMismatchError` | Sheet header contradicts the declared columns (also raised by `renameColumn`/`removeColumn` when the physical layout does not match) |
 | `MIGRATION_VERSION_ERROR` | `MigrationVersionError` | Invalid migration version |
 | `MIGRATION_EXECUTION_ERROR` | `MigrationExecutionError` | Migration up/down failure |
 | `NO_MIGRATIONS_TO_ROLLBACK` | `NoMigrationsToRollbackError` | Rollback with no applied migrations |
+| `LOCK_TIMEOUT` | `LockTimeoutError` | Script lock held by another execution for the full wait budget |
+| `QUOTA_EXCEEDED` | `QuotaExceededError` | GAS rate limit, daily quota, or the 6-minute execution ceiling |
+| `SHEETS_API_ERROR` | `SheetsApiError` | Sheets backend timeout / internal error / service unavailable |
+| `CELL_SIZE_LIMIT` | `CellSizeLimitError` | Value over the 50,000-character cell limit |
 
 ## Handling Patterns
 

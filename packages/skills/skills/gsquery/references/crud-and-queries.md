@@ -68,6 +68,11 @@ users.findById(1)        // T — throws RowNotFoundError if missing
 // Update — returns updated row
 users.update(1, { age: 31 })  // throws RowNotFoundError if missing
 
+// Upsert — update by id, insert when absent. Partial patch allowed.
+// In auto idMode an id no row carries throws ValidationError (the store
+// allocates ids and cannot honor yours) — omit the id to create there.
+users.upsert({ id: 1, age: 31 })
+
 // Delete
 users.delete(1)          // throws RowNotFoundError if missing
 
@@ -99,6 +104,7 @@ repo.findByIdOrNull(1)          // T | undefined — null-safe
 repo.create({ ... })            // T
 repo.update(1, { ... })         // T — throws RowNotFoundError
 repo.updateOrNull(1, { ... })   // T | undefined — null-safe
+repo.upsert({ id: 1, ... })     // T — update by id, else insert
 repo.delete(1)                  // void — throws RowNotFoundError
 repo.deleteIfExists(1)          // boolean — returns false if missing
 repo.count()                    // number

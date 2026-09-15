@@ -90,43 +90,19 @@ jobs:
         env:
           URL: ${{ secrets.GAS_E2E_URL }}
           TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
-        run: |
-          set -euo pipefail
-          RESULT=$(curl -sSL -H "Authorization: Bearer $ACCESS_TOKEN" "${URL}?action=run&token=${TOKEN}")
-          echo "$RESULT" | python3 -m json.tool
-          echo "$RESULT" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+        run: node e2e/gas/exec-step.mjs golden
 
       - name: Lock contention — parallel bursts
         env:
           URL: ${{ secrets.GAS_E2E_URL }}
           TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
-        run: |
-          set -euo pipefail
-          AUTH="Authorization: Bearer $ACCESS_TOKEN"
-          curl -sSL -H "$AUTH" "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
-          curl -sSL -H "$AUTH" "${URL}?action=burst&tag=left&n=25&token=${TOKEN}" > left.json &
-          curl -sSL -H "$AUTH" "${URL}?action=burst&tag=right&n=25&token=${TOKEN}" > right.json &
-          wait
-          cat left.json right.json
-          CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=burstCheck&expect=50&token=${TOKEN}")
-          echo "$CHECK" | python3 -m json.tool
-          echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+        run: node e2e/gas/exec-step.mjs burst
 
       - name: Mixed concurrent workload — parallel insert/update/delete/batch
         env:
           URL: ${{ secrets.GAS_E2E_URL }}
           TOKEN: ${{ secrets.GAS_E2E_TOKEN }}
-        run: |
-          set -euo pipefail
-          AUTH="Authorization: Bearer $ACCESS_TOKEN"
-          curl -sSL -H "$AUTH" "${URL}?action=cleanup&token=${TOKEN}" > /dev/null
-          curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=left&seed=11&token=${TOKEN}" > mixed-left.json &
-          curl -sSL -H "$AUTH" "${URL}?action=mixedBurst&tag=right&seed=29&token=${TOKEN}" > mixed-right.json &
-          wait
-          cat mixed-left.json mixed-right.json
-          CHECK=$(curl -sSL -H "$AUTH" "${URL}?action=mixedCheck&tags=left,right&token=${TOKEN}")
-          echo "$CHECK" | python3 -m json.tool
-          echo "$CHECK" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)"
+        run: node e2e/gas/exec-step.mjs mixed
 
       - name: Cleanup test sheets
         if: always()

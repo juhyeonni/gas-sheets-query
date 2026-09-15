@@ -93,6 +93,29 @@ const updated = users.repo.updateOrNull(1, { age: 31 })
 // { id: 1, name: 'Alice', age: 31, ... } or undefined
 ```
 
+## Upsert
+
+Insert a row, or patch the row that already carries the same `id` — one call,
+no existence check of your own.
+
+```ts
+users.upsert({ id: 1, age: 31 })   // row 1 exists -> patched
+users.upsert({ id: 7, name: 'Grace', age: 28 })  // no row 7 -> inserted
+```
+
+Only the keys you pass are written on the update branch, so `upsert` patches
+rather than replaces. The `id` itself is never modified.
+
+The whole find-then-write sequence runs under one script lock on GAS, so two
+concurrent executions cannot both miss and both insert.
+
+:::note auto idMode
+With `idMode: 'auto'` the store allocates ids, so the insert branch cannot
+honor an id you supply. Upserting an id that no row carries throws
+`ValidationError` rather than writing the row under a different id — omit the
+`id` to create a row there, and pass explicit ids only with `idMode: 'client'`.
+:::
+
 ## Delete
 
 ### delete (throwing)

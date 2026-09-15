@@ -16,8 +16,17 @@ import {
   MigrationVersionError, // MIGRATION_VERSION_ERROR — { version }
   MigrationExecutionError, // MIGRATION_EXECUTION_ERROR — { version, migrationName, cause }
   NoMigrationsToRollbackError, // NO_MIGRATIONS_TO_ROLLBACK
+  // GAS platform failures (raised only when running on Apps Script)
+  LockTimeoutError,      // LOCK_TIMEOUT — { timeoutMs?, cause? } — nothing was written
+  QuotaExceededError,    // QUOTA_EXCEEDED — { originalMessage, transient, cause? }
+  SheetsApiError,        // SHEETS_API_ERROR — { originalMessage, transient, cause? }
+  CellSizeLimitError,    // CELL_SIZE_LIMIT — { column, length, limit, tableName, id? }
 } from '@gsquery/core'
 ```
+
+Transient backend failures are already retried (3 attempts, 500ms doubling).
+What reaches you is what retrying cannot fix — check `transient` on a
+`QuotaExceededError` before rescheduling versus failing.
 
 ### Error Handling
 

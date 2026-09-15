@@ -62,6 +62,7 @@ interface TableHandle<T extends RowWithId> {
   findById(id: string | number): T                    // throws RowNotFoundError
   findAll(): T[]
   update(id: string | number, data: Partial<T>): T    // throws RowNotFoundError
+  upsert(data: UpsertData<T>): T                       // update by id, else insert
   delete(id: string | number): void                    // throws RowNotFoundError
   batchInsert(data: (T | Omit<T, 'id'>)[]): T[]
   batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[]
@@ -81,6 +82,7 @@ class Repository<T extends RowWithId> {
   create(data: T | Omit<T, 'id'>): T
   update(id: string | number, data: Partial<T>): T      // throws RowNotFoundError
   updateOrNull(id: string | number, data: Partial<T>): T | undefined
+  upsert(data: UpsertData<T>): T                         // update by id, else insert
   delete(id: string | number): void                      // throws RowNotFoundError
   deleteIfExists(id: string | number): boolean
   count(): number
@@ -338,6 +340,8 @@ interface WhereCondition<T> { field: keyof T & string; operator: Operator; value
 interface OrderByCondition<T> { field: keyof T & string; direction: SortDirection }
 interface QueryOptions<T> { where: WhereCondition<T>[]; orderBy: OrderByCondition<T>[]; limitValue?: number; offsetValue?: number }
 interface BatchUpdateItem<T> { id: string | number; data: Partial<T> }
+type UpdateData<T> = Partial<Omit<T, 'id'>>
+type UpsertData<T> = Omit<T, 'id'> | (UpdateData<T> & Pick<T, 'id'>)
 ```
 
 ---

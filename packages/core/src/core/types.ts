@@ -56,6 +56,13 @@ export interface QueryOptions<T = Row> {
  */
 export type UpdateData<T extends RowWithId> = Partial<Omit<T, 'id'>>
 
+/**
+ * Payload accepted by {@link DataStore} upsert callers (#217): a row without an
+ * id (create), or a patch that carries the id of the row to write. A complete
+ * row satisfies the second arm, so both `create` and `update` shapes fit.
+ */
+export type UpsertData<T extends RowWithId> = Omit<T, 'id'> | (UpdateData<T> & Pick<T, 'id'>)
+
 /** Options for the optional {@link DataStore.addColumn} schema operation */
 export interface AddColumnOptions {
   /**
@@ -77,6 +84,16 @@ export interface BatchUpdateItem<T extends RowWithId = RowWithId> {
  * Implemented by GasAdapter (real Sheets) and MockAdapter (testing)
  */
 export interface DataStore<T extends RowWithId = RowWithId> {
+  /**
+   * How ids are produced by this store, when it knows (optional).
+   *
+   * Declared so callers above the store can tell "I may supply an id" from
+   * "the store allocates ids and will overwrite mine" — an `auto` store
+   * silently rewrites the id on insert, which would let `Repository.upsert`
+   * write a row under an id nobody asked for (#217).
+   */
+  readonly idMode?: IdMode
+
   /** Get all rows from the table */
   findAll(): T[]
   

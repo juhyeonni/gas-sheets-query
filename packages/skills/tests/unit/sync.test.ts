@@ -9,6 +9,15 @@ const PKG_VERSION = JSON.parse(
 
 const CORE_BARREL = join(SKILLS_DIR, '..', '..', 'core', 'src', 'index.ts')
 
+/**
+ * Both parsers below split an import/export block on commas, so a `//` comment
+ * inside a block would glue itself onto the next symbol (and a `}` inside one
+ * would end the block early). Strip line comments first.
+ */
+function stripLineComments(src: string): string {
+  return src.replace(/\/\/.*$/gm, '')
+}
+
 function markdownFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const path = join(dir, entry)
@@ -21,7 +30,7 @@ function markdownFiles(dir: string): string[] {
 function claimedSymbols(): Map<string, string[]> {
   const claimed = new Map<string, string[]>()
   for (const file of markdownFiles(SKILLS_DIR)) {
-    const src = readFileSync(file, 'utf-8')
+    const src = stripLineComments(readFileSync(file, 'utf-8'))
     for (const block of src.matchAll(/import\s*\{([^}]+)\}\s*from\s*'@gsquery\/core'/g)) {
       for (const raw of block[1].split(',')) {
         const symbol = raw.trim().replace(/^type\s+/, '')
@@ -35,7 +44,7 @@ function claimedSymbols(): Map<string, string[]> {
 
 /** Symbols @gsquery/core actually re-exports from its barrel. */
 function exportedSymbols(): Set<string> {
-  const src = readFileSync(CORE_BARREL, 'utf-8')
+  const src = stripLineComments(readFileSync(CORE_BARREL, 'utf-8'))
   const exported = new Set<string>()
   for (const block of src.matchAll(/export\s*(?:type\s*)?\{([^}]+)\}/g)) {
     for (const raw of block[1].split(',')) {
