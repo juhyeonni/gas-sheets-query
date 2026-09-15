@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/juhyeonni/gas-sheets-query/compare/v1.1.0...v1.2.0) (2026-09-15)
+
+
+### Features
+
+* **cli:** add gsquery visualize to render the schema as a Mermaid ERD ([#228](https://github.com/juhyeonni/gas-sheets-query/issues/228)) ([1d47421](https://github.com/juhyeonni/gas-sheets-query/commit/1d4742144dd1ee1d18217b9522f5b79a84583046))
+
 ## [1.1.0](https://github.com/juhyeonni/gas-sheets-query/compare/v1.0.0...v1.1.0) (2026-09-15)
 
 
