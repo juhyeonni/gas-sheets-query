@@ -38,22 +38,22 @@ packages/
 
 ## Branching Strategy
 
-We use two long-lived branches:
-
-| Branch | Purpose            |
-| ------ | ------------------ |
-| `main` | Production releases |
-| `dev`  | Active development  |
-
-Always branch off `dev` and open your pull request **against `dev`**:
+Trunk-based. `main` is the only long-lived branch -- branch off it and open
+your pull request **against `main`**:
 
 ```bash
-git checkout dev
+git checkout main
 git pull
-git checkout -b feature/your-feature
+git checkout -b feat/your-feature
 ```
 
-`dev` is periodically merged into `main` for releases.
+Use a `feat/` `fix/` `chore/` or `docs/` prefix, keep the branch to one change,
+and delete it after merge.
+
+Pull requests are **squash-merged**, so the PR title becomes the commit message
+on `main` -- write it as a [Conventional Commit](https://www.conventionalcommits.org/).
+Releases are cut from those commits automatically, so a mistyped title means a
+missing changelog entry or a missed version bump.
 
 ## Development Workflow
 
@@ -66,7 +66,7 @@ git checkout -b feature/your-feature
    ```
 4. Commit using [Conventional Commits](https://www.conventionalcommits.org/)
    (e.g. `feat:`, `fix:`, `docs:`, `chore:`, `test:`, `refactor:`).
-5. Push your branch and open a pull request to `dev`.
+5. Push your branch and open a pull request to `main`.
 
 ## Commit & Code Conventions
 

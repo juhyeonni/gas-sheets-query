@@ -16,9 +16,10 @@
 
 ## Checklist
 
-- [ ] Targets the `dev` branch
+- [ ] Targets the `main` branch
 - [ ] Tests added or updated
 - [ ] `pnpm test` passes
 - [ ] `pnpm build` passes
-- [ ] Follows Conventional Commits
+- [ ] **PR title is a valid Conventional Commit** -- it becomes the squashed
+      commit on `main`, and release-please derives the next version from it
 - [ ] Docs/comments are in English
