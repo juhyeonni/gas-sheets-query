@@ -10,6 +10,7 @@ import {
   migrationCreateCommand,
   migrateCommand,
   rollbackCommand,
+  visualizeCommand,
 } from '../dist/index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -28,6 +29,7 @@ program.addCommand(initCommand)
 program.addCommand(migrationCreateCommand)
 program.addCommand(migrateCommand)
 program.addCommand(rollbackCommand)
+program.addCommand(visualizeCommand)
 
 program.parseAsync().catch((err) => {
   console.error(`Error: ${err.message || err}`)

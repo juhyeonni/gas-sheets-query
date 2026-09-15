@@ -5,11 +5,12 @@
  */
 
 import { Command } from 'commander'
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs'
-import { resolve, dirname, basename, join, relative, isAbsolute, sep } from 'path'
+import { readFileSync, existsSync } from 'fs'
+import { resolve, basename, join, relative, isAbsolute, sep } from 'path'
 import { watch } from 'chokidar'
 import { parseSchema } from '../parser/schema-parser.js'
 import { toError } from '../utils/errors.js'
+import { writeFile } from '../utils/fs.js'
 import { generateTypes } from '../generator/types-generator.js'
 import { generateClient } from '../generator/client-generator.js'
 import { generateClientPackage } from '../generator/client-package-generator.js'
@@ -129,23 +130,6 @@ export function generateIndex(): string {
 // =============================================================================
 // File Operations
 // =============================================================================
-
-/**
- * Ensure directory exists
- */
-function ensureDir(dirPath: string): void {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true })
-  }
-}
-
-/**
- * Write file with directory creation
- */
-function writeFile(filePath: string, content: string): void {
-  ensureDir(dirname(filePath))
-  writeFileSync(filePath, content, 'utf-8')
-}
 
 /**
  * Check whether an existing file carries the gsquery auto-generated header.

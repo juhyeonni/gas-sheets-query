@@ -86,6 +86,7 @@ Schema-first instead? Define `schema.gsq.yaml` and run `npx gsquery generate` �
 | `gsquery generate` | Generate types/client code from schema |
 | `gsquery generate --client` | Also generate the typed client into your project |
 | `gsquery migration:create <name>` | Create a migration file |
+| `gsquery visualize` | Render the schema as a Mermaid ER diagram (`erd.md`, or `--stdout`) |
 | `gsquery migrate` / `gsquery rollback` | **Preview** migrations/rollbacks — execution happens in the GAS runtime via `MigrationRunner` |
 
 Details: [CLI Reference](https://juhyeonni.github.io/gas-sheets-query/cli-reference) · [Migration System](https://juhyeonni.github.io/gas-sheets-query/migration-system)
