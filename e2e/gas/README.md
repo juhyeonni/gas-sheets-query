@@ -67,7 +67,7 @@ The harness creates sheets named `e2e_<runId>_*`, and deletes them after each ru
 
    > ⚠️ If the OAuth client behind `clasp login` belongs to a GCP project whose consent screen is in **Testing** mode, its refresh token dies every 7 days. The stock clasp client (Google's, production) does not have this problem.
 
-Then: **Actions → "GAS E2E (real Apps Script)" → Run workflow.** It also runs automatically on every `dev` push that touches `packages/**` or `e2e/**`.
+Then: **Actions → "GAS E2E (real Apps Script)" → Run workflow.** This is the only way it runs -- there is no push trigger, because each run deploys to a real Apps Script project and spends real quota. Run it before merging a release PR, and after any change to `SheetsAdapter` or the harness.
 
 ## What CI does
 

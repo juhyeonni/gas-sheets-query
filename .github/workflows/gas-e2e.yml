@@ -1,7 +1,10 @@
 name: GAS E2E (real Apps Script)
 
 # Runs the golden suite inside a real Apps Script deployment against a real
-# spreadsheet, on every main push that touches runtime code (plus manual runs).
+# spreadsheet. Manual only: the run deploys to a real Apps Script project and
+# burns real quota, so it is a pre-release gate you trigger deliberately, not
+# something that fires on every merge. Run it from the Actions tab before
+# merging the release PR, or after any change to the adapter or the harness.
 #
 # The web app is locked to `access: MYSELF` — no anonymous access. CI
 # authenticates every request with a Bearer token minted from the owner's
@@ -21,12 +24,6 @@ name: GAS E2E (real Apps Script)
 #                                     URL keeps serving the old code.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'packages/**'
-      - 'e2e/**'
-      - '.github/workflows/gas-e2e.yml'
 
 jobs:
   # A disabled GAS_E2E_ENABLED must not look like a pass: the skipped e2e job
