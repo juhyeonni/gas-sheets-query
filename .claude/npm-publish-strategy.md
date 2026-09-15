@@ -246,6 +246,8 @@ pnpm --filter @gsquery/cli publish --access public
 ### Release
 
 - [ ] 기능 PR이 전부 `main`에 머지됨
+- [ ] **GAS E2E 수동 실행** (Actions → "GAS E2E (real Apps Script)" → Run workflow)
+      -- 자동 트리거가 없으므로 릴리스 전에 직접 돌려야 실제 플랫폼 회귀를 잡습니다
 - [ ] release-please의 "chore: release main" PR이 의도한 버전인지 확인
 - [ ] CHANGELOG 항목에 중복/누락 없는지 확인
 - [ ] 그 PR을 머지 → 태그·GitHub 릴리스·npm publish가 자동 실행
