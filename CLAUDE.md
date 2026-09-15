@@ -34,32 +34,34 @@ cat .claude/project.json
 
 **Two main branches:**
 
+Trunk-based. `main` is the only long-lived branch; everything else is a
+short-lived branch that merges back into it and is deleted.
+
 | Branch | Purpose | Protection |
 |--------|---------|------------|
-| `main` | Production releases (npm publish) | Protected |
-| `dev` | Active development | Default branch |
+| `main` | Default branch. Every PR targets it | Protected: PR required, `test` must pass |
+| `feat/*` `fix/*` `chore/*` `docs/*` | One change each, deleted after merge | -- |
 
 **Workflow:**
-1. Work on feature branches from `dev`
-2. Create PR to `dev` for review
-3. Merge to `dev` after approval
-4. Periodically merge `dev` → `main` for releases
+1. Branch off `main`
+2. Open a PR against `main`
+3. **Squash-merge** -- the PR title becomes the commit on `main`, so it must be
+   a valid conventional commit (`feat:`, `fix:`, ...). Merge commits are
+   disabled repo-wide precisely because they duplicate changelog entries
+4. Delete the branch
 
-**Creating feature branch:**
-```bash
-git checkout dev
-git pull
-git checkout -b feature/your-feature
-```
-
-**Release process:**
+**Creating a branch:**
 ```bash
 git checkout main
-git merge dev
-pnpm version [patch|minor|major]
-git push --tags
-pnpm release
+git pull
+git checkout -b feat/your-feature
 ```
+
+**Releases are automated -- never bump a version by hand.** release-please
+watches conventional commits on `main` and keeps a "chore: release main" PR
+open; merging that PR tags the release and publishes to npm. `feat:` bumps the
+minor, `fix:` the patch, `!`/`BREAKING CHANGE` the major. See
+`.claude/npm-publish-strategy.md`.
 
 ## Workflow
 

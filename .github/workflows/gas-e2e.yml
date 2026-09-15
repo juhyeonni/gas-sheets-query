@@ -1,7 +1,7 @@
 name: GAS E2E (real Apps Script)
 
 # Runs the golden suite inside a real Apps Script deployment against a real
-# spreadsheet, on every dev push that touches runtime code (plus manual runs).
+# spreadsheet, on every main push that touches runtime code (plus manual runs).
 #
 # The web app is locked to `access: MYSELF` — no anonymous access. CI
 # authenticates every request with a Bearer token minted from the owner's
@@ -22,7 +22,7 @@ name: GAS E2E (real Apps Script)
 on:
   workflow_dispatch:
   push:
-    branches: [dev]
+    branches: [main]
     paths:
       - 'packages/**'
       - 'e2e/**'

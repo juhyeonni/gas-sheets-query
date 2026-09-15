@@ -34,15 +34,9 @@ MAJOR.MINOR.PATCH[-PRERELEASE]
 
 **자동 배포 (CI):**
 ```yaml
-# .github/workflows/publish-dev.yml
-on:
-  push:
-    branches: [dev]
-
-steps:
-  - version: 1.0.0-dev.$(git rev-parse --short HEAD)
-  - tag: next
-  - publish: @gsquery/core@next
+# Not implemented. There is no dev branch and no pre-release channel today;
+# a prerelease would be cut by tagging an rc version on main, which
+# .github/workflows/release.yml already publishes under the "rc" dist-tag.
 ```
 
 **설치:**
@@ -57,7 +51,7 @@ npm install @gsquery/core@next
 #### Alpha (내부 테스트)
 
 ```bash
-# dev 브랜치에서
+# main 브랜치에서
 pnpm version prerelease --preid=alpha
 # 결과: 1.0.0-alpha.0
 
@@ -67,7 +61,7 @@ pnpm publish --tag alpha
 #### Beta (외부 테스트)
 
 ```bash
-# dev 브랜치에서
+# main 브랜치에서
 pnpm version prerelease --preid=beta
 # 결과: 1.0.0-beta.0
 
@@ -90,13 +84,13 @@ pnpm publish --tag rc
 
 #### Manual Release Process
 
-```bash
-# 1. dev → main 머지
-git checkout main
-git merge dev --no-ff
-git push
+> **이 절은 과거 수동 절차입니다.** 지금은 release-please가 `main`의
+> conventional commit을 읽어 릴리스 PR을 열어두고, 그 PR을 머지하면
+> 태그 생성과 npm publish가 자동으로 일어납니다. 손으로 `pnpm version`을
+> 실행하지 마세요 -- 버전은 `.release-please-manifest.json`이 관리합니다.
 
-# 2. 버전 업 (package.json 수정 + git tag 생성)
+```bash
+# 1. 버전 업 (package.json 수정 + git tag 생성)
 pnpm version [major|minor|patch]
 # 예: pnpm version minor → 1.1.0
 
@@ -165,7 +159,6 @@ jobs:
 | Tag | 버전 | 설치 방법 | 용도 |
 |-----|------|----------|------|
 | `latest` | 1.0.0 | `npm install @gsquery/core` | Stable |
-| `next` | 1.1.0-dev.abc123 | `npm install @gsquery/core@next` | Dev builds |
 | `beta` | 1.0.0-beta.1 | `npm install @gsquery/core@beta` | Public testing |
 | `rc` | 1.0.0-rc.1 | `npm install @gsquery/core@rc` | Release candidate |
 | `alpha` | 1.0.0-alpha.1 | `npm install @gsquery/core@alpha` | Internal testing |
@@ -252,12 +245,11 @@ pnpm --filter @gsquery/cli publish --access public
 
 ### Release
 
-- [ ] Merge dev → main
-- [ ] Version bump
-- [ ] Build successful
-- [ ] Publish to npm
-- [ ] Create GitHub release
-- [ ] Update docs site (if exists)
+- [ ] 기능 PR이 전부 `main`에 머지됨
+- [ ] release-please의 "chore: release main" PR이 의도한 버전인지 확인
+- [ ] CHANGELOG 항목에 중복/누락 없는지 확인
+- [ ] 그 PR을 머지 → 태그·GitHub 릴리스·npm publish가 자동 실행
+- [ ] npm에 네 패키지가 모두 올라갔는지 확인 (전파에 수 분 걸릴 수 있음)
 - [ ] Announce release
 
 ### Post-release
