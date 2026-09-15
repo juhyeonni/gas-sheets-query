@@ -20,8 +20,11 @@ const config: Config = {
   // Docs are plain CommonMark; MDX would choke on TS generics in prose.
   markdown: {
     format: 'detect',
+    mermaid: true,
     hooks: { onBrokenMarkdownLinks: 'throw' },
   },
+
+  themes: ['@docusaurus/theme-mermaid'],
 
   presets: [
     [

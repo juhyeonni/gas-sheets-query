@@ -108,6 +108,71 @@ npx gsquery migration:create <name> [options]
 
 Creates a timestamped migration file with `up` and `down` stubs.
 
+### `gsquery visualize`
+
+Render the schema as a [Mermaid](https://mermaid.js.org/) ER diagram.
+
+```bash
+npx gsquery visualize [options]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-s, --schema <path>` | Schema file path (default: from config or `schema.gsq.yaml`) |
+| `-o, --output <path>` | Output file (default: `erd.md`) |
+| `--stdout` | Print the diagram instead of writing a file |
+
+**Example:**
+
+```bash
+npx gsquery visualize                 # writes erd.md
+npx gsquery visualize -o docs/erd.md  # somewhere else
+npx gsquery visualize --stdout | pbcopy
+```
+
+The output is a markdown document with a `mermaid` code fence, so GitHub renders
+it as a picture when you commit it. Paste the fenced block into
+[mermaid.live](https://mermaid.live) to export SVG or PNG.
+
+Each table becomes an entity with every field, its type, and `PK` / `FK` / `UK`
+markers. Optional fields carry a `"?"` comment and enum fields list their values,
+because Mermaid attribute types cannot express either.
+
+**Relationships come only from [`@relation`](./schema-definition.md#relationtable).**
+gsquery never guesses foreign keys from field names -- a silently wrong diagram is
+worse than one with no edges. Cardinality is derived from the field:
+
+| Schema | Edge |
+|--------|------|
+| `ownerId: number @relation(User)` | `User \|\|--o{ Project` -- one to many |
+| `assigneeId: number? @relation(User)` | `User \|o--o{ Task` -- optional, zero or one |
+| `ownerId: number @unique @relation(User)` | `User \|\|--\|\| Project` -- one to one |
+| `watcherIds: number[] @relation(User)` | `User }o--o{ Task` -- many to many |
+
+If the schema declares no `@relation`, the diagram is a set of unconnected boxes
+and gsquery says so on stderr -- the file itself stays clean.
+
+The [example schema](#example-schema) above renders as:
+
+```mermaid
+erDiagram
+    User {
+        number id PK
+        string name
+        string email UK
+        Role role "admin|editor|viewer"
+        boolean active
+    }
+    Post {
+        number id PK
+        string title
+        string body
+        number authorId FK
+        boolean published
+    }
+    User ||--o{ Post : "authorId"
+```
+
 ## Schema File Format
 
 See [Schema Definition](./schema-definition.md) for the full `.gsq.yaml` format reference.
@@ -136,7 +201,7 @@ tables:
       id:        number   @id
       title:     string
       body:      string
-      authorId:  number
+      authorId:  number   @relation(User)
       published: boolean  @default(false)
     indexes:
       - [authorId]

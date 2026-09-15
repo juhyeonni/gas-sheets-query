@@ -99,9 +99,45 @@ tables:
 | `@default(value)` | Declared default value (documentation only — see below) | `active: boolean @default(true)` |
 | `@unique` | Unique constraint (declarative only — not enforced at runtime) | `email: string @unique` |
 | `@updatedAt` | Declared update timestamp (documentation only — see below) | `updatedAt: datetime @updatedAt` |
+| `@relation(Table)` | Foreign key referencing another table's `id` — see below | `authorId: number @relation(User)` |
 
 :::warning `@default` and `@updatedAt` are not applied at runtime
 These attributes are parsed and carried through codegen as documentation of intent, but **no adapter applies them**: generated `create()` types still require the fields, and nothing auto-fills timestamps on update. Supply the values from your application code (e.g. `create({ ..., createdAt: new Date() })`). Runtime application is planned for a later release.
+:::
+
+### `@relation(Table)`
+
+Marks a field as a foreign key referencing another table's `id`. The generator emits a type alias per referenced table and uses it as the field's type.
+
+```yaml
+tables:
+  User:
+    fields:
+      id: number @id @default(autoincrement)
+
+  Task:
+    fields:
+      id: number @id @default(autoincrement)
+      assigneeId: number? @relation(User)
+      watcherIds: number[]? @relation(User)
+```
+
+```typescript
+export type UserId = User['id']
+
+export interface Task {
+  id: number
+  assigneeId?: UserId
+  watcherIds?: UserId[]
+}
+```
+
+**The field's type must match the referenced table's `id` type.** `User.id` is `number` above, so the foreign keys are `number` / `number[]`; declaring `assigneeId: string @relation(User)` is rejected by schema validation, because the emitted `UserId` would resolve to `number` and contradict the declaration.
+
+`@relation` is also what [`gsquery visualize`](./cli-reference.md#gsquery-visualize) draws relationship edges from — a schema with no `@relation` renders as unconnected boxes.
+
+:::note `@relation` is a typing and documentation aid
+It adds no runtime behaviour: no automatic JOIN, no foreign-key integrity check on write, no cascade delete. Use `joinQuery()` to join explicitly.
 :::
 
 ### Block Attributes
