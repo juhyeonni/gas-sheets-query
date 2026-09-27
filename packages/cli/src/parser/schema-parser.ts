@@ -71,8 +71,8 @@ function parseAttributeValue(value: string): DefaultValue {
 export function parseFieldAttributes(attrStr: string): FieldAttribute[] {
   const attributes: FieldAttribute[] = []
   
-  // Regex to match @name or @name(args)
-  const attrRegex = /@(\w+)(?:\(([^)]*)\))?/g
+  // Match @name or @name(args); quoted strings in args may contain ')' or '@'
+  const attrRegex = /@(\w+)(?:\(((?:"[^"]*"|'[^']*'|[^)"'])*)\))?/g
   let match: RegExpExecArray | null
   
   while ((match = attrRegex.exec(attrStr)) !== null) {
@@ -98,10 +98,9 @@ export function parseFieldAttributes(attrStr: string): FieldAttribute[] {
  * Parse a complete field definition
  */
 export function parseField(name: string, definition: string): FieldAST {
-  // Split type and attributes: "string @unique" → ["string", "@unique"]
-  const parts = definition.trim().split(/\s+/)
-  const typeWithOptional = parts[0]
-  const attrStr = parts.slice(1).join(' ')
+  // Split off the type at the first whitespace: "string @unique" → "string", "@unique".
+  // The rest stays verbatim so quoted @default strings keep their whitespace.
+  const [, typeWithOptional, attrStr] = /^(\S*)\s*([\s\S]*)$/.exec(definition.trim())!
   
   const { type, optional } = parseFieldType(typeWithOptional)
   const attributes = parseFieldAttributes(attrStr)

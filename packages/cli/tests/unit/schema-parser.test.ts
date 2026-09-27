@@ -92,6 +92,22 @@ describe('parseFieldAttributes', () => {
     ])
   })
 
+  it('should keep parentheses and @ inside quoted @default strings', () => {
+    expect(parseFieldAttributes('@default("(draft)") @unique')).toEqual([
+      { name: 'default', args: ['(draft)'] },
+      { name: 'unique', args: [] }
+    ])
+    expect(parseFieldAttributes("@default('a)b@c')")).toEqual([
+      { name: 'default', args: ['a)b@c'] }
+    ])
+  })
+
+  it('should keep whitespace inside quoted @default strings', () => {
+    expect(parseField('label', 'string @default("a  b")').attributes).toEqual([
+      { name: 'default', args: ['a  b'] }
+    ])
+  })
+
   it('should parse @default with enum values', () => {
     expect(parseFieldAttributes('@default(USER)')).toEqual([
       { name: 'default', args: ['USER'] }
