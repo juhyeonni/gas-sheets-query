@@ -185,6 +185,19 @@ describe('JoinQueryBuilder', () => {
       expect(posts.length).toBe(2) // First post and third post (not orphan)
       expect(posts.every(p => p.author !== null)).toBe(true)
     })
+
+    it('should paginate after dropping unmatched rows', () => {
+      // Orphan post (id 4) sorts first; pagination must not count it
+      const query = () => db.from('posts')
+        .joinQuery()
+        .innerJoin('users', 'authorId', 'id')
+        .orderBy('id', 'desc')
+
+      expect(query().first()?.id).toBe(3)
+      expect(query().page(1, 2).exec().map(p => p.id)).toEqual([3, 2])
+      expect(query().offset(2).limit(5).exec().map(p => p.id)).toEqual([1])
+      expect(query().where('id', '=', 4).exists()).toBe(false)
+    })
   })
 
   describe('multiple joins', () => {

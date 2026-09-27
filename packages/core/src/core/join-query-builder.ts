@@ -226,21 +226,37 @@ export class JoinQueryBuilder<T extends RowWithId> {
    * Execute the query and return results with joined data
    */
   exec(): (T & Record<string, unknown>)[] {
-    // 1. Execute the main query
-    const mainResults = this.store.find(this.build())
-
-    // 2. If no joins or no results, return as-is
-    if (this.joinConfigs.length === 0 || mainResults.length === 0) {
-      return mainResults
+    // Inner joins drop rows, so the main query cannot be paginated before
+    // joining: page over the joined rows instead.
+    if (!this.hasInnerJoin()) {
+      return this.joinRows(this.build())
     }
+    const rows = this.joinRows(this.unpaginatedOptions())
+    const start = this.offsetValue ?? 0
+    const end = this.limitValue === undefined ? undefined : start + this.limitValue
+    return rows.slice(start, end)
+  }
 
-    // 3. Process each join
-    let results: (T & Record<string, unknown>)[] = [...mainResults]
+  private hasInnerJoin(): boolean {
+    return this.joinConfigs.some(c => c.type === 'inner')
+  }
 
+  private unpaginatedOptions(): QueryOptions<T> {
+    return {
+      where: [...this.whereConditions],
+      orderBy: [...this.orderByConditions]
+    }
+  }
+
+  /**
+   * Run the main query with the given options and apply every join
+   */
+  private joinRows(options: QueryOptions<T>): (T & Record<string, unknown>)[] {
+    let results: (T & Record<string, unknown>)[] = this.store.find(options)
     for (const joinConfig of this.joinConfigs) {
+      if (results.length === 0) break
       results = this.executeJoin(results, joinConfig)
     }
-
     return results
   }
 
@@ -348,30 +364,10 @@ export class JoinQueryBuilder<T extends RowWithId> {
    * Execute and return count of results
    */
   count(): number {
-    // For counting, we need to account for inner joins
-    const hasInnerJoin = this.joinConfigs.some(c => c.type === 'inner')
-
-    const countOptions: QueryOptions<T> = {
-      where: [...this.whereConditions],
-      orderBy: [...this.orderByConditions]
-    }
-
-    if (!hasInnerJoin) {
-      // No inner join - count main table results
-      return this.store.find(countOptions).length
-    }
-
-    // With inner join, execute full query without pagination for accurate count
-    const savedLimit = this.limitValue
-    const savedOffset = this.offsetValue
-    this.limitValue = undefined
-    this.offsetValue = undefined
-    try {
-      return this.exec().length
-    } finally {
-      this.limitValue = savedLimit
-      this.offsetValue = savedOffset
-    }
+    const options = this.unpaginatedOptions()
+    return this.hasInnerJoin()
+      ? this.joinRows(options).length
+      : this.store.find(options).length
   }
 
   /**
