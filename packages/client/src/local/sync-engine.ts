@@ -169,6 +169,7 @@ interface SyncQueue {
   clearForRows(ids: Set<string | number>, maxSeq?: number): void
   purgeCancelled(maxSeq?: number): void
   push(type: 'insert' | 'update' | 'delete', id: string | number, data?: Partial<RowWithId>): void
+  onPush(listener: () => void): () => void
 }
 
 interface TableBinding {
@@ -194,6 +195,7 @@ export class SyncEngine {
   private readonly transport: SyncTransport
   private readonly conflictStrategy: ConflictStrategy
   private readonly tables = new Map<string, TableBinding>()
+  private readonly unsubscribers: (() => void)[] = []
 
   private readonly listeners: SyncEventListener[] = []
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null
@@ -225,6 +227,8 @@ export class SyncEngine {
     queue: MutationQueue<T>
   ): void {
     this.tables.set(tableName, { adapter, queue })
+    // Every local write schedules a debounced push (no-op when pushDebounceMs is 0)
+    this.unsubscribers.push(queue.onPush(() => this.schedulePush()))
   }
 
   /** Subscribe to sync events */
@@ -657,7 +661,7 @@ export class SyncEngine {
     this.emit({ type: 'error', error: toError(err) })
   }
 
-  /** Schedule a debounced push (called after local mutations) */
+  /** Schedule a debounced push (called on every local mutation) */
   schedulePush(): void {
     if (this.pushDebounceMs <= 0) return
     if (this.pushDebounceTimer) clearTimeout(this.pushDebounceTimer)
@@ -690,6 +694,8 @@ export class SyncEngine {
 
   /** Cleanup */
   dispose(): void {
+    for (const unsubscribe of this.unsubscribers) unsubscribe()
+    this.unsubscribers.length = 0
     this.stopAutoSync()
     if (this.pushDebounceTimer) {
       clearTimeout(this.pushDebounceTimer)

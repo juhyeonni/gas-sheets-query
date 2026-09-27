@@ -36,6 +36,7 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
   private readonly storage: MutationStorage | null
   /** Monotonic counter for assigning mutation sequence numbers */
   private seqCounter = 0
+  private readonly pushListeners = new Set<() => void>()
 
   constructor(options: MutationQueueOptions) {
     this.storageKey = `${composeName('gsquery', options.namespace)}:${options.tableName}:mutations`
@@ -65,6 +66,13 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
       seq: ++this.seqCounter,
     })
     this.persist()
+    for (const listener of this.pushListeners) listener()
+  }
+
+  /** Subscribe to new mutations. Returns an unsubscribe function. */
+  onPush(listener: () => void): () => void {
+    this.pushListeners.add(listener)
+    return () => this.pushListeners.delete(listener)
   }
 
   /** Highest sequence number assigned so far — the current push boundary. */

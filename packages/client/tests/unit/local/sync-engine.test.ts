@@ -713,6 +713,31 @@ describe('SyncEngine', () => {
       debouncedSync.dispose()
     })
 
+    it('local writes schedule a debounced push on their own', async () => {
+      const debouncedSync = new SyncEngine({ transport, pushDebounceMs: 20 })
+      debouncedSync.registerTable('Todo', adapter, adapter.queue)
+
+      adapter.insert({ id: 't1', title: 'A', done: false })
+      adapter.insert({ id: 't2', title: 'B', done: false })
+
+      await new Promise(r => setTimeout(r, 60))
+
+      expect(transport.pushHistory).toHaveLength(1)
+      expect(adapter.queue.length).toBe(0)
+      debouncedSync.dispose()
+    })
+
+    it('dispose stops local writes from scheduling a push', async () => {
+      const debouncedSync = new SyncEngine({ transport, pushDebounceMs: 20 })
+      debouncedSync.registerTable('Todo', adapter, adapter.queue)
+      debouncedSync.dispose()
+
+      adapter.insert({ id: 't1', title: 'A', done: false })
+      await new Promise(r => setTimeout(r, 60))
+
+      expect(transport.pushHistory).toHaveLength(0)
+    })
+
     it('schedulePush does nothing when debounceMs is 0', () => {
       sync.schedulePush()
       // No timer set, no push
