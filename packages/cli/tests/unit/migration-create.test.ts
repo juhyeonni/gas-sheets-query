@@ -104,6 +104,18 @@ describe('migration:create command', () => {
     expect(result.version).toBe(6)
   })
 
+  it('should count compiled .js migrations when picking the next version', () => {
+    // A production migrations dir may hold only compiled .js files (#82)
+    runMigrationCreate('first', {})
+    rmSync('migrations/0001_first.ts')
+    writeFileSync('migrations/0001_first.js', 'export default {}')
+    writeFileSync('migrations/0002_second.js', 'export default {}')
+
+    const result = runMigrationCreate('third', {})
+
+    expect(result.version).toBe(3)
+  })
+
   it('should include creation timestamp in content', () => {
     runMigrationCreate('test_migration', {})
 

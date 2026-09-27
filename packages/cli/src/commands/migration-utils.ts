@@ -42,6 +42,13 @@ export interface MigrationDef {
  * @param migrationsDir - Path to migrations directory
  * @param sortOrder - Sort order: 'asc' for migrate, 'desc' for rollback
  */
+/**
+ * Migration file name: `<version>_<name>.ts|.js`. Compiled .js counts too:
+ * the published bin runs under plain Node, which cannot import() a .ts file
+ * (ERR_UNKNOWN_FILE_EXTENSION) (#82).
+ */
+export const MIGRATION_FILE_PATTERN = /^\d+_.*\.(ts|js)$/
+
 export async function loadMigrations(
   migrationsDir: string,
   sortOrder: 'asc' | 'desc',
@@ -50,9 +57,7 @@ export async function loadMigrations(
     return []
   }
 
-  // Match compiled .js too: the published bin runs under plain Node, which
-  // cannot import() a .ts file (ERR_UNKNOWN_FILE_EXTENSION) (#82).
-  const matched = readdirSync(migrationsDir).filter(f => /^\d+_.*\.(ts|js)$/.test(f))
+  const matched = readdirSync(migrationsDir).filter(f => MIGRATION_FILE_PATTERN.test(f))
 
   // If both a .ts source and its compiled .js exist for the same migration,
   // keep only one (otherwise the runner sees a duplicate version). Prefer .js

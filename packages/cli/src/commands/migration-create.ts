@@ -8,6 +8,7 @@ import { Command } from 'commander'
 import { writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs'
 import { resolve, join } from 'path'
 import { loadConfig } from './init.js'
+import { MIGRATION_FILE_PATTERN } from './migration-utils.js'
 import { toError } from '../utils/errors.js'
 import { escapeStringLiteral, isValidStringValue } from '../utils/sanitize.js'
 
@@ -40,7 +41,7 @@ function getNextVersion(migrationsDir: string): number {
   
   const files = readdirSync(migrationsDir)
   const versions = files
-    .filter(f => f.match(/^\d+_.*\.ts$/))
+    .filter(f => MIGRATION_FILE_PATTERN.test(f))
     .map(f => parseInt(f.split('_')[0], 10))
     .filter(v => !isNaN(v))
   
