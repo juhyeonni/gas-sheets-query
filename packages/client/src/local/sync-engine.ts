@@ -201,7 +201,7 @@ export class SyncEngine {
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null
   private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null
   private readonly pushDebounceMs: number
-  private syncing = false
+  private syncsInFlight = 0
   private opChain: Promise<unknown> = Promise.resolve()
 
   private readonly maxRetries: number
@@ -287,10 +287,11 @@ export class SyncEngine {
   }
 
   private async runSync(tableName: string | undefined, background: boolean): Promise<void> {
-    // Flag is set synchronously so overlapping sync() calls still drop rather
-    // than queue up — auto-sync ticks must not pile up behind a slow transport.
-    if (this.syncing) return
-    this.syncing = true
+    // Auto-sync ticks drop while a sync is in flight so they never pile up
+    // behind a slow transport. An explicit sync() queues instead: its caller
+    // awaits it and expects every write made so far to be synced.
+    if (background && this.syncsInFlight > 0) return
+    this.syncsInFlight++
 
     return this.serialize(async () => {
       try {
@@ -317,7 +318,7 @@ export class SyncEngine {
           this.emit({ type: 'sync-complete', table: tableName })
         }
       } finally {
-        this.syncing = false
+        this.syncsInFlight--
       }
     })
   }
@@ -689,7 +690,7 @@ export class SyncEngine {
 
   /** Check if currently syncing */
   get isSyncing(): boolean {
-    return this.syncing
+    return this.syncsInFlight > 0
   }
 
   /** Cleanup */

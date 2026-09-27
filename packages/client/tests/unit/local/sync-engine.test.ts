@@ -337,6 +337,38 @@ describe('SyncEngine', () => {
       // Only one push should have happened
       expect(transport.pushHistory.length).toBeLessThanOrEqual(1)
     })
+
+    it('an awaited sync() during another sync still syncs later writes', async () => {
+      // Slow pull so the second write lands after the first push has read the queue
+      const pull = transport.pull.bind(transport)
+      transport.pull = (async (name: string) => {
+        await new Promise(r => setTimeout(r, 20))
+        return pull(name)
+      }) as typeof transport.pull
+
+      adapter.insert({ id: 't1', title: 'first', done: false })
+      const running = sync.sync()
+      await new Promise(r => setTimeout(r, 5))
+      adapter.insert({ id: 't2', title: 'late', done: false })
+
+      await sync.sync()
+
+      const server = transport.serverData.get('Todo') as Todo[]
+      expect(server.map(t => t.id).sort()).toEqual(['t1', 't2'])
+      expect(adapter.queue.length).toBe(0)
+      await running
+    })
+
+    it('drops an auto-sync tick while a sync is running', async () => {
+      adapter.insert({ id: 't1', title: 'first', done: false })
+      const running = sync.sync()
+      sync.startAutoSync(1)
+      await new Promise(r => setTimeout(r, 10))
+      sync.stopAutoSync()
+      await running
+
+      expect(transport.pushHistory).toHaveLength(1)
+    })
   })
 
   // ── Events ─────────────────────────────────────────────────────────
