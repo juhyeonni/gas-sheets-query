@@ -243,6 +243,14 @@ describe('LocalAdapter', () => {
       // replaceAll does NOT record mutations
       expect(adapter.queue.length).toBe(0)
     })
+
+    it('handles a 200k-row pull without overflowing the stack', () => {
+      const rows = Array.from({ length: 200_000 }, (_, i) => ({ id: String(i), value: i, updatedAt: '' }))
+      adapter.replaceAll(rows)
+      expect(adapter.findAll()).toHaveLength(200_000)
+      adapter.reset(rows)
+      expect(adapter.findAll()).toHaveLength(200_000)
+    })
   })
 
   // ── initialData ────────────────────────────────────────────────────

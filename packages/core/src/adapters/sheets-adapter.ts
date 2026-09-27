@@ -802,12 +802,9 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
     const idColIndex = this.columns.indexOf(this.idColumn) + 1
     const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
-    const ids = this.sheetsCall(() => idRange.getValues())
+    return this.sheetsCall(() => idRange.getValues())
       .flat()
-      .filter(id => typeof id === 'number' && !isNaN(id))
-
-    if (ids.length === 0) return 0
-    return Math.max(...ids as number[])
+      .reduce<number>((max, id) => typeof id === 'number' && !isNaN(id) ? Math.max(max, id) : max, 0)
   }
 
   /** Find row index by ID (1-indexed, returns -1 if not found) */

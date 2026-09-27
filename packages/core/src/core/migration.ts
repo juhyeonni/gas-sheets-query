@@ -284,7 +284,7 @@ export class MigrationRunner {
     const records = this.migrationsStore.findAll()
     if (records.length === 0) return 0
     
-    return Math.max(...records.map(r => r.version))
+    return records.reduce((max, r) => Math.max(max, r.version), 0)
   }
   
   /**

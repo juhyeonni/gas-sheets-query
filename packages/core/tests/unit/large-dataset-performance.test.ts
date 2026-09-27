@@ -304,3 +304,28 @@ describe('Large Dataset Behavior', () => {
     })
   })
 })
+
+// Spreading an array into Math.max/min passes one argument per element and
+// overflows the call stack somewhere past ~120k elements on V8.
+describe('Stack-safe min/max over large arrays', () => {
+  const N = 200_000
+  const rows = (): TestRow[] => Array.from({ length: N }, (_, i) => ({
+    id: i + 1, name: '', category: 'c', value: i, status: 's'
+  }))
+
+  it('MockAdapter seeds and resets nextId from 200k rows', () => {
+    const adapter = new MockAdapter<TestRow>({ initialData: rows() })
+    expect(adapter.insert({ name: '', category: 'c', value: 0, status: 's' }).id).toBe(N + 1)
+    adapter.reset(rows())
+    expect(adapter.insert({ name: '', category: 'c', value: 0, status: 's' }).id).toBe(N + 1)
+  })
+
+  it('QueryBuilder min/max/aggregate over 200k rows', () => {
+    const adapter = new MockAdapter<TestRow>({ initialData: rows() })
+    const qb = new QueryBuilder<TestRow>(adapter)
+    expect(qb.max('value')).toBe(N - 1)
+    expect(qb.min('value')).toBe(0)
+    expect(qb.groupBy('category').agg({ lo: 'min:value', hi: 'max:value' }))
+      .toEqual([{ category: 'c', lo: 0, hi: N - 1 }])
+  })
+})

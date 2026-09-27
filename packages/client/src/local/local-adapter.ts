@@ -205,11 +205,9 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
     // Update nextId for auto mode
     if (this.data.length > 0) {
-      const maxId = Math.max(
-        ...this.data.map(r =>
-          typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
-        )
-      )
+      const maxId = this.data.reduce((max, r) => Math.max(max,
+        typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
+      ), 0)
       this.nextId = maxId + 1
     }
   }
@@ -457,11 +455,9 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.rebuildIndex()
     this.queue.clear()
     if (data.length > 0) {
-      const maxId = Math.max(
-        ...data.map(r =>
-          typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
-        )
-      )
+      const maxId = data.reduce((max, r) => Math.max(max,
+        typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
+      ), 0)
       this.nextId = maxId + 1
     } else {
       this.nextId = 1
