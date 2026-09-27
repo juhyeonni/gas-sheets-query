@@ -629,9 +629,9 @@ export class SyncEngine {
       // Apply pending mutations on top of server data
       for (const m of merged) {
         if (m.type === 'insert') {
-          if (!serverMap.has(m.id)) {
-            serverMap.set(m.id, { id: m.id, ...m.data })
-          }
+          // Insert is the sync contract's upsert: it overwrites a server copy
+          // exactly as pushing it will
+          serverMap.set(m.id, { id: m.id, ...m.data })
         } else if (m.type === 'update') {
           const existing = serverMap.get(m.id)
           if (existing) {

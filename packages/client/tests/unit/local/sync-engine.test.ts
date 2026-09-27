@@ -265,6 +265,18 @@ describe('SyncEngine', () => {
       expect(local.find(t => t.id === 's1')?.title).toBe('Server Task')
     })
 
+    it('keeps a pending re-created row over the server copy during pull', async () => {
+      transport.setServerData<Todo>('Todo', [{ id: 't1', title: 'old', done: false }])
+      await sync.pull()
+
+      // delete + insert folds into an insert (upsert) that the server still has
+      adapter.delete('t1')
+      adapter.insert({ id: 't1', title: 'new', done: true })
+      await sync.pull()
+
+      expect(adapter.findById('t1')).toEqual({ id: 't1', title: 'new', done: true })
+    })
+
     it('preserves pending local mutations during pull', async () => {
       // Local insert not yet pushed
       adapter.insert({ id: 'local1', title: 'Local only', done: false })
