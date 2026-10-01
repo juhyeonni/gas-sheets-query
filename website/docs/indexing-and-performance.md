@@ -153,7 +153,7 @@ indexes: [{ fields: ['role', 'status'] }]
 
 ### 3. Batch Operations
 
-Use `batchInsert` and `batchUpdate` instead of loops (see [Operations](./operations.md) for why a per-row loop costs O(M·N) cells read on SheetsAdapter):
+Use `batchInsert` and `batchUpdate` instead of loops (see [Operations](./operations.md) for the measured per-call costs on SheetsAdapter):
 
 ```ts
 // Good: single batch call

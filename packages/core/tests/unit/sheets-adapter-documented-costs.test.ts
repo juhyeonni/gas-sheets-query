@@ -415,4 +415,59 @@ describe('SheetsAdapter id memo [#137]', () => {
     const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().flat()
     expect(ids).toEqual(Array.from({ length: 400 }, (_, i) => i + 101))
   })
+
+  it('findById after clearCache() re-checks the header, reads the id column and the row (C + N + C)', () => {
+    const N = 100
+    const { adapter, recorder } = seed(N)
+    adapter.clearCache()
+    recorder.clear()
+
+    expect(adapter.findById(50)?.id).toBe(50)
+
+    expect(cost(recorder)).toEqual({ ...ZERO, reads: 3, cells: COLUMNS.length + N + COLUMNS.length })
+  })
+
+  it('update with a stale hint re-reads the id column: C + N + C', () => {
+    const N = 100
+    const { adapter, recorder, sheet } = seed(N)
+    adapter.update(10, { score: 0 }) // builds the map
+    const other = new SheetsAdapter<Row>({
+      spreadsheetId: SPREADSHEET_ID,
+      sheetName: SHEET_NAME,
+      columns: COLUMNS
+    })
+    other.delete(1) // another execution moves every row up by one
+    recorder.clear()
+
+    expect(adapter.update(50, { score: 1 })?.id).toBe(50)
+
+    expect(cost(recorder)).toEqual({
+      ...ZERO,
+      reads: 3,
+      cells: COLUMNS.length + (N - 1) + COLUMNS.length,
+      setValues: 1,
+      flush: 2
+    })
+    expect(sheet.getRange(50, 1, 1, 1).getValues()[0][0]).toBe(50)
+  })
+
+  it('delete with a stale hint re-reads the id column: 1 + N', () => {
+    const N = 100
+    const { adapter, recorder, sheet } = seed(N)
+    adapter.update(10, { score: 0 }) // builds the map
+    const other = new SheetsAdapter<Row>({
+      spreadsheetId: SPREADSHEET_ID,
+      sheetName: SHEET_NAME,
+      columns: COLUMNS
+    })
+    other.delete(1)
+    recorder.clear()
+
+    expect(adapter.delete(50)).toBe(true)
+
+    expect(cost(recorder)).toEqual({ ...ZERO, reads: 2, cells: 1 + (N - 1), deleteRow: 1, flush: 2 })
+    const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().flat()
+    expect(ids).not.toContain(50)
+    expect(ids).toHaveLength(N - 2)
+  })
 })

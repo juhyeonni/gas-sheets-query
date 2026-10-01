@@ -41,7 +41,7 @@ const newUsers = users.batchInsert([
 ### Performance Benefit
 
 - **MockAdapter**: Single iteration, builds index entries in batch
-- **SheetsAdapter**: Single ranged `setValues()` call; the id column (auto mode: plus the `_meta` counter) or the existing id keys (client mode) are read once per batch, not per row.
+- **SheetsAdapter**: Single ranged `setValues()` call; in auto mode the id column is read at most once per adapter instance (the `_meta` counter is read and advanced on every batch); in client mode the existing id keys are read once per batch, not per row.
 
 ## Batch Update
 

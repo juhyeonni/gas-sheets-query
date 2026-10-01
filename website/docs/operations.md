@@ -29,7 +29,7 @@ same execution only burns what is left of the run, so the library does not.
 
 - Prefer `batchInsert` / `batchUpdate` / `batchDelete` / a single `query()` over
   per-row calls. Quota is consumed per Sheets API call, and a batch is one
-  ranged write. `batchInsert` is one ranged write after one id read per batch;
+  ranged write. `batchInsert` is one ranged write (client mode reads the id keys once per batch; auto mode reads the id column at most once per adapter instance);
   `batchUpdate` is one full-table read plus one write per contiguous run of
   updated rows (worst case one per row); `batchDelete` is one id-column read
   plus one `deleteRows` per contiguous run of deleted rows.
@@ -179,7 +179,7 @@ stated). A *cell* is one value returned by `getValues`; `flush` is
 | `findAll` / `find`, warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `findAll` after a write | 1 | `N*C` | 0 | 0 | 300 | 3,000 | 15,000 |
 | `findById`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `findById`, cache cold, id map cold | 2 | `N + C` | 0 | 0 | 103 | 1,003 | 5,003 |
+| `findById` after `clearCache()` (cache and id map cold, header re-checked) | 3 | `C + N + C` | 0 | 0 | 106 | 1,006 | 5,006 |
 | `findById`, cache cold, id map warm | 1 | `C` | 0 | 0 | 3 | 3 | 3 |
 | `insert` (auto id), first in the instance | 1 | `N` | 1 `appendRow` | 2 | 100 | 1,000 | 5,000 |
 | `insert` (auto id), later calls | 0 | 0 | 1 `appendRow` | 2 | 0 | 0 | 0 |
