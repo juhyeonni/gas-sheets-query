@@ -63,7 +63,7 @@ interface MockAdapterOptions<T> {
 
 interface IndexDefinition {
   fields: string[]    // field names (order matters for composite)
-  unique?: boolean    // enforce uniqueness
+  unique?: boolean    // declarative only, not enforced
 }
 ```
 
@@ -135,7 +135,7 @@ type ColumnType =
 
 ### Features
 
-- **Data caching**: Reads sheet once, auto-invalidates on writes
+- **Data caching**: `find`/`findAll` read the sheet once per execution; any write drops the cache; `findById`/`update`/`delete` bypass it and read the whole id column per call — batch instead of looping
 - **LockService**: Concurrent-safe auto-increment ID generation
 - **Column types**: Automatic serialization/deserialization (JSON for arrays/objects, booleans, dates)
 - **Auto-detect JSON**: Parses JSON strings in cells automatically
@@ -160,7 +160,7 @@ store.getRawData()       // get raw 2D array from sheet
 
 ## IndexStore (Column Indexing)
 
-Provides O(1) equality lookups on indexed fields. Used internally by MockAdapter.
+Provides O(1) equality lookups on indexed fields. Used internally by MockAdapter and LocalAdapter; SheetsAdapter has no indexes.
 
 ```ts
 import { IndexStore } from '@gsquery/core'
@@ -181,7 +181,7 @@ const rowIndices = indexStore.lookup(['email'], ['alice@test.com'])
 ### When to Use
 
 - Equality queries on frequently queried fields
-- Unique constraints (e.g., email)
+- Unique declarations (e.g., email; not enforced)
 - Composite indexes for multi-field lookups
 
 ---

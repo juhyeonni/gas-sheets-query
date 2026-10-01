@@ -15,7 +15,10 @@ import { comparable } from './query-utils.js'
 export interface IndexDefinition {
   /** Target fields for indexing (order matters) */
   fields: string[]
-  /** Whether to enforce uniqueness */
+  /**
+   * Declarative only: not enforced by any adapter. Indexes are used by
+   * MockAdapter and LocalAdapter for `=` lookups and have no effect on SheetsAdapter.
+   */
   unique?: boolean
 }
 

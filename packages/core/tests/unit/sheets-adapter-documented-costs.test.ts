@@ -1,0 +1,204 @@
+/**
+ * Pins the SheetsAdapter costs that the docs describe (#240), so a later change
+ * to the read/write path that makes the documentation stale breaks a test.
+ *
+ * Costs are counted in sheet reads (cells) and writes (calls) on the data sheet.
+ */
+import { describe, it, expect } from 'vitest'
+import { SheetsAdapter } from '../../src/adapters/sheets-adapter'
+import { MockAdapter } from '../../src/adapters/mock-adapter'
+import { DuplicateIdError } from '../../src/core/errors'
+import type { FakeSheet } from '../../src/testing/fake-sheet'
+import { fromArrays } from '../../src/testing/loaders'
+import { installGasFakes } from '../../src/testing/install'
+
+interface Row {
+  id: number
+  name: string
+  score: number
+}
+
+const SPREADSHEET_ID = 'documented-costs'
+const SHEET_NAME = 'Users'
+const COLUMNS = ['id', 'name', 'score']
+const C = COLUMNS.length
+
+interface ReadCall {
+  startRow: number
+  startCol: number
+  numRows: number
+  numCols: number
+}
+
+interface WriteCall {
+  startRow: number
+  numRows: number
+  numCols: number
+}
+
+interface Recorder {
+  reads: ReadCall[]
+  writes: WriteCall[]
+  clear(): void
+  cellsRead(): number
+}
+
+function recordRangeCalls(sheet: FakeSheet): Recorder {
+  const recorder: Recorder = {
+    reads: [],
+    writes: [],
+    clear() {
+      recorder.reads.length = 0
+      recorder.writes.length = 0
+    },
+    cellsRead() {
+      return recorder.reads.reduce((sum, r) => sum + r.numRows * r.numCols, 0)
+    }
+  }
+  const original = sheet.getRange.bind(sheet)
+
+  sheet.getRange = (row: number, col: number, numRows = 1, numCols = 1) => {
+    const range = original(row, col, numRows, numCols)
+    const readValues = range.getValues.bind(range)
+    const writeValues = range.setValues.bind(range)
+
+    range.getValues = () => {
+      recorder.reads.push({ startRow: row, startCol: col, numRows, numCols })
+      return readValues()
+    }
+    range.setValues = (values: unknown[][]) => {
+      recorder.writes.push({ startRow: row, numRows, numCols })
+      writeValues(values)
+    }
+    return range
+  }
+
+  return recorder
+}
+
+/**
+ * Sheet with ids 1..n. Warms up with findAll() (header check + cache fill),
+ * then clears the recorder so assertions count only the operation under test.
+ */
+function seed(
+  rowCount: number,
+  idMode: 'auto' | 'client' = 'auto'
+): { adapter: SheetsAdapter<Row>; recorder: Recorder; sheet: FakeSheet } {
+  const rows: unknown[][] = [COLUMNS]
+  for (let i = 1; i <= rowCount; i++) rows.push([i, `user-${i}`, i * 10])
+
+  const spreadsheet = fromArrays({ [SHEET_NAME]: rows })
+  installGasFakes({ spreadsheets: { [SPREADSHEET_ID]: spreadsheet }, activeId: SPREADSHEET_ID })
+
+  const sheet = spreadsheet.getSheetByName(SHEET_NAME)
+  if (!sheet) throw new Error('seed: sheet missing')
+
+  const adapter = new SheetsAdapter<Row>({
+    spreadsheetId: SPREADSHEET_ID,
+    sheetName: SHEET_NAME,
+    columns: COLUMNS,
+    idMode
+  })
+  const recorder = recordRangeCalls(sheet)
+
+  adapter.findAll()
+  recorder.clear()
+  return { adapter, recorder, sheet }
+}
+
+describe('SheetsAdapter documented costs [#240]', () => {
+  it('findById reads the whole id column plus the row even when the read cache is warm', () => {
+    const { adapter, recorder } = seed(100)
+
+    expect(adapter.findById(50)?.id).toBe(50)
+    expect(recorder.reads).toEqual([
+      { startRow: 2, startCol: 1, numRows: 100, numCols: 1 },
+      { startRow: 51, startCol: 1, numRows: 1, numCols: C }
+    ])
+    expect(recorder.writes).toEqual([])
+  })
+
+  it('update and delete read the whole id column on every call', () => {
+    const { adapter, recorder, sheet } = seed(50)
+
+    let rowCount = sheet.getLastRow() - 1
+    adapter.update(10, { name: 'x' })
+    expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: rowCount, numCols: 1 })
+
+    recorder.clear()
+    rowCount = sheet.getLastRow() - 1
+    adapter.delete(20)
+    expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: rowCount, numCols: 1 })
+  })
+
+  it('a loop of M single updates reads O(M*N) cells while one batchUpdate reads N*C', () => {
+    const N = 200
+    const M = 200
+
+    const loop = seed(N)
+    for (let id = 1; id <= M; id++) loop.adapter.update(id, { score: 0 })
+    const loopCells = loop.recorder.cellsRead()
+    expect(loopCells).toBe(M * (N + C))
+    expect(loop.recorder.writes).toHaveLength(M)
+
+    const batch = seed(N)
+    batch.adapter.batchUpdate(Array.from({ length: M }, (_, i) => ({ id: i + 1, data: { score: 0 } })))
+    const batchCells = batch.recorder.cellsRead()
+    expect(batchCells).toBe(N * C)
+    expect(batch.recorder.writes).toHaveLength(1)
+
+    expect(loopCells / batchCells).toBeGreaterThan(50)
+  })
+
+  it('batchUpdate on scattered rows costs one full-table read and one write per row', () => {
+    const { adapter, recorder } = seed(20)
+
+    const ids = Array.from({ length: 10 }, (_, i) => i * 2 + 1)
+    adapter.batchUpdate(ids.map(id => ({ id, data: { score: 0 } })))
+
+    expect(recorder.reads).toEqual([{ startRow: 2, startCol: 1, numRows: 20, numCols: C }])
+    expect(recorder.writes).toHaveLength(10)
+    expect(recorder.writes.every(w => w.numRows === 1)).toBe(true)
+  })
+
+  it('batchInsert reads the id column once per batch, not once per row (auto mode)', () => {
+    const { adapter, recorder } = seed(30, 'auto')
+
+    const created = adapter.batchInsert(
+      Array.from({ length: 50 }, (_, i) => ({ name: `new-${i}`, score: i }))
+    )
+
+    expect(created.map(r => r.id)).toEqual(Array.from({ length: 50 }, (_, i) => 31 + i))
+    expect(recorder.reads.filter(r => r.numCols === 1 && r.startCol === 1)).toEqual([
+      { startRow: 2, startCol: 1, numRows: 30, numCols: 1 }
+    ])
+    expect(recorder.writes).toEqual([{ startRow: 32, numRows: 50, numCols: C }])
+  })
+
+  it('every write drops the read cache, including an insert that throws', () => {
+    const { adapter, recorder, sheet } = seed(10, 'client')
+
+    // Control: the cache is warm, so a second findAll reads nothing.
+    adapter.findAll()
+    expect(recorder.reads).toEqual([])
+
+    expect(() => adapter.insert({ id: 1, name: 'dup', score: 0 })).toThrow(DuplicateIdError)
+
+    recorder.clear()
+    adapter.findAll()
+    expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: 10, numCols: C })
+    expect(sheet.getLastRow() - 1).toBe(10)
+  })
+
+  it('unique: true is declarative — MockAdapter accepts duplicate values', () => {
+    const adapter = new MockAdapter<{ id: number; email: string }>({
+      indexes: [{ fields: ['email'], unique: true }]
+    })
+
+    adapter.insert({ email: 'a@x' })
+    adapter.insert({ email: 'a@x' })
+
+    const found = adapter.find({ where: [{ field: 'email', operator: '=', value: 'a@x' }], orderBy: [] })
+    expect(found).toHaveLength(2)
+  })
+})

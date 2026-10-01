@@ -41,7 +41,7 @@ const newUsers = users.batchInsert([
 ### Performance Benefit
 
 - **MockAdapter**: Single iteration, builds index entries in batch
-- **SheetsAdapter**: Single `setValues()` call instead of multiple `appendRow()` calls, reducing API call overhead
+- **SheetsAdapter**: Single ranged `setValues()` call; the id column (auto mode: plus the `_meta` counter) or the existing id keys (client mode) are read once per batch, not per row.
 
 ## Batch Update
 
@@ -57,6 +57,10 @@ const updated = users.batchUpdate([
 // Returns array of updated rows
 // Rows that don't exist are silently skipped (no error)
 ```
+
+### Performance
+
+On SheetsAdapter, `batchUpdate` reads the whole table once, then writes one `setValues()` per contiguous run of updated rows — a contiguous block is one write, scattered rows cost one write each.
 
 ### Behavior
 

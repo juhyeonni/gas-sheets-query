@@ -29,6 +29,13 @@ same execution only burns what is left of the run, so the library does not.
 
 - Prefer `batchInsert` / `batchUpdate` / a single `query()` over per-row calls.
   Quota is consumed per Sheets API call, and a batch is one ranged write.
+  `batchInsert` is one ranged write after one id read per batch; `batchUpdate` is
+  one full-table read plus one write per contiguous run of updated rows (worst
+  case one per row).
+- Never call single `insert`/`update`/`delete`/`findById` in a loop: each call
+  reads the whole id column, so M calls on an N-row sheet read O(M·N) cells
+  (about M²/2 when filling an empty sheet). Use `batchInsert`/`batchUpdate`, or
+  one `findAll`/`query()` and look rows up in memory.
 - Long jobs belong in a time-driven trigger that processes a slice per run and
   records its progress, not in one execution that races the 6-minute ceiling.
 - Catch `QuotaExceededError` and check `transient` before deciding to reschedule
@@ -126,13 +133,15 @@ id in the cell.
 the same execution from that snapshot — one API call instead of one per query.
 The consequence is that writes made by *other* executions are invisible until:
 
-- the adapter's own write path invalidates the cache, or
+- any write by this adapter drops the cache (an `insert` drops it even if it
+  throws, e.g. `DuplicateIdError`), or
 - you call `adapter.clearCache()`, or
 - a new execution starts.
 
-`findById` is not affected — it reads the row live. `find` and `findAll` are
-the cached paths, and so is anything built on them (`query()`, JOINs,
-aggregation).
+`findById`, `update` and `delete` do not use the cache: each call reads the
+whole id column and then the row, even when the cache is warm. `find` and
+`findAll` are the cached paths, and so is anything built on them (`query()`,
+JOINs, aggregation).
 
 Long-running triggers that poll for external edits must call `clearCache()`
 between passes.
