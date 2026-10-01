@@ -324,3 +324,140 @@ describe('MutationQueue', () => {
     })
   })
 })
+
+describe('MutationQueue compaction [#234]', () => {
+  let storage: ReturnType<typeof createMemoryStorage>
+  let queue: MutationQueue<TestRow>
+  const key = 'gsquery:test:mutations'
+
+  beforeEach(() => {
+    storage = createMemoryStorage()
+    queue = new MutationQueue<TestRow>({ tableName: 'test', storage })
+  })
+
+  it('N updates of the same row keep one raw entry', () => {
+    for (let i = 0; i < 1000; i++) queue.push('update', 'a', { value: i })
+    expect(queue.length).toBe(1)
+    expect(queue.getMerged()).toEqual([{ id: 'a', type: 'update', data: { value: 999 } }])
+    expect(JSON.parse(storage.store.get(key)!)).toHaveLength(1)
+  })
+
+  it('merges fields like update+update and preserves first-seen id order', () => {
+    queue.push('update', 'a', { name: 'A' })
+    queue.push('update', 'b', { value: 1 })
+    queue.push('update', 'a', { value: 2 })
+    expect(queue.length).toBe(2)
+    expect(queue.getMerged()).toEqual([
+      { id: 'a', type: 'update', data: { name: 'A', value: 2 } },
+      { id: 'b', type: 'update', data: { value: 1 } },
+    ])
+  })
+
+  it('does not compact non update+update pairs', () => {
+    queue.push('insert', 'a', undefined, { id: 'a', name: 'A', value: 1 })
+    queue.push('update', 'a', { value: 2 })
+    expect(queue.length).toBe(2)
+    queue.push('update', 'b', { value: 1 })
+    queue.push('delete', 'b')
+    expect(queue.length).toBe(4)
+    expect(queue.getMerged()).toEqual([
+      { id: 'a', type: 'insert', data: { id: 'a', name: 'A', value: 2 } },
+      { id: 'b', type: 'delete' },
+    ])
+  })
+
+  it('does not compact across a snapshot boundary', () => {
+    queue.push('update', 'a', { name: 'X' })
+    const b = queue.snapshotBoundary()
+    expect(b).toBe(queue.currentSeq())
+    queue.push('update', 'a', { value: 5 })
+    expect(queue.length).toBe(2)
+    queue.push('update', 'a', { value: 6 })
+    expect(queue.length).toBe(2)
+    queue.clearForRows(new Set(['a']), b)
+    expect(queue.length).toBe(1)
+    expect(queue.getMerged()).toEqual([{ id: 'a', type: 'update', data: { value: 6 } }])
+  })
+
+  it('compacted entry takes a fresh seq', () => {
+    queue.push('update', 'a', { name: 'X' })
+    const s1 = queue.currentSeq()
+    queue.push('update', 'a', { value: 1 })
+    expect(queue.currentSeq()).toBe(s1 + 1)
+    queue.clearForRows(new Set(['a']), s1)
+    expect(queue.length).toBe(1)
+  })
+
+  it('index survives reload, clear and clearForRows', () => {
+    queue.push('update', 'a', { value: 1 })
+    queue.push('update', 'a', { value: 2 })
+    const reloaded = new MutationQueue<TestRow>({ tableName: 'test', storage })
+    reloaded.push('update', 'a', { value: 3 })
+    expect(reloaded.length).toBe(1)
+
+    reloaded.clearForRows(new Set(['a']))
+    reloaded.push('update', 'a', { value: 1 })
+    reloaded.push('update', 'a', { value: 2 })
+    expect(reloaded.length).toBe(1)
+
+    reloaded.clear()
+    reloaded.push('update', 'a', { value: 1 })
+    reloaded.push('update', 'a', { value: 2 })
+    expect(reloaded.length).toBe(1)
+  })
+})
+
+describe('MutationQueue pushMany [#234]', () => {
+  it('persists once for a batch', () => {
+    let sets = 0
+    const inner = createMemoryStorage()
+    const storage: MutationStorage = {
+      getItem: k => inner.getItem(k),
+      setItem: (k, v) => {
+        sets++
+        inner.setItem(k, v)
+      },
+      removeItem: k => inner.removeItem(k),
+    }
+    const queue = new MutationQueue<TestRow>({ tableName: 'test', storage })
+    queue.pushMany(
+      Array.from({ length: 100 }, (_, i) => ({
+        type: 'insert' as const,
+        id: `r${i}`,
+        row: { id: `r${i}`, name: 'n', value: i },
+      }))
+    )
+    expect(sets).toBe(1)
+    expect(queue.length).toBe(100)
+    queue.pushMany([])
+    expect(sets).toBe(1)
+  })
+})
+
+describe('MutationQueue storage failures [#234]', () => {
+  it('a throwing setItem propagates from push', () => {
+    const storage: MutationStorage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('QuotaExceededError')
+      },
+      removeItem: () => {},
+    }
+    const queue = new MutationQueue<TestRow>({ tableName: 'test', storage })
+    expect(() => queue.push('update', 'a', { value: 1 })).toThrow('QuotaExceededError')
+    expect(queue.length).toBe(1)
+  })
+
+  it('a throwing removeItem propagates from clear', () => {
+    const storage: MutationStorage = {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {
+        throw new Error('boom')
+      },
+    }
+    const queue = new MutationQueue<TestRow>({ tableName: 'test', storage })
+    queue.push('update', 'a', { value: 1 })
+    expect(() => queue.clear()).toThrow()
+  })
+})

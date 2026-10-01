@@ -240,7 +240,8 @@ describe('S5 offline session lifecycle', () => {
     applyOfflineEdits(session1)
 
     const queue1 = session1.adapters.Task.queue
-    expect(queue1.length).toBe(15)
+    // 15 raw edits minus 3 same-row update+update pairs compacted on enqueue (#234)
+    expect(queue1.length).toBe(12)
     expect(queue1.getMerged()).toEqual(EXPECTED_MERGED)
 
     // The UI still shows a consistent, fully-edited view while offline.
@@ -276,7 +277,7 @@ describe('S5 offline session lifecycle', () => {
     }
 
     // Nothing was lost while the network was down.
-    expect(queue1.length).toBe(15)
+    expect(queue1.length).toBe(12)
     expect(queue1.getMerged()).toEqual(EXPECTED_MERGED)
     expect(sortById(session1.db.from('Task').findAll())).toEqual(CONVERGED)
 
@@ -287,7 +288,7 @@ describe('S5 offline session lifecycle', () => {
     const queue2 = session2.adapters.Task.queue
 
     // The pending work survived the reload, merge semantics intact.
-    expect(queue2.length).toBe(15)
+    expect(queue2.length).toBe(12)
     expect(queue2.getMerged()).toEqual(EXPECTED_MERGED)
 
     // With IndexedDB off, the *rows* did not survive — only the queue did, so

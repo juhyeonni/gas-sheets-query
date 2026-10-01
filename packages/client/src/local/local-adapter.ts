@@ -27,7 +27,7 @@ import {
 } from '@gsquery/core'
 import type { IndexDefinition, ColumnType } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
-import type { MutationStorage } from './mutation-queue.js'
+import type { MutationInput, MutationStorage } from './mutation-queue.js'
 import { composeName } from './naming.js'
 
 /**
@@ -392,6 +392,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     }
 
     const startIndex = this.data.length
+    const entries: MutationInput<T>[] = []
     for (let i = 0; i < newRows.length; i++) {
       const newRow = newRows[i]
       const rowIndex = startIndex + i
@@ -399,8 +400,9 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       this.idIndex.set(newRow.id, rowIndex)
       this.indexStore.addToIndex(rowIndex, newRow)
 
-      this.queue.push('insert', newRow.id, undefined, newRow)
+      entries.push({ type: 'insert', id: newRow.id, row: newRow })
     }
+    this.queue.pushMany(entries)
 
     this.schedulePersist()
     return newRows
@@ -408,6 +410,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
     const results: T[] = []
+    const entries: MutationInput<T>[] = []
 
     for (const { id, data } of items) {
       const index = this.idIndex.get(id)
@@ -418,9 +421,10 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       this.data[index] = newRow
       this.indexStore.updateIndex(index, oldRow, newRow)
 
-      this.queue.push('update', id, data as Partial<T>)
+      entries.push({ type: 'update', id, data: data as Partial<T> })
       results.push(newRow)
     }
+    this.queue.pushMany(entries)
 
     this.schedulePersist()
     return results

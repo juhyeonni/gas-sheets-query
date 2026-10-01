@@ -30,12 +30,27 @@ export interface MutationQueueOptions {
   namespace?: string
 }
 
+/** One mutation to enqueue via `pushMany` */
+export interface MutationInput<T extends RowWithId = RowWithId> {
+  type: MutationType
+  id: string | number
+  data?: Partial<T>
+  row?: T
+}
+
 export class MutationQueue<T extends RowWithId = RowWithId> {
   private mutations: Mutation<T>[] = []
   private readonly storageKey: string
   private readonly storage: MutationStorage | null
   /** Monotonic counter for assigning mutation sequence numbers */
   private seqCounter = 0
+  /** Last raw entry per row id, so update+update can compact in place (#234) */
+  private lastById = new Map<string | number, Mutation<T>>()
+  /**
+   * Seq of the latest push snapshot. Entries at or below it may be in flight
+   * and must never be mutated. Memory only: after a reload nothing is in flight.
+   */
+  private lastSnapshotSeq = 0
 
   constructor(options: MutationQueueOptions) {
     this.storageKey = `${composeName('gsquery', options.namespace)}:${options.tableName}:mutations`
@@ -56,19 +71,51 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
 
   /** Push a new mutation into the queue */
   push(type: MutationType, id: string | number, data?: Partial<T>, row?: T): void {
-    this.mutations.push({
-      id,
-      type,
-      data,
-      row,
-      timestamp: Date.now(),
-      seq: ++this.seqCounter,
-    })
+    this.pushMany([{ type, id, data, row }])
+  }
+
+  /** Push several mutations with a single storage write */
+  pushMany(entries: readonly MutationInput<T>[]): void {
+    if (entries.length === 0) return
+    for (const { type, id, data, row } of entries) {
+      const prev = this.lastById.get(id)
+      if (type === 'update' && prev?.type === 'update' && prev.seq > this.lastSnapshotSeq) {
+        // Compact update+update in place. The entry gets a fresh seq, so array
+        // order may no longer match seq order. That is safe: groupById relies
+        // only on order within an id, and clearForRows/purgeCancelled/
+        // loadFromStorage go by seq value. No code may assume the array is
+        // sorted by seq.
+        prev.data = { ...prev.data, ...data } as Partial<T>
+        prev.seq = ++this.seqCounter
+        prev.timestamp = Date.now()
+        continue
+      }
+      const entry: Mutation<T> = {
+        id,
+        type,
+        data,
+        row,
+        timestamp: Date.now(),
+        seq: ++this.seqCounter,
+      }
+      this.mutations.push(entry)
+      this.lastById.set(id, entry)
+    }
     this.persist()
   }
 
-  /** Highest sequence number assigned so far — the current push boundary. */
+  /** Highest sequence number assigned so far. A pure read. */
   currentSeq(): number {
+    return this.seqCounter
+  }
+
+  /**
+   * Mark everything enqueued so far as part of a push snapshot and return the
+   * boundary. Later updates to those rows append instead of compacting into
+   * entries that may be in flight.
+   */
+  snapshotBoundary(): number {
+    this.lastSnapshotSeq = this.seqCounter
     return this.seqCounter
   }
 
@@ -183,7 +230,14 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
   /** Clear all mutations */
   clear(): void {
     this.mutations = []
+    this.rebuildIndex()
     this.persist()
+  }
+
+  /** Recompute lastById from the raw array */
+  private rebuildIndex(): void {
+    this.lastById = new Map()
+    for (const m of this.mutations) this.lastById.set(m.id, m)
   }
 
   /**
@@ -201,6 +255,7 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
       if (maxSeq !== undefined && m.seq > maxSeq) return true
       return false
     })
+    this.rebuildIndex()
     this.persist()
   }
 
@@ -227,6 +282,7 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
     if (doomed.size === 0) return
 
     this.mutations = this.mutations.filter(m => !doomed.has(m.id))
+    this.rebuildIndex()
     this.persist()
   }
 
@@ -250,14 +306,12 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
   /** Persist to storage */
   private persist(): void {
     if (!this.storage) return
-    try {
-      if (this.mutations.length === 0) {
-        this.storage.removeItem(this.storageKey)
-      } else {
-        this.storage.setItem(this.storageKey, JSON.stringify(this.mutations))
-      }
-    } catch {
-      // Storage full or unavailable - continue in-memory only
+    // Errors (e.g. quota) propagate: the in-memory change stays applied, the
+    // caller learns durability failed.
+    if (this.mutations.length === 0) {
+      this.storage.removeItem(this.storageKey)
+    } else {
+      this.storage.setItem(this.storageKey, JSON.stringify(this.mutations))
     }
   }
 
@@ -281,10 +335,12 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
             m.seq = ++this.seqCounter
           }
         }
+        this.rebuildIndex()
       }
     } catch {
       // Corrupted data - start fresh
       this.mutations = []
+      this.rebuildIndex()
     }
   }
 }

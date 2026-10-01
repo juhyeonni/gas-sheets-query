@@ -32,6 +32,7 @@ export {
 } from "./local/index.js";
 
 export type {
+  MutationInput,
   MutationQueueOptions,
   MutationStorage,
   LocalAdapterOptions,

@@ -166,6 +166,7 @@ interface SyncAdapter {
 interface SyncQueue {
   getMerged(): MergedMutation[]
   currentSeq(): number
+  snapshotBoundary(): number
   clearForRows(ids: Set<string | number>, maxSeq?: number): void
   purgeCancelled(maxSeq?: number): void
   push(type: 'insert' | 'update' | 'delete', id: string | number, data?: Partial<RowWithId>): void
@@ -500,7 +501,7 @@ export class SyncEngine {
     // Boundary: only mutations enqueued up to this point are part of this push.
     // Anything enqueued during the await below (higher seq) must survive the
     // clear, otherwise concurrent local writes are silently lost (#109).
-    const boundary = binding.queue.currentSeq()
+    const boundary = binding.queue.snapshotBoundary()
 
     let result: SyncPushResult
     try {

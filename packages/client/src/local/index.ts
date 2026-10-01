@@ -1,6 +1,6 @@
 // Local-first adapter components
 export { MutationQueue } from './mutation-queue.js'
-export type { MutationQueueOptions, MutationStorage } from './mutation-queue.js'
+export type { MutationInput, MutationQueueOptions, MutationStorage } from './mutation-queue.js'
 
 export { LocalAdapter, openSharedIDB } from './local-adapter.js'
 export type { LocalAdapterOptions } from './local-adapter.js'
