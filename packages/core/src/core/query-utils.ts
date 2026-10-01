@@ -16,7 +16,7 @@ function escapeRegex(str: string): string {
  * deserializes to a Date, so `where(col, '=', new Date(t))` used to hit
  * `===` and never match anything.
  */
-function comparable(value: unknown): unknown {
+export function comparable(value: unknown): unknown {
   return value instanceof Date ? value.getTime() : value
 }
 

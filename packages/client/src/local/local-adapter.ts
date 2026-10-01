@@ -13,7 +13,6 @@ import type {
   RowWithId,
   DataStore,
   QueryOptions,
-  WhereCondition,
   BatchUpdateItem,
   IdMode,
   UpdateData,
@@ -128,6 +127,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private persistScheduled = false
   private persistChain: Promise<void> = Promise.resolve()
   private readonly namespace: string | undefined
+  private mutationListener: (() => void) | undefined
 
   constructor(options: LocalAdapterOptions<T>) {
     this.tableName = options.tableName
@@ -152,6 +152,15 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       this.data = [...options.initialData]
       this.rebuildIndex()
     }
+  }
+
+  /**
+   * Register the single listener fired once after each public mutation that
+   * changed a row (insert/update/delete/batchInsert/batchUpdate). A later call
+   * replaces the earlier listener. replaceAll/reset/init do not fire it.
+   */
+  onLocalMutation(listener: () => void): void {
+    this.mutationListener = listener
   }
 
   /** Initialize from IndexedDB (call once before use) */
@@ -220,14 +229,14 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   find(options: QueryOptions<T>): T[] {
-    let candidateIndices: Set<number> | undefined
+    let candidateIndices: number[] | undefined
     let remainingConditions = options.where
 
     if (options.where.length > 0) {
-      const { usedIndices, unusedConditions } = this.tryUseIndexes(options.where)
-      if (usedIndices !== undefined) {
-        candidateIndices = usedIndices
-        remainingConditions = unusedConditions
+      const narrowed = this.indexStore.candidates(options.where)
+      if (narrowed !== undefined) {
+        candidateIndices = narrowed.rows
+        remainingConditions = narrowed.remaining
       }
     }
 
@@ -328,6 +337,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     // Record mutation and persist
     this.queue.push('insert', newRow.id, undefined, newRow)
     this.schedulePersist()
+    this.mutationListener?.()
 
     return newRow
   }
@@ -346,6 +356,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     // Record mutation and persist
     this.queue.push('update', id, data as Partial<T>)
     this.schedulePersist()
+    this.mutationListener?.()
 
     return newRow
   }
@@ -368,6 +379,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     // Record mutation and persist
     this.queue.push('delete', id)
     this.schedulePersist()
+    this.mutationListener?.()
 
     return true
   }
@@ -404,6 +416,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.queue.pushMany(entries)
 
     this.schedulePersist()
+    if (newRows.length > 0) this.mutationListener?.()
     return newRows
   }
 
@@ -426,6 +439,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.queue.pushMany(entries)
 
     this.schedulePersist()
+    if (results.length > 0) this.mutationListener?.()
     return results
   }
 
@@ -460,69 +474,6 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.rebuildIndex()
     this.queue.clear()
     if (data.length === 0) this.nextId = 1
-  }
-
-  // ── Index optimization (mirrors MockAdapter) ──────────────────────
-
-  private tryUseIndexes(conditions: WhereCondition<T>[]): {
-    usedIndices: Set<number> | undefined
-    unusedConditions: WhereCondition<T>[]
-  } {
-    const eqConditions: Array<{ field: string; value: unknown; index: number }> = []
-    const nonEqConditions: WhereCondition<T>[] = []
-
-    conditions.forEach((cond, i) => {
-      if (cond.operator === '=') {
-        eqConditions.push({ field: cond.field, value: cond.value, index: i })
-      } else {
-        nonEqConditions.push(cond)
-      }
-    })
-
-    if (eqConditions.length === 0) {
-      return { usedIndices: undefined, unusedConditions: conditions }
-    }
-
-    let usedIndices: Set<number> | undefined
-    const usedConditionIndices = new Set<number>()
-
-    for (const eq of eqConditions) {
-      const indices = this.indexStore.lookup([eq.field], [eq.value])
-      if (indices !== undefined) {
-        if (usedIndices === undefined) {
-          usedIndices = new Set(indices)
-        } else {
-          const intersection = new Set<number>()
-          for (const idx of usedIndices) {
-            if (indices.has(idx)) intersection.add(idx)
-          }
-          usedIndices = intersection
-        }
-        usedConditionIndices.add(eq.index)
-      }
-    }
-
-    if (eqConditions.length >= 2) {
-      const fields = eqConditions.map(eq => eq.field)
-      const values = eqConditions.map(eq => eq.value)
-      const compoundIndices = this.indexStore.lookup(fields, values)
-
-      if (compoundIndices !== undefined) {
-        if (usedIndices === undefined) {
-          usedIndices = new Set(compoundIndices)
-        } else {
-          const intersection = new Set<number>()
-          for (const idx of usedIndices) {
-            if (compoundIndices.has(idx)) intersection.add(idx)
-          }
-          usedIndices = intersection
-        }
-        eqConditions.forEach(eq => usedConditionIndices.add(eq.index))
-      }
-    }
-
-    const unusedConditions = conditions.filter((_, i) => !usedConditionIndices.has(i))
-    return { usedIndices, unusedConditions }
   }
 
   // ── IndexedDB persistence ──────────────────────────────────────────

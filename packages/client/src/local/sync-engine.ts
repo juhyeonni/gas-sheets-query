@@ -199,6 +199,7 @@ export class SyncEngine {
   private readonly listeners: SyncEventListener[] = []
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null
   private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null
+  private disposed = false
   private readonly pushDebounceMs: number
   private syncing = false
   private opChain: Promise<unknown> = Promise.resolve()
@@ -226,6 +227,7 @@ export class SyncEngine {
     queue: MutationQueue<T>
   ): void {
     this.tables.set(tableName, { adapter, queue })
+    adapter.onLocalMutation(() => this.schedulePush())
   }
 
   /** Subscribe to sync events */
@@ -658,8 +660,9 @@ export class SyncEngine {
     this.emit({ type: 'error', error: toError(err) })
   }
 
-  /** Schedule a debounced push (called after local mutations) */
+  /** Schedule a debounced push (called automatically after local mutations; no-op after dispose) */
   schedulePush(): void {
+    if (this.disposed) return
     if (this.pushDebounceMs <= 0) return
     if (this.pushDebounceTimer) clearTimeout(this.pushDebounceTimer)
     this.pushDebounceTimer = setTimeout(() => {
@@ -691,6 +694,7 @@ export class SyncEngine {
 
   /** Cleanup */
   dispose(): void {
+    this.disposed = true
     this.stopAutoSync()
     if (this.pushDebounceTimer) {
       clearTimeout(this.pushDebounceTimer)

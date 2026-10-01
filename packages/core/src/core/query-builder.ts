@@ -3,6 +3,7 @@
  */
 import type { RowWithId, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types.js'
 import { NoResultsError } from './errors.js'
+import { serializeValues } from './index-store.js'
 
 /**
  * Aggregation specification
@@ -275,7 +276,7 @@ export class QueryBuilder<T extends RowWithId> {
     // Group rows by fields
     const groups = new Map<string, T[]>()
     for (const row of rows) {
-      const key = this.groupByFields.map(f => String(row[f])).join('|')
+      const key = serializeValues(this.groupByFields.map(f => row[f]))
       if (!groups.has(key)) {
         groups.set(key, [])
       }

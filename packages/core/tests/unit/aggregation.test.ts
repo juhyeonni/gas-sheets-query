@@ -101,6 +101,24 @@ describe('Aggregation Functions', () => {
     })
   })
 
+  describe('groupBy key identity (#239)', () => {
+    type Loose = RowWithId & { id: number; f?: unknown; a?: unknown; b?: unknown }
+    const groups = (rows: Omit<Loose, 'id'>[], ...fields: string[]) => {
+      const q = createQueryBuilder(new MockAdapter<Loose>(rows.map((r, i) => ({ ...r, id: i + 1 }))))
+      return (q.groupBy as (...f: string[]) => { agg: (s: Record<string, string>) => unknown[] })
+        .call(q, ...fields).agg({ n: 'count' })
+    }
+
+    it('keeps values with colliding string forms in separate groups', () => {
+      expect(groups([{ f: 1 }, { f: '1' }], 'f')).toHaveLength(2)
+      expect(groups([{ a: 'a|b', b: 'c' }, { a: 'a', b: 'b|c' }], 'a', 'b')).toHaveLength(2)
+      expect(groups([{ f: new Date(1000) }, { f: new Date(1500) }], 'f')).toHaveLength(2)
+      expect(groups([{ f: new Date(1000) }, { f: new Date(1000) }], 'f')).toHaveLength(1)
+      expect(groups([{ f: null }, { f: 'null' }], 'f')).toHaveLength(2)
+      expect(groups([{}, { f: null }], 'f')).toHaveLength(2)
+    })
+  })
+
   describe('groupBy', () => {
     it('should group and aggregate by category', () => {
       const result = query

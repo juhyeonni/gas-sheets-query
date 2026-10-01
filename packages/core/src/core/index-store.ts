@@ -5,10 +5,11 @@
  *
  * Structure:
  *   - Single column: "status" → Map<value, Set<rowIndex>>
- *   - Composite column: "field1|field2" → Map<JSON([val1, val2]), Set<rowIndex>>
+ *   - Composite column: "field1|field2" → Map<serializeValues([val1, val2]), Set<rowIndex>>
  */
 
-import type { Row } from './types.js'
+import type { Row, WhereCondition } from './types.js'
+import { comparable } from './query-utils.js'
 
 /** Index definition */
 export interface IndexDefinition {
@@ -23,9 +24,21 @@ export function createIndexKey(fields: string[]): string {
   return fields.join('|')
 }
 
-/** Serialize composite values */
+/**
+ * Serialize values into a key with the same identity as the scan's `=`
+ * comparison (`comparable()` + `===`): a Date equals its epoch number, while
+ * 1 and '1', null and undefined stay distinct. Also used as the groupBy key.
+ *
+ * NaN and object/array values are out of scope: sheet cells hold only
+ * primitives and Dates.
+ */
 export function serializeValues(values: unknown[]): string {
-  return JSON.stringify(values)
+  return JSON.stringify(
+    values.map(v => {
+      const c = comparable(v)
+      return [typeof c, String(c)]
+    })
+  )
 }
 
 /**
@@ -194,8 +207,60 @@ export class IndexStore<T extends Row> {
       return undefined // No index - full scan required
     }
 
-    const serialized = serializeValues(values)
-    return index.get(serialized) // Set or undefined
+    return index.get(serializeValues(values)) ?? new Set<number>()
+  }
+
+  /**
+   * Narrow `=` conditions to candidate rows using the indexes.
+   * Single-field lookups first (intersected), then the compound lookup over
+   * all `=` conditions in where order.
+   *
+   * @returns Candidate row indices in ascending order plus the conditions the
+   *   indexes did not cover, or undefined if no index applies
+   */
+  candidates(
+    conditions: WhereCondition<T>[]
+  ): { rows: number[]; remaining: WhereCondition<T>[] } | undefined {
+    const eqConditions: Array<{ field: string; value: unknown; index: number }> = []
+    conditions.forEach((cond, i) => {
+      if (cond.operator === '=') {
+        eqConditions.push({ field: cond.field, value: cond.value, index: i })
+      }
+    })
+    if (eqConditions.length === 0) return undefined
+
+    let used: Set<number> | undefined
+    const usedConditionIndices = new Set<number>()
+    const intersect = (found: Set<number>): void => {
+      used = used === undefined
+        ? new Set(found)
+        : new Set([...used].filter(idx => found.has(idx)))
+    }
+
+    for (const eq of eqConditions) {
+      const found = this.lookup([eq.field], [eq.value])
+      if (found !== undefined) {
+        intersect(found)
+        usedConditionIndices.add(eq.index)
+      }
+    }
+
+    if (eqConditions.length >= 2) {
+      const found = this.lookup(
+        eqConditions.map(eq => eq.field),
+        eqConditions.map(eq => eq.value)
+      )
+      if (found !== undefined) {
+        intersect(found)
+        eqConditions.forEach(eq => usedConditionIndices.add(eq.index))
+      }
+    }
+
+    if (used === undefined) return undefined
+    return {
+      rows: [...(used as Set<number>)].sort((a, b) => a - b),
+      remaining: conditions.filter((_, i) => !usedConditionIndices.has(i)),
+    }
   }
 
   /**

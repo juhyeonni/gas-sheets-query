@@ -86,15 +86,15 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   find(options: QueryOptions<T>): T[] {
-    let candidateIndices: Set<number> | undefined
+    let candidateIndices: number[] | undefined
     let remainingConditions = options.where
     
     // Try to use column indexes for equality conditions
     if (options.where.length > 0) {
-      const { usedIndices, unusedConditions } = this.tryUseIndexes(options.where)
-      if (usedIndices !== undefined) {
-        candidateIndices = usedIndices
-        remainingConditions = unusedConditions
+      const narrowed = this.indexStore.candidates(options.where)
+      if (narrowed !== undefined) {
+        candidateIndices = narrowed.rows
+        remainingConditions = narrowed.remaining
       }
     }
     
@@ -138,85 +138,6 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     return result
   }
   
-  /**
-   * Try to use indexes for the given where conditions
-   * Returns candidate row indices and unused conditions
-   */
-  private tryUseIndexes(conditions: WhereCondition<T>[]): {
-    usedIndices: Set<number> | undefined
-    unusedConditions: WhereCondition<T>[]
-  } {
-    // Extract equality conditions that might use indexes
-    const eqConditions: Array<{ field: string; value: unknown; index: number }> = []
-    const nonEqConditions: WhereCondition<T>[] = []
-    
-    conditions.forEach((cond, i) => {
-      if (cond.operator === '=') {
-        eqConditions.push({ field: cond.field, value: cond.value, index: i })
-      } else {
-        nonEqConditions.push(cond)
-      }
-    })
-    
-    if (eqConditions.length === 0) {
-      return { usedIndices: undefined, unusedConditions: conditions }
-    }
-    
-    // Try to find an index for the equality conditions
-    // Strategy: try single-field indexes first, then compound
-    let usedIndices: Set<number> | undefined
-    const usedConditionIndices = new Set<number>()
-    
-    // Try each equality condition individually first
-    for (const eq of eqConditions) {
-      const indices = this.indexStore.lookup([eq.field], [eq.value])
-      if (indices !== undefined) {
-        if (usedIndices === undefined) {
-          usedIndices = new Set(indices)
-        } else {
-          // Intersect with existing candidates (AND logic)
-          const intersection = new Set<number>()
-          for (const idx of usedIndices) {
-            if (indices.has(idx)) {
-              intersection.add(idx)
-            }
-          }
-          usedIndices = intersection
-        }
-        usedConditionIndices.add(eq.index)
-      }
-    }
-    
-    // If we have 2+ equality conditions, try compound indexes
-    if (eqConditions.length >= 2) {
-      const fields = eqConditions.map(eq => eq.field)
-      const values = eqConditions.map(eq => eq.value)
-      const compoundIndices = this.indexStore.lookup(fields, values)
-      
-      if (compoundIndices !== undefined) {
-        if (usedIndices === undefined) {
-          usedIndices = new Set(compoundIndices)
-        } else {
-          // Intersect
-          const intersection = new Set<number>()
-          for (const idx of usedIndices) {
-            if (compoundIndices.has(idx)) {
-              intersection.add(idx)
-            }
-          }
-          usedIndices = intersection
-        }
-        // All equality conditions are covered by compound index
-        eqConditions.forEach(eq => usedConditionIndices.add(eq.index))
-      }
-    }
-    
-    // Build unused conditions list
-    const unusedConditions = conditions.filter((_, i) => !usedConditionIndices.has(i))
-    
-    return { usedIndices, unusedConditions }
-  }
-
   /**
    * Find a single row by ID - O(1) using index
    * Optimized: uses Map lookup instead of array scan
