@@ -119,6 +119,12 @@ export interface DataStore<T extends RowWithId = RowWithId> {
   batchUpdate?(items: BatchUpdateItem<T>[]): T[]
 
   /**
+   * Delete several rows by ID at once (optional). Returns how many rows were
+   * deleted; missing and duplicate ids are skipped, never an error.
+   */
+  batchDelete?(ids: (string | number)[]): number
+
+  /**
    * Physically add a column to the underlying storage (optional).
    *
    * Implemented by stores whose column set is fixed and positional, such as

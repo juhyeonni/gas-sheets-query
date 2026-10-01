@@ -121,6 +121,7 @@ interface TableHandle<T> {
   // Batch operations
   batchInsert(data: Omit<T, 'id'>[]): T[]
   batchUpdate(items: { id: string | number; data: Partial<Omit<T, 'id'>> }[]): T[]
+  batchDelete(ids: (string | number)[]): number  // missing ids skipped; returns rows deleted
 }
 ```
 

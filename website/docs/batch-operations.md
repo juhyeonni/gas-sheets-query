@@ -93,6 +93,22 @@ db.from('items').batchInsert([
 ])
 ```
 
+## Batch Delete
+
+Delete multiple rows by id at once:
+
+```ts
+const deleted = users.batchDelete([1, 2, 3, 99])
+// Returns the number of rows deleted (3 here)
+// Missing and duplicate ids are skipped (no error thrown)
+```
+
+On SheetsAdapter, `batchDelete` takes the script lock once, reads the id column
+once, and issues one `deleteRows` per contiguous run of rows, highest run first,
+so scattered ids cost one call per run instead of one `deleteRow` per id. Each
+run is attempted exactly once: if a run fails, the error is thrown, the runs
+already deleted stay deleted, and nothing is retried.
+
 ## Via Repository
 
 Batch operations are also available on the `Repository` directly:
@@ -102,11 +118,12 @@ const repo = db.from('users').repo
 
 repo.batchInsert([...])
 repo.batchUpdate([...])
+repo.batchDelete([...])
 ```
 
 ## Fallback Behavior
 
-If an adapter doesn't implement the optional `batchInsert` or `batchUpdate` methods, the Repository falls back to sequential individual operations automatically.
+If an adapter doesn't implement the optional `batchInsert`, `batchUpdate` or `batchDelete` methods, the Repository falls back to sequential individual operations automatically (`batchDelete` counts the `delete` calls that removed a row).
 
 ---
 

@@ -40,7 +40,8 @@ interface Recorder {
   reads: ReadCall[]
   writes: WriteCall[]
   appendRows: number
-  deleteRows: number
+  deleteRowCalls: number
+  deleteRowsCalls: { start: number; count: number }[]
   flushes: number
   clear(): void
   cellsRead(): number
@@ -51,13 +52,15 @@ function recordRangeCalls(sheet: FakeSheet): Recorder {
     reads: [],
     writes: [],
     appendRows: 0,
-    deleteRows: 0,
+    deleteRowCalls: 0,
+    deleteRowsCalls: [],
     flushes: 0,
     clear() {
       recorder.reads.length = 0
       recorder.writes.length = 0
       recorder.appendRows = 0
-      recorder.deleteRows = 0
+      recorder.deleteRowCalls = 0
+      recorder.deleteRowsCalls.length = 0
       recorder.flushes = 0
     },
     cellsRead() {
@@ -73,8 +76,13 @@ function recordRangeCalls(sheet: FakeSheet): Recorder {
     return originalAppendRow(values)
   }
   sheet.deleteRow = (row: number) => {
-    recorder.deleteRows++
+    recorder.deleteRowCalls++
     return originalDeleteRow(row)
+  }
+  const originalDeleteRows = sheet.deleteRows.bind(sheet)
+  sheet.deleteRows = (start: number, count: number) => {
+    recorder.deleteRowsCalls.push({ start, count })
+    return originalDeleteRows(start, count)
   }
   sheet.getRange = (row: number, col: number, numRows = 1, numCols = 1) => {
     const range = original(row, col, numRows, numCols)
@@ -108,6 +116,7 @@ interface Cost {
   setValues: number
   appendRow: number
   deleteRow: number
+  deleteRows: number
   flush: number
 }
 
@@ -117,12 +126,13 @@ function cost(recorder: Recorder): Cost {
     cells: recorder.cellsRead(),
     setValues: recorder.writes.length,
     appendRow: recorder.appendRows,
-    deleteRow: recorder.deleteRows,
+    deleteRow: recorder.deleteRowCalls,
+    deleteRows: recorder.deleteRowsCalls.length,
     flush: recorder.flushes
   }
 }
 
-const ZERO: Cost = { reads: 0, cells: 0, setValues: 0, appendRow: 0, deleteRow: 0, flush: 0 }
+const ZERO: Cost = { reads: 0, cells: 0, setValues: 0, appendRow: 0, deleteRow: 0, deleteRows: 0, flush: 0 }
 
 /**
  * Sheet with ids 1..n. Warms up with findAll() (header check + cache fill),
@@ -163,49 +173,66 @@ function seed(
 }
 
 describe('SheetsAdapter documented costs [#240]', () => {
-  it('findById reads the whole id column plus the row even when the read cache is warm', () => {
+  it('findById is served from the warm read cache', () => {
     const { adapter, recorder } = seed(100)
 
     expect(adapter.findById(50)?.id).toBe(50)
-    expect(recorder.reads).toEqual([
-      { startRow: 2, startCol: 1, numRows: 100, numCols: 1 },
-      { startRow: 51, startCol: 1, numRows: 1, numCols: C }
-    ])
+    expect(adapter.findById('50')?.id).toBe(50)
+    expect(adapter.findById(999)).toBeUndefined()
+    expect(recorder.reads).toEqual([])
     expect(recorder.writes).toEqual([])
   })
 
-  it('update and delete read the whole id column on every call', () => {
-    const { adapter, recorder, sheet } = seed(50)
+  it('cold-cache findById reads only the row once the id map is known', () => {
+    const { adapter, recorder } = seed(100)
 
-    let rowCount = sheet.getLastRow() - 1
-    adapter.update(10, { name: 'x' })
-    expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: rowCount, numCols: 1 })
-
+    adapter.update(1, { score: 0 })
     recorder.clear()
-    rowCount = sheet.getLastRow() - 1
-    adapter.delete(20)
-    expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: rowCount, numCols: 1 })
+
+    expect(adapter.findById(50)?.id).toBe(50)
+    expect(recorder.reads).toEqual([{ startRow: 51, startCol: 1, numRows: 1, numCols: C }])
   })
 
-  it('a loop of M single updates reads O(M*N) cells while one batchUpdate reads N*C', () => {
+  it('update and delete read the id column once per instance, then only the row or the id cell', () => {
+    const { adapter, recorder, sheet } = seed(50)
+
+    adapter.update(10, { name: 'x' })
+    expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: 50, numCols: 1 })
+
+    recorder.clear()
+    adapter.update(20, { name: 'x' })
+    expect(recorder.reads).toEqual([{ startRow: 21, startCol: 1, numRows: 1, numCols: C }])
+
+    // The map is warm, so delete verifies the hinted id cell only.
+    recorder.clear()
+    adapter.delete(30)
+    expect(recorder.reads).toEqual([{ startRow: 31, startCol: 1, numRows: 1, numCols: 1 }])
+    expect(recorder.deleteRowCalls).toBe(1)
+
+    // Id 40 moved from row 41 to row 40; the map was patched after the delete.
+    recorder.clear()
+    adapter.delete(40)
+    expect(recorder.reads).toEqual([{ startRow: 40, startCol: 1, numRows: 1, numCols: 1 }])
+
+    const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().flat()
+    expect(ids).toEqual(Array.from({ length: 50 }, (_, i) => i + 1).filter(id => id !== 30 && id !== 40))
+  })
+
+  it('a loop of M single updates reads N + M*C cells; batchUpdate still saves M-1 writes and 2M-2 flushes', () => {
     const N = 200
     const M = 200
 
     const loop = seed(N)
     for (let id = 1; id <= M; id++) loop.adapter.update(id, { score: 0 })
-    const loopCells = loop.recorder.cellsRead()
-    expect(loopCells).toBe(M * (N + C))
+    expect(loop.recorder.cellsRead()).toBe(N + M * C)
     expect(loop.recorder.writes).toHaveLength(M)
     expect(loop.recorder.flushes).toBe(2 * M)
 
     const batch = seed(N)
     batch.adapter.batchUpdate(Array.from({ length: M }, (_, i) => ({ id: i + 1, data: { score: 0 } })))
-    const batchCells = batch.recorder.cellsRead()
-    expect(batchCells).toBe(N * C)
+    expect(batch.recorder.cellsRead()).toBe(N * C)
     expect(batch.recorder.writes).toHaveLength(1)
     expect(batch.recorder.flushes).toBe(2)
-
-    expect(loopCells / batchCells).toBeGreaterThan(50)
   })
 
   it('batchUpdate on scattered rows costs one full-table read and one write per row', () => {
@@ -233,7 +260,7 @@ describe('SheetsAdapter documented costs [#240]', () => {
     expect(recorder.writes).toEqual([{ startRow: 32, numRows: 50, numCols: C }])
   })
 
-  it('every write drops the read cache, including an insert that throws', () => {
+  it('every write drops the read cache, including an insert that throws and batchDelete', () => {
     const { adapter, recorder, sheet } = seed(10, 'client')
 
     // Control: the cache is warm, so a second findAll reads nothing.
@@ -246,6 +273,11 @@ describe('SheetsAdapter documented costs [#240]', () => {
     adapter.findAll()
     expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: 10, numCols: C })
     expect(sheet.getLastRow() - 1).toBe(10)
+
+    adapter.batchDelete([1])
+    recorder.clear()
+    adapter.findAll()
+    expect(recorder.reads).toContainEqual({ startRow: 2, startCol: 1, numRows: 9, numCols: C })
   })
 
   it('unique: true is declarative — MockAdapter accepts duplicate values', () => {
@@ -279,25 +311,37 @@ describe('SheetsAdapter cost budget [#218]', () => {
     expect(cost(recorder)).toEqual(ZERO)
 
     adapter.findById(N / 2)
-    expect(cost(recorder)).toEqual({ ...ZERO, reads: 2, cells: N + C })
+    expect(cost(recorder)).toEqual(ZERO)
   })
 
   it.each([100, 1000, 5000])('locked single-row writes at N=%i', N => {
     const auto = seed(N)
     auto.adapter.insert({ name: 'new', score: 1 })
     expect(cost(auto.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, appendRow: 1, flush: 2 })
+    auto.recorder.clear()
+    auto.adapter.insert({ name: 'new', score: 1 })
+    expect(cost(auto.recorder)).toEqual({ ...ZERO, appendRow: 1, flush: 2 })
 
     const client = seed(N, 'client')
     client.adapter.insert({ id: N + 1, name: 'new', score: 1 })
     expect(cost(client.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, appendRow: 1, flush: 2 })
+    client.recorder.clear()
+    client.adapter.insert({ id: N + 2, name: 'new', score: 1 })
+    expect(cost(client.recorder)).toEqual({ ...ZERO, reads: 1, cells: N + 1, appendRow: 1, flush: 2 })
 
     const upd = seed(N)
     upd.adapter.update(N / 2, { score: 0 })
     expect(cost(upd.recorder)).toEqual({ ...ZERO, reads: 2, cells: N + C, setValues: 1, flush: 2 })
+    upd.recorder.clear()
+    upd.adapter.update(N / 2 + 1, { score: 0 })
+    expect(cost(upd.recorder)).toEqual({ ...ZERO, reads: 1, cells: C, setValues: 1, flush: 2 })
 
     const del = seed(N)
     del.adapter.delete(N / 2)
     expect(cost(del.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, deleteRow: 1, flush: 2 })
+    del.recorder.clear()
+    del.adapter.delete(N / 2 - 1)
+    expect(cost(del.recorder)).toEqual({ ...ZERO, reads: 1, cells: 1, deleteRow: 1, flush: 2 })
   })
 
   it.each([100, 1000, 5000])('batch writes at N=%i', N => {
@@ -313,10 +357,62 @@ describe('SheetsAdapter cost budget [#218]', () => {
     scattered.adapter.batchUpdate(Array.from({ length: 10 }, (_, i) => ({ id: i * 2 + 1, data: { score: 0 } })))
     expect(cost(scattered.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C, setValues: 10, flush: 2 })
 
+    const delContiguous = seed(N)
+    delContiguous.adapter.batchDelete(Array.from({ length: 100 }, (_, i) => i + 1))
+    expect(cost(delContiguous.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, deleteRows: 1, flush: 2 })
+
+    const delScattered = seed(N)
+    delScattered.adapter.batchDelete(Array.from({ length: 10 }, (_, i) => i * 2 + 1))
+    expect(cost(delScattered.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, deleteRows: 10, flush: 2 })
+
     const after = seed(N)
     after.adapter.update(1, { score: 0 })
     after.recorder.clear()
     after.adapter.findAll()
     expect(cost(after.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C })
+  })
+})
+
+describe('SheetsAdapter id memo [#137]', () => {
+  it('a loop of M auto inserts reads the id column once, not once per insert (N=1000, M=1000)', () => {
+    const N = 1000
+    const M = 1000
+    const { adapter, recorder } = seed(N)
+
+    const ids: number[] = []
+    for (let i = 0; i < M; i++) ids.push(adapter.insert({ name: `n-${i}`, score: i }).id)
+
+    // Before #137 this read M*N + M(M-1)/2 = 1,499,500 cells.
+    expect(cost(recorder)).toEqual({ ...ZERO, reads: 1, cells: N, appendRow: M, flush: 2 * M })
+    expect(ids).toEqual(Array.from({ length: M }, (_, i) => N + 1 + i))
+  })
+
+  it('4000 auto inserts into an empty table read 0 data cells (umbrella #232 probe)', () => {
+    const { adapter, recorder } = seed(0)
+
+    const ids: number[] = []
+    for (let i = 0; i < 4000; i++) ids.push(adapter.insert({ name: 'n', score: i }).id)
+
+    // Before #137 this read M(M-1)/2 = 7,998,000 cells.
+    expect(recorder.cellsRead()).toBe(0)
+    expect(recorder.appendRows).toBe(4000)
+    expect(ids).toEqual(Array.from({ length: 4000 }, (_, i) => i + 1))
+  })
+
+  it('a loop of M deletes reads N cells then 1 cell per delete', () => {
+    const N = 500
+    const { adapter, recorder, sheet } = seed(N)
+
+    for (let id = 1; id <= 100; id++) adapter.delete(id)
+
+    expect(cost(recorder)).toEqual({
+      ...ZERO,
+      reads: 100,
+      cells: N + 99,
+      deleteRow: 100,
+      flush: 200
+    })
+    const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().flat()
+    expect(ids).toEqual(Array.from({ length: 400 }, (_, i) => i + 101))
   })
 })

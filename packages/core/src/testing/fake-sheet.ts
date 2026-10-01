@@ -104,6 +104,20 @@ export class FakeSheet {
   }
 
   /**
+   * Deletes `howMany` rows starting at `rowPosition`, shifting subsequent rows
+   * up. Throws if the block is not fully inside the grid (GAS parity).
+   */
+  deleteRows(rowPosition: number, howMany: number): void {
+    if (rowPosition < 1 || howMany < 1 || rowPosition + howMany - 1 > this.grid.length) {
+      throw new Error(
+        `deleteRows: rows ${rowPosition}..${rowPosition + howMany - 1} are out of bounds ` +
+        `(sheet has ${this.grid.length} rows)`
+      )
+    }
+    this.grid.splice(rowPosition - 1, howMany)
+  }
+
+  /**
    * Inserts a blank column before `columnIndex` (1-indexed), shifting cells at
    * and after that position one column right. Rows whose content ends before
    * the position are left as-is (they read as blank there either way).

@@ -66,6 +66,7 @@ interface TableHandle<T extends RowWithId> {
   delete(id: string | number): void                    // throws RowNotFoundError
   batchInsert(data: (T | Omit<T, 'id'>)[]): T[]
   batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[]
+  batchDelete(ids: (string | number)[]): number        // missing ids skipped; returns rows deleted
 }
 ```
 
@@ -89,6 +90,7 @@ class Repository<T extends RowWithId> {
   exists(id: string | number): boolean
   batchInsert(data: (T | Omit<T, 'id'>)[]): T[]
   batchUpdate(items: { id: string | number; data: Partial<T> }[]): T[]
+  batchDelete(ids: (string | number)[]): number        // missing ids skipped; returns rows deleted
 }
 ```
 
@@ -193,6 +195,7 @@ class MockAdapter<T extends RowWithId> implements DataStore<T> {
   delete(id: string | number): boolean
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[]
   batchUpdate(items: BatchUpdateItem<T>[]): T[]
+  batchDelete(ids: (string | number)[]): number
 
   // Test helpers
   reset(data?: T[]): void
@@ -222,6 +225,7 @@ class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   delete(id: string | number): boolean
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[]
   batchUpdate(items: BatchUpdateItem<T>[]): T[]
+  batchDelete(ids: (string | number)[]): number
 
   clearCache(): void
   reset(data?: T[]): void

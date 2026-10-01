@@ -16,6 +16,7 @@ interface DataStore<T extends RowWithId> {
   delete(id: string | number): boolean
   batchInsert?(data: (T | Omit<T, 'id'>)[]): T[]
   batchUpdate?(items: BatchUpdateItem<T>[]): T[]
+  batchDelete?(ids: (string | number)[]): number
 }
 ```
 
@@ -87,7 +88,7 @@ const raw = store.getRawData()
 - O(1) ID lookups via internal Map index
 - Column indexing support for query optimization
 - Supports both `auto` and `client` ID modes
-- Batch operations (batchInsert, batchUpdate)
+- Batch operations (batchInsert, batchUpdate, batchDelete)
 
 ## SheetsAdapter
 
@@ -195,7 +196,7 @@ SheetsAdapter uses internal caching for performance:
 store.findAll() // reads from sheet
 store.findAll() // returns cached copy
 
-// findById always reads the id column plus the row from the sheet
+// findById is served from the same cache when it is warm (no sheet read)
 store.findById(1)
 
 // Any write drops the cache

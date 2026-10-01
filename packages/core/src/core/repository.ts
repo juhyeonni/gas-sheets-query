@@ -181,4 +181,20 @@ export class Repository<T extends RowWithId> {
     }
     return results
   }
+
+  /**
+   * Batch delete multiple rows by ID
+   * Skips ids that don't exist (no error thrown); returns how many rows were deleted
+   */
+  batchDelete(ids: (string | number)[]): number {
+    if (this.store.batchDelete) {
+      return this.store.batchDelete(ids)
+    }
+    // Fallback: delete one by one
+    let deleted = 0
+    for (const id of ids) {
+      if (this.store.delete(id)) deleted++
+    }
+    return deleted
+  }
 }

@@ -287,6 +287,18 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     return results
   }
 
+  /**
+   * Batch delete multiple rows by id
+   * Returns how many rows were deleted (skips ids that don't exist)
+   */
+  batchDelete(ids: (string | number)[]): number {
+    let deleted = 0
+    for (const id of new Set(ids)) {
+      if (this.delete(id)) deleted++
+    }
+    return deleted
+  }
+
   /** Test helper: reset all data (seeded verbatim, see {@link MockAdapterOptions.initialData}) */
   reset(data: T[] = []): void {
     this.data = [...data]
