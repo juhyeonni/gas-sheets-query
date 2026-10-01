@@ -137,7 +137,7 @@ export class Repository<T extends RowWithId> {
    * Count all rows
    */
   count(): number {
-    return this.store.findAll().length
+    return this.store.count ? this.store.count() : this.store.findAll().length
   }
 
   /**

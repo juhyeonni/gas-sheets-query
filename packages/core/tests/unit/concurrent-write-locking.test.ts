@@ -136,31 +136,6 @@ function interruptAfterIdScan(sheet: FakeSheet, run: () => void): void {
   )
 }
 
-/**
- * Fires `run` once, right after the first full-width data-block read returns —
- * i.e. between batchUpdate's "read every row" and its ranged writes, where a
- * concurrent deleteRow shifts every computed row index up by one.
- */
-function interruptAfterDataScan(sheet: FakeSheet, run: () => void): void {
-  let armed = true
-  const original = sheet.getRange.bind(sheet)
-  vi.spyOn(sheet, 'getRange').mockImplementation(
-    (row: number, col: number, numRows = 1, numCols = 1) => {
-      const range = original(row, col, numRows, numCols)
-      if (armed && row === 2 && col === 1 && numCols === COLUMNS.length) {
-        armed = false
-        const getValues = range.getValues.bind(range)
-        range.getValues = () => {
-          const values = getValues()
-          run()
-          return values
-        }
-      }
-      return range
-    }
-  )
-}
-
 /** Fires `run` once, right after the first `getLastRow()` reads its value. */
 function interruptAfterLastRow(sheet: FakeSheet, run: () => void): void {
   let armed = true
@@ -301,10 +276,10 @@ describe('SheetsAdapter concurrency (#128)', () => {
       const other = concurrentExecution(lockState, () => {
         deleter.delete(1)
       })
-      // The delete lands between the data-block read and writeRowRuns, so an
+      // The delete lands between the id-column read and writeRowRuns, so an
       // unlocked batchUpdate writes Carol's values into row 4 — which by then
       // holds Dave.
-      interruptAfterDataScan(sheet, () => other.run())
+      interruptAfterIdScan(sheet, () => other.run())
 
       const results = writer.batchUpdate([{ id: 3, data: { name: 'Carol Updated' } }])
       other.drain()

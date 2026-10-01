@@ -30,7 +30,8 @@ same execution only burns what is left of the run, so the library does not.
 - Prefer `batchInsert` / `batchUpdate` / `batchDelete` / a single `query()` over
   per-row calls. Quota is consumed per Sheets API call, and a batch is one
   ranged write. `batchInsert` is one ranged write (client mode reads the id keys once per batch; auto mode reads the id column at most once per adapter instance);
-  `batchUpdate` is one full-table read plus one write per contiguous run of
+  `batchUpdate` reads the id column, then only the rows from the first to the
+  last matched one (`N + span*C` cells), plus one write per contiguous run of
   updated rows (worst case one per row); `batchDelete` is one id-column read
   plus one `deleteRows` per contiguous run of deleted rows.
 - Single-row calls in a loop are cheap on the read side, because the adapter
@@ -179,6 +180,9 @@ stated). A *cell* is one value returned by `getValues`; `flush` is
 | `findAll` / `find`, warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `findAll` after a write | 1 | `N*C` | 0 | 0 | 300 | 3,000 | 15,000 |
 | `findById`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `count`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `count` after a write (cache cold, header verified) | 1 | `N` | 0 | 0 | 100 | 1,000 | 5,000 |
+| `count` after `clearCache()` | 2 | `C + N` | 0 | 0 | 103 | 1,003 | 5,003 |
 | `findById` after `clearCache()` (cache and id map cold, header re-checked) | 3 | `C + N + C` | 0 | 0 | 106 | 1,006 | 5,006 |
 | `findById`, cache cold, id map warm | 1 | `C` | 0 | 0 | 3 | 3 | 3 |
 | `insert` (auto id), first in the instance | 1 | `N` | 1 `appendRow` | 2 | 100 | 1,000 | 5,000 |
@@ -191,14 +195,25 @@ stated). A *cell* is one value returned by `getValues`; `flush` is
 | `delete`, later calls | 1 | 1 | 1 `deleteRow` | 2 | 1 | 1 | 1 |
 | `delete`, stale hint | 2 | `1 + N` | 1 `deleteRow` | 2 | 101 | 1,001 | 5,001 |
 | `batchInsert` of 100 rows | 1 | `N` | 1 `setValues` | 2 | 100 | 1,000 | 5,000 |
-| `batchUpdate` of 100 contiguous ids | 1 | `N*C` | 1 `setValues` | 2 | 300 | 3,000 | 15,000 |
-| `batchUpdate` of 10 scattered ids | 1 | `N*C` | 10 `setValues` | 2 | 300 | 3,000 | 15,000 |
+| `batchUpdate` of 1 id | 2 | `N + C` | 1 `setValues` | 2 | 103 | 1,003 | 5,003 |
+| `batchUpdate` of 100 contiguous ids | 2 | `N + 100*C` | 1 `setValues` | 2 | 400 | 1,300 | 5,300 |
+| `batchUpdate` of 10 scattered ids (ids `1,3,...,19`, span 19 rows) | 2 | `N + 19*C` | 10 `setValues` | 2 | 157 | 1,057 | 5,057 |
 | `batchDelete` of 100 contiguous ids | 1 | `N` | 1 `deleteRows` | 2 | 100 | 1,000 | 5,000 |
 | `batchDelete` of 10 scattered ids | 1 | `N` | 10 `deleteRows` | 2 | 100 | 1,000 | 5,000 |
 
 A loop of M auto-id inserts into an N-row sheet therefore reads `N` cells once
 instead of `M*N + M(M-1)/2` (for N = 1,000 and M = 1,000 that is 1,000 instead
 of 1,499,500), and a loop of M updates reads `N + M*C`.
+
+`batchUpdate` reads the id column, then one block spanning the first to the last
+matched row; rows in between are read but never written. When the first and last
+rows are both updated the span is the whole table, so it reads `N + N*C` cells
+(`N` more than a single full read). Both reads are retried on transient failures.
+
+`count()` is the number of rows with a non-empty id cell, which is what
+`repo.count()` returns on SheetsAdapter. A row with a blank id (for example one
+typed in by hand) is returned by `findAll` but not counted. A warm cache answers
+with no read; otherwise it reads the id column once and does not fill the cache.
 
 These numbers are call and cell counts, not timings. They are pinned by
 `packages/core/tests/unit/sheets-adapter-documented-costs.test.ts`, so CI fails

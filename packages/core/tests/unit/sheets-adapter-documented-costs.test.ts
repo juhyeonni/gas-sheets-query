@@ -4,10 +4,11 @@
  *
  * Costs are counted in sheet reads (cells) and writes (calls) on the data sheet.
  */
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { SheetsAdapter } from '../../src/adapters/sheets-adapter'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
 import { DuplicateIdError } from '../../src/core/errors'
+import { Repository } from '../../src/core/repository'
 import type { FakeSheet } from '../../src/testing/fake-sheet'
 import { fromArrays } from '../../src/testing/loaders'
 import { installGasFakes, type GasFakesHandle } from '../../src/testing/install'
@@ -230,18 +231,23 @@ describe('SheetsAdapter documented costs [#240]', () => {
 
     const batch = seed(N)
     batch.adapter.batchUpdate(Array.from({ length: M }, (_, i) => ({ id: i + 1, data: { score: 0 } })))
-    expect(batch.recorder.cellsRead()).toBe(N * C)
+    // Worst case: every row is dirty, so the span is the whole table and the
+    // id-column read adds N cells on top (the pre-#236 read was N*C = 600).
+    expect(batch.recorder.cellsRead()).toBe(N + M * C)
     expect(batch.recorder.writes).toHaveLength(1)
     expect(batch.recorder.flushes).toBe(2)
   })
 
-  it('batchUpdate on scattered rows costs one full-table read and one write per row', () => {
+  it('batchUpdate on scattered rows reads the id column and the matched span, then writes one row per run', () => {
     const { adapter, recorder } = seed(20)
 
     const ids = Array.from({ length: 10 }, (_, i) => i * 2 + 1)
     adapter.batchUpdate(ids.map(id => ({ id, data: { score: 0 } })))
 
-    expect(recorder.reads).toEqual([{ startRow: 2, startCol: 1, numRows: 20, numCols: C }])
+    expect(recorder.reads).toEqual([
+      { startRow: 2, startCol: 1, numRows: 20, numCols: 1 },
+      { startRow: 2, startCol: 1, numRows: 19, numCols: C }
+    ])
     expect(recorder.writes).toHaveLength(10)
     expect(recorder.writes.every(w => w.numRows === 1)).toBe(true)
   })
@@ -312,6 +318,23 @@ describe('SheetsAdapter cost budget [#218]', () => {
 
     adapter.findById(N / 2)
     expect(cost(recorder)).toEqual(ZERO)
+
+    expect(adapter.count()).toBe(N)
+    expect(cost(recorder)).toEqual(ZERO)
+  })
+
+  it.each([100, 1000, 5000])('count after a write and after clearCache at N=%i', N => {
+    const afterWrite = seed(N)
+    afterWrite.adapter.update(1, { score: 0 })
+    afterWrite.recorder.clear()
+    expect(afterWrite.adapter.count()).toBe(N)
+    expect(cost(afterWrite.recorder)).toEqual({ ...ZERO, reads: 1, cells: N })
+
+    const afterClear = seed(N)
+    afterClear.adapter.clearCache()
+    afterClear.recorder.clear()
+    expect(afterClear.adapter.count()).toBe(N)
+    expect(cost(afterClear.recorder)).toEqual({ ...ZERO, reads: 2, cells: C + N })
   })
 
   it.each([100, 1000, 5000])('locked single-row writes at N=%i', N => {
@@ -351,11 +374,11 @@ describe('SheetsAdapter cost budget [#218]', () => {
 
     const contiguous = seed(N)
     contiguous.adapter.batchUpdate(Array.from({ length: 100 }, (_, i) => ({ id: i + 1, data: { score: 0 } })))
-    expect(cost(contiguous.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C, setValues: 1, flush: 2 })
+    expect(cost(contiguous.recorder)).toEqual({ ...ZERO, reads: 2, cells: N + 100 * C, setValues: 1, flush: 2 })
 
     const scattered = seed(N)
     scattered.adapter.batchUpdate(Array.from({ length: 10 }, (_, i) => ({ id: i * 2 + 1, data: { score: 0 } })))
-    expect(cost(scattered.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C, setValues: 10, flush: 2 })
+    expect(cost(scattered.recorder)).toEqual({ ...ZERO, reads: 2, cells: N + 19 * C, setValues: 10, flush: 2 })
 
     const delContiguous = seed(N)
     delContiguous.adapter.batchDelete(Array.from({ length: 100 }, (_, i) => i + 1))
@@ -469,5 +492,105 @@ describe('SheetsAdapter id memo [#137]', () => {
     const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues().flat()
     expect(ids).not.toContain(50)
     expect(ids).toHaveLength(N - 2)
+  })
+})
+
+describe('SheetsAdapter batchUpdate and count [#236]', () => {
+  it('a 1-row batchUpdate at N=5,000 reads the id column plus one row, not the table', () => {
+    const N = 5000
+    const { adapter, recorder } = seed(N)
+
+    expect(adapter.batchUpdate([{ id: 2500, data: { score: 0 } }])).toEqual([
+      { id: 2500, name: 'user-2500', score: 0 }
+    ])
+
+    // Before #236 this was one read of N*C = 15,000 cells (50,000 at C = 10).
+    expect(recorder.reads).toEqual([
+      { startRow: 2, startCol: 1, numRows: N, numCols: 1 },
+      { startRow: 2501, startCol: 1, numRows: 1, numCols: C }
+    ])
+    expect(cost(recorder)).toEqual({ ...ZERO, reads: 2, cells: N + C, setValues: 1, flush: 2 })
+  })
+
+  it('batchUpdate with no matching id reads only the id column and writes nothing', () => {
+    const { adapter, recorder } = seed(100)
+
+    expect(adapter.batchUpdate([{ id: 999, data: { score: 0 } }])).toEqual([])
+
+    expect(recorder.reads).toEqual([{ startRow: 2, startCol: 1, numRows: 100, numCols: 1 }])
+    expect(recorder.writes).toEqual([])
+    expect(recorder.flushes).toBe(2)
+  })
+
+  it('batchUpdate updates every row with a matching id, in sheet order, reading only the min..max span', () => {
+    const rows: unknown[][] = [COLUMNS, [1, 'a', 10], [7, 'b', 20], [3, 'c', 30], [7, 'd', 40], [5, 'e', 50]]
+    const spreadsheet = fromArrays({ [SHEET_NAME]: rows })
+    handles.push(installGasFakes({ spreadsheets: { [SPREADSHEET_ID]: spreadsheet }, activeId: SPREADSHEET_ID }))
+    const sheet = spreadsheet.getSheetByName(SHEET_NAME)
+    if (!sheet) throw new Error('sheet missing')
+    const adapter = new SheetsAdapter<Row>({ spreadsheetId: SPREADSHEET_ID, sheetName: SHEET_NAME, columns: COLUMNS })
+    adapter.findAll()
+    const recorder = recordRangeCalls(sheet)
+
+    const results = adapter.batchUpdate([
+      { id: '7' as unknown as number, data: { score: 99 } },
+      { id: 3, data: { score: 33 } }
+    ])
+
+    expect(results).toEqual([
+      { id: 7, name: 'b', score: 99 },
+      { id: 3, name: 'c', score: 33 },
+      { id: 7, name: 'd', score: 99 }
+    ])
+    expect(recorder.reads).toEqual([
+      { startRow: 2, startCol: 1, numRows: 5, numCols: 1 },
+      { startRow: 3, startCol: 1, numRows: 3, numCols: C }
+    ])
+    expect(recorder.writes).toEqual([{ startRow: 3, numRows: 3, numCols: C }])
+    expect(sheet.getRange(2, 1, 5, C).getValues()).toEqual([
+      [1, 'a', 10],
+      [7, 'b', 99],
+      [3, 'c', 33],
+      [7, 'd', 99],
+      [5, 'e', 50]
+    ])
+  })
+
+  it('cold count() at N=5,000 reads the id column once; warm count() reads nothing', () => {
+    const N = 5000
+    const { adapter, recorder } = seed(N)
+    adapter.update(1, { score: 0 })
+    recorder.clear()
+
+    expect(adapter.count()).toBe(N)
+    expect(cost(recorder)).toEqual({ ...ZERO, reads: 1, cells: N })
+    expect(recorder.reads).toEqual([{ startRow: 2, startCol: 1, numRows: N, numCols: 1 }])
+
+    adapter.findAll()
+    recorder.clear()
+    expect(adapter.count()).toBe(N)
+    expect(cost(recorder)).toEqual(ZERO)
+
+    const fresh = seed(N, 'auto', false)
+    expect(fresh.adapter.count()).toBe(N)
+    expect(cost(fresh.recorder)).toEqual({ ...ZERO, reads: 2, cells: C + N })
+
+    // count did not fill the read cache.
+    fresh.recorder.clear()
+    fresh.adapter.findAll()
+    expect(fresh.recorder.reads).toEqual([{ startRow: 2, startCol: 1, numRows: N, numCols: C }])
+  })
+
+  it('Repository.count() over SheetsAdapter no longer reads every cell (umbrella #232 probe)', () => {
+    const N = 5000
+    const { adapter, recorder } = seed(N, 'auto', false)
+    const findAll = vi.spyOn(adapter, 'findAll')
+    const repo = new Repository(adapter, 'Users')
+
+    expect(repo.count()).toBe(N)
+
+    // Before #236 this read N*C + C = 15,003 cells.
+    expect(recorder.cellsRead()).toBe(C + N)
+    expect(findAll).not.toHaveBeenCalled()
   })
 })

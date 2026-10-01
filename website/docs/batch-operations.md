@@ -60,7 +60,7 @@ const updated = users.batchUpdate([
 
 ### Performance
 
-On SheetsAdapter, `batchUpdate` reads the whole table once, then writes one `setValues()` per contiguous run of updated rows — a contiguous block is one write, scattered rows cost one write each.
+On SheetsAdapter, `batchUpdate` reads the id column, then only the rows from the first to the last matched one (`N + span*C` cells), then writes one `setValues()` per contiguous run of updated rows — a contiguous block is one write, scattered rows cost one write each.
 
 ### Behavior
 

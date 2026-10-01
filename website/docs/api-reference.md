@@ -226,6 +226,8 @@ class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[]
   batchUpdate(items: BatchUpdateItem<T>[]): T[]
   batchDelete(ids: (string | number)[]): number
+  /** Rows with a non-empty id cell; 0 reads when the cache is warm, else one id-column read */
+  count(): number
 
   clearCache(): void
   reset(data?: T[]): void

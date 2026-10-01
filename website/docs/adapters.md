@@ -17,6 +17,7 @@ interface DataStore<T extends RowWithId> {
   batchInsert?(data: (T | Omit<T, 'id'>)[]): T[]
   batchUpdate?(items: BatchUpdateItem<T>[]): T[]
   batchDelete?(ids: (string | number)[]): number
+  count?(): number
 }
 ```
 

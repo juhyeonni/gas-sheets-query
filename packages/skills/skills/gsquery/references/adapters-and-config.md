@@ -15,6 +15,7 @@ interface DataStore<T extends RowWithId> {
   batchInsert?(data: (T | Omit<T, 'id'>)[]): T[]
   batchUpdate?(items: BatchUpdateItem<T>[]): T[]
   batchDelete?(ids: (string | number)[]): number
+  count?(): number
 }
 
 interface BatchUpdateItem<T> {
@@ -136,7 +137,7 @@ type ColumnType =
 
 ### Features
 
-- **Data caching**: `find`/`findAll` read the sheet once per execution; any write drops the cache; `findById` is served from it when warm (no sheet read); `update`/`delete` act on the live sheet using a per-instance id-to-row map verified under the lock. Per-call costs: cold `findAll` `N*C + C` cells; first `update` `N + C`, later `C`; first `delete` `N`, later 1; auto `insert` `N` once per instance, later 0; `batchDelete` `N` plus one `deleteRows` per contiguous run; 2 `flush()` per locked write (full table: Operations, "Measured Costs")
+- **Data caching**: `find`/`findAll` read the sheet once per execution; any write drops the cache; `findById` is served from it when warm (no sheet read); `update`/`delete` act on the live sheet using a per-instance id-to-row map verified under the lock. Per-call costs: cold `findAll` `N*C + C` cells; first `update` `N + C`, later `C`; first `delete` `N`, later 1; auto `insert` `N` once per instance, later 0; `batchUpdate` `N + span*C` (span = first to last matched row); `count` `N` cold (rows with a non-empty id), 0 warm; `batchDelete` `N` plus one `deleteRows` per contiguous run; 2 `flush()` per locked write (full table: Operations, "Measured Costs")
 - **LockService**: Concurrent-safe auto-increment ID generation
 - **Column types**: Automatic serialization/deserialization (JSON for arrays/objects, booleans, dates)
 - **Auto-detect JSON**: Parses JSON strings in cells automatically

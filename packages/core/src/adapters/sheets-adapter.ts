@@ -187,8 +187,10 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _metaSheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null
-  // Data cache - invalidated on write operations
-  private _dataCache: T[] | null = null
+  // Data cache - invalidated on write operations. `idCount` is the number of
+  // retained raw rows with a non-empty id cell, taken before deserialization so
+  // count() agrees warm and cold (#236).
+  private _dataCache: { rows: T[]; idCount: number } | null = null
   /**
    * id -> 1-based physical row, built only from a raw read of the id column
    * (#137). Never built from {@link _dataCache}: findAll drops blank rows, so
@@ -888,25 +890,44 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this.assertHeaderAligned()
 
     if (this._dataCache !== null) {
-      return [...this._dataCache]
+      return [...this._dataCache.rows]
     }
 
     const sheet = this.getSheet()
     const lastRow = sheet.getLastRow()
 
     if (lastRow <= 1) {
-      this._dataCache = []
+      this._dataCache = { rows: [], idCount: 0 }
       return []
     }
 
     const dataRange = sheet.getRange(2, 1, lastRow - 1, this.columns.length)
     const values = this.sheetsCall(() => dataRange.getValues())
+    const idColIndex = this.columns.indexOf(this.idColumn)
 
-    this._dataCache = values
-      .filter(row => row.some(cell => cell !== ''))
-      .map(row => this.rowToObject(row))
+    const retained = values.filter(row => row.some(cell => cell !== ''))
+    this._dataCache = {
+      rows: retained.map(row => this.rowToObject(row)),
+      idCount: retained.filter(row => !isEmptyCellValue(row[idColIndex])).length
+    }
 
-    return [...this._dataCache]
+    return [...this._dataCache.rows]
+  }
+
+  /**
+   * Number of data rows whose id cell is not empty, i.e. the rows a caller can
+   * address by id. A blank-id row (for example one a person typed in) is
+   * returned by {@link findAll} but not counted; a duplicated id counts once
+   * per row.
+   *
+   * A warm read cache answers with no I/O. Otherwise it reads the id column
+   * once and does not fill the cache.
+   */
+  count(): number {
+    this.assertHeaderAligned()
+
+    if (this._dataCache !== null) return this._dataCache.idCount
+    return this.readIdColumn().filter(value => !isEmptyCellValue(value)).length
   }
 
   findById(id: string | number): T | undefined {
@@ -915,7 +936,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // Same staleness as find/findAll: a warm read cache answers without I/O.
     if (this._dataCache !== null) {
       const key = String(id)
-      return this._dataCache.find(row => String((row as Record<string, unknown>)[this.idColumn]) === key)
+      return this._dataCache.rows.find(row => String((row as Record<string, unknown>)[this.idColumn]) === key)
     }
 
     const found = this.locateRow(id)
@@ -1146,44 +1167,49 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       updateMap.set(id, data)
     }
 
-    // Read, resolve row indices and write inside one lock. The row numbers
-    // below are positions within the block read at the top, so a concurrent
-    // deleteRow or insert landing in between shifts them and the ranged writes
-    // hit the wrong rows — the stale-index race of #128, amplified because
-    // writeRowRuns rewrites a whole contiguous span at once (#155).
+    // Resolve row indices, read and write inside one lock. The row numbers come
+    // from the id-column read made in this lock acquisition; a concurrent
+    // deleteRow or insert landing between that read and the writes would shift
+    // them and the ranged writes would hit the wrong rows — the stale-index
+    // race of #128, amplified because writeRowRuns rewrites a whole contiguous
+    // span at once (#155).
     // withScriptLock is re-entrant, so callers already holding the lock (a
     // migration delegating to batchUpdate) reuse their acquisition.
     return this.withLock(() => {
-      const results: T[] = []
+      // Every row whose id matches is updated, duplicates included. Unescape so
+      // an escaped id still matches the caller's id (#130).
+      const matched: number[] = []
+      this.readIdColumn().forEach((cell, i) => {
+        const rowId = this.unescapeCellValue(cell) as string | number
+        if (updateMap.has(rowId) || updateMap.has(String(rowId))) matched.push(i + 2) // +2 for header and 1-indexing
+      })
+      if (matched.length === 0) return []
 
-      // Get all data to find rows to update
-      const lastRow = sheet.getLastRow()
-      if (lastRow <= 1) return results
-
-      const allData = sheet.getRange(2, 1, lastRow - 1, this.columns.length).getValues()
+      // One read covers the first to the last matched row; rows in between are
+      // read but never written.
+      const first = matched[0]
+      const span = this.sheetsCall(() =>
+        sheet.getRange(first, 1, matched[matched.length - 1] - first + 1, this.columns.length).getValues()
+      )
       const idColIndex = this.columns.indexOf(this.idColumn)
 
+      const results: T[] = []
       const updatedRows: { rowIndex: number; values: unknown[] }[] = []
 
-      for (let i = 0; i < allData.length; i++) {
-        // Unescape so an escaped id still matches the caller's id (#130).
-        const rowId = this.unescapeCellValue(allData[i][idColIndex]) as string | number
+      for (const rowIndex of matched) {
+        const raw = span[rowIndex - first]
+        const rowId = this.unescapeCellValue(raw[idColIndex]) as string | number
         const updateData = updateMap.get(rowId) ?? updateMap.get(String(rowId))
 
-        if (updateData) {
-          const currentRow = this.rowToObject(allData[i])
-          const updatedRow = { ...currentRow, ...updateData } as T
-          // id is immutable via batchUpdate too — mirrors the guard update()
-          // already has (#98/#113). Without this, `data` carrying an id rewrites
-          // the key cell and the row becomes reachable only at its new id.
-          ;(updatedRow as Record<string, unknown>)[this.idColumn] =
-            (currentRow as Record<string, unknown>)[this.idColumn]
-          results.push(updatedRow)
-          updatedRows.push({
-            rowIndex: i + 2, // +2 for header and 1-indexing
-            values: this.objectToRow(updatedRow)
-          })
-        }
+        const currentRow = this.rowToObject(raw)
+        const updatedRow = { ...currentRow, ...updateData } as T
+        // id is immutable via batchUpdate too — mirrors the guard update()
+        // already has (#98/#113). Without this, `data` carrying an id rewrites
+        // the key cell and the row becomes reachable only at its new id.
+        ;(updatedRow as Record<string, unknown>)[this.idColumn] =
+          (currentRow as Record<string, unknown>)[this.idColumn]
+        results.push(updatedRow)
+        updatedRows.push({ rowIndex, values: this.objectToRow(updatedRow) })
       }
 
       this.writeRowRuns(sheet, updatedRows)

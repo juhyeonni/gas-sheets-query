@@ -125,6 +125,13 @@ export interface DataStore<T extends RowWithId = RowWithId> {
   batchDelete?(ids: (string | number)[]): number
 
   /**
+   * Number of rows (optional). Must equal the number of rows a caller can
+   * address by id. Stores that can answer without materializing every row
+   * implement it; Repository.count() falls back to `findAll().length`.
+   */
+  count?(): number
+
+  /**
    * Physically add a column to the underlying storage (optional).
    *
    * Implemented by stores whose column set is fixed and positional, such as
