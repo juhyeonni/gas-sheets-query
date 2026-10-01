@@ -353,7 +353,7 @@ export class JoinQueryBuilder<T extends RowWithId> {
 
     const countOptions: QueryOptions<T> = {
       where: [...this.whereConditions],
-      orderBy: [...this.orderByConditions]
+      orderBy: []
     }
 
     if (!hasInnerJoin) {
@@ -364,13 +364,16 @@ export class JoinQueryBuilder<T extends RowWithId> {
     // With inner join, execute full query without pagination for accurate count
     const savedLimit = this.limitValue
     const savedOffset = this.offsetValue
+    const savedOrderBy = this.orderByConditions
     this.limitValue = undefined
     this.offsetValue = undefined
+    this.orderByConditions = []
     try {
       return this.exec().length
     } finally {
       this.limitValue = savedLimit
       this.offsetValue = savedOffset
+      this.orderByConditions = savedOrderBy
     }
   }
 

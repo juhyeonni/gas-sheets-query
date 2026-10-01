@@ -187,7 +187,7 @@ export class QueryBuilder<T extends RowWithId> {
    * Execute and return count of results
    */
   count(): number {
-    return this.store.find(this.buildWithoutPagination()).length
+    return this.findUnpaginated(false).length
   }
 
   /**
@@ -195,7 +195,7 @@ export class QueryBuilder<T extends RowWithId> {
    * Returns 0 for empty datasets (sum of nothing is 0)
    */
   sum<K extends keyof T & string>(field: K): number {
-    const rows = this.getRowsForAggregation()
+    const rows = this.findUnpaginated(false)
     return rows.reduce((acc, row) => {
       const value = row[field]
       return acc + (typeof value === 'number' ? value : 0)
@@ -207,7 +207,7 @@ export class QueryBuilder<T extends RowWithId> {
    * Returns null if no rows match
    */
   avg<K extends keyof T & string>(field: K): number | null {
-    const rows = this.getRowsForAggregation()
+    const rows = this.findUnpaginated(false)
     if (rows.length === 0) return null
     const values = rows
       .map(row => row[field])
@@ -221,7 +221,7 @@ export class QueryBuilder<T extends RowWithId> {
    * Returns null if no rows or no numeric values exist
    */
   min<K extends keyof T & string>(field: K): number | null {
-    const rows = this.getRowsForAggregation()
+    const rows = this.findUnpaginated(false)
     if (rows.length === 0) return null
     const values = rows
       .map(row => row[field])
@@ -234,7 +234,7 @@ export class QueryBuilder<T extends RowWithId> {
    * Returns null if no rows or no numeric values exist
    */
   max<K extends keyof T & string>(field: K): number | null {
-    const rows = this.getRowsForAggregation()
+    const rows = this.findUnpaginated(false)
     if (rows.length === 0) return null
     const values = rows
       .map(row => row[field])
@@ -263,9 +263,12 @@ export class QueryBuilder<T extends RowWithId> {
    * Execute aggregation and return results
    * If groupBy() was called, returns grouped results
    * Otherwise returns a single aggregation result
+   *
+   * orderBy decides the order of groups; it is ignored by count/sum/avg/min/max
+   * and by agg() without groupBy().
    */
   agg<A extends Record<string, AggSpec>>(specs: A): GroupedAggResult<(typeof this.groupByFields)[number], A>[] {
-    const rows = this.getRowsForAggregation()
+    const rows = this.findUnpaginated(this.groupByFields.length > 0)
     
     if (this.groupByFields.length === 0) {
       // No grouping - return single result
@@ -332,20 +335,14 @@ export class QueryBuilder<T extends RowWithId> {
   // ============================================================================
 
   /**
-   * Build query options without limit/offset (for count and aggregations)
+   * Fetch all matching rows, ignoring limit/offset. Sorting is only requested
+   * when the order of the result matters (grouped aggregation).
    */
-  private buildWithoutPagination(): QueryOptions<T> {
-    return {
+  private findUnpaginated(ordered: boolean): T[] {
+    return this.store.find({
       where: [...this.whereConditions],
-      orderBy: [...this.orderByConditions]
-    }
-  }
-
-  /**
-   * Get rows for aggregation (ignores limit/offset)
-   */
-  private getRowsForAggregation(): T[] {
-    return this.store.find(this.buildWithoutPagination())
+      orderBy: ordered ? [...this.orderByConditions] : []
+    })
   }
 
   /**

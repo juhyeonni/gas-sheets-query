@@ -11,7 +11,7 @@ import type {
   UpdateData,
   AddColumnOptions
 } from '../core/types.js'
-import { evaluateCondition, compareRows } from '../core/query-utils.js'
+import { applyQuery } from '../core/query-utils.js'
 import {
   CellSizeLimitError,
   DuplicateIdError,
@@ -871,31 +871,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this.assertHeaderAligned()
 
     // Get all data first (GAS doesn't support SQL-like queries)
-    let result = this.findAll()
-    
-    // Apply where conditions
-    if (options.where.length > 0) {
-      result = result.filter(row =>
-        options.where.every(condition => evaluateCondition(row, condition))
-      )
-    }
-    
-    // Apply ordering
-    if (options.orderBy.length > 0) {
-      result.sort((a, b) => compareRows(a, b, options.orderBy))
-    }
-    
-    // Apply offset
-    if (options.offsetValue !== undefined && options.offsetValue > 0) {
-      result = result.slice(options.offsetValue)
-    }
-    
-    // Apply limit
-    if (options.limitValue !== undefined && options.limitValue >= 0) {
-      result = result.slice(0, options.limitValue)
-    }
-    
-    return result
+    const rows = this.findAll()
+    return applyQuery(rows, options.where, options)
   }
 
   insert(data: Omit<T, 'id'> | T): T {

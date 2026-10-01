@@ -4,7 +4,7 @@
 import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types.js'
 import { IndexStore } from '../core/index-store.js'
 import type { IndexDefinition } from '../core/index-store.js'
-import { evaluateCondition, compareRows } from '../core/query-utils.js'
+import { applyQuery } from '../core/query-utils.js'
 import { DuplicateIdError } from '../core/errors.js'
 
 /** MockAdapter configuration options */
@@ -98,44 +98,18 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
       }
     }
     
-    // Get candidate rows (from index or full scan)
-    let result: T[]
+    // Get candidate rows (from index or full scan); applyQuery never mutates them
+    let candidates: T[] = this.data
     if (candidateIndices !== undefined) {
-      // Index-based: only check rows in candidate set
-      result = []
+      candidates = []
       for (const idx of candidateIndices) {
         if (idx < this.data.length) {
-          result.push(this.data[idx])
+          candidates.push(this.data[idx])
         }
       }
-    } else {
-      // Full scan
-      result = [...this.data]
     }
 
-    // Apply remaining where conditions (non-indexed or non-equality)
-    if (remainingConditions.length > 0) {
-      result = result.filter(row => 
-        remainingConditions.every(condition => evaluateCondition(row, condition))
-      )
-    }
-
-    // Apply ordering
-    if (options.orderBy.length > 0) {
-      result.sort((a, b) => compareRows(a, b, options.orderBy))
-    }
-
-    // Apply offset
-    if (options.offsetValue !== undefined && options.offsetValue > 0) {
-      result = result.slice(options.offsetValue)
-    }
-
-    // Apply limit
-    if (options.limitValue !== undefined && options.limitValue >= 0) {
-      result = result.slice(0, options.limitValue)
-    }
-
-    return result
+    return applyQuery(candidates, remainingConditions, options)
   }
   
   /**

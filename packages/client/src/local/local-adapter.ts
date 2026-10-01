@@ -19,8 +19,7 @@ import type {
 } from '@gsquery/core'
 import {
   IndexStore,
-  evaluateCondition,
-  compareRows,
+  applyQuery,
   deserializeRow,
   DuplicateIdError,
 } from '@gsquery/core'
@@ -240,37 +239,17 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       }
     }
 
-    let result: T[]
+    let candidates: T[] = this.data
     if (candidateIndices !== undefined) {
-      result = []
+      candidates = []
       for (const idx of candidateIndices) {
         if (idx < this.data.length) {
-          result.push(this.data[idx])
+          candidates.push(this.data[idx])
         }
       }
-    } else {
-      result = [...this.data]
     }
 
-    if (remainingConditions.length > 0) {
-      result = result.filter(row =>
-        remainingConditions.every(c => evaluateCondition(row, c))
-      )
-    }
-
-    if (options.orderBy.length > 0) {
-      result.sort((a, b) => compareRows(a, b, options.orderBy))
-    }
-
-    if (options.offsetValue !== undefined && options.offsetValue > 0) {
-      result = result.slice(options.offsetValue)
-    }
-
-    if (options.limitValue !== undefined && options.limitValue >= 0) {
-      result = result.slice(0, options.limitValue)
-    }
-
-    return result
+    return applyQuery(candidates, remainingConditions, options)
   }
 
   findById(id: string | number): T | undefined {

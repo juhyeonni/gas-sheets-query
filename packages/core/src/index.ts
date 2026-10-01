@@ -49,7 +49,8 @@ export { SheetsAdapter, MAX_CELL_LENGTH, META_SHEET_NAME } from './adapters/shee
 export type { ColumnType, SheetsAdapterOptions } from './adapters/sheets-adapter.js'
 
 // Query utilities
-export { evaluateCondition, compareRows } from './core/query-utils.js'
+export { evaluateCondition, compareRows, compileCondition, compileWhere, sortRows, applyQuery } from './core/query-utils.js'
+export type { RowPredicate } from './core/query-utils.js'
 
 // Column type conversion
 export { deserializeColumnValue, deserializeRow } from './core/column-conversion.js'

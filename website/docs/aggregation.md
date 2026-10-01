@@ -122,6 +122,8 @@ const byCategoryAndRegion = orders.query()
 // ]
 ```
 
+Groups are returned in the order their first row appears in the query result, so `.orderBy(field)` before `.groupBy()` controls group order. `count()`, `sum()`, `avg()`, `min()`, `max()` and `agg()` without `groupBy()` ignore `orderBy` and do not sort.
+
 ## Having
 
 Filter groups by aggregation conditions (applied after grouping):
