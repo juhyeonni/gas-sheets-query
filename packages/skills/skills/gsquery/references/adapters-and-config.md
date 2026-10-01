@@ -135,7 +135,7 @@ type ColumnType =
 
 ### Features
 
-- **Data caching**: `find`/`findAll` read the sheet once per execution; any write drops the cache; `findById`/`update`/`delete` bypass it and read the whole id column per call — batch instead of looping
+- **Data caching**: `find`/`findAll` read the sheet once per execution; any write drops the cache; `findById`/`update`/`delete` bypass it and read the whole id column per call — batch instead of looping. Per-call costs: cold `findAll` `N*C + C` cells, `findById`/`update` `N + C`, `insert`/`delete` `N`, 2 `flush()` per locked write (full table: Operations, "Measured Costs")
 - **LockService**: Concurrent-safe auto-increment ID generation
 - **Column types**: Automatic serialization/deserialization (JSON for arrays/objects, booleans, dates)
 - **Auto-detect JSON**: Parses JSON strings in cells automatically

@@ -167,7 +167,7 @@ for (const row of rows) {
 
 ### 4. SheetsAdapter Caching
 
-Only `find`/`findAll` and anything built on them (`query()`, JOINs, aggregation) use the `SheetsAdapter` cache. `findById`/`update`/`delete` always read the whole id column live. Every write drops the cache, including an `insert` that throws:
+Only `find`/`findAll` and anything built on them (`query()`, JOINs, aggregation) use the `SheetsAdapter` cache. `findById`/`update`/`delete` always read the whole id column live. Every write drops the cache, including an `insert` that throws. Exact per-call costs are in [Measured Costs](./operations.md#measured-costs).
 
 ```ts
 store.findAll()  // reads from sheet

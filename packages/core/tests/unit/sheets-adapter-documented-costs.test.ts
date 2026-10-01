@@ -4,13 +4,13 @@
  *
  * Costs are counted in sheet reads (cells) and writes (calls) on the data sheet.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { SheetsAdapter } from '../../src/adapters/sheets-adapter'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
 import { DuplicateIdError } from '../../src/core/errors'
 import type { FakeSheet } from '../../src/testing/fake-sheet'
 import { fromArrays } from '../../src/testing/loaders'
-import { installGasFakes } from '../../src/testing/install'
+import { installGasFakes, type GasFakesHandle } from '../../src/testing/install'
 
 interface Row {
   id: number
@@ -39,6 +39,9 @@ interface WriteCall {
 interface Recorder {
   reads: ReadCall[]
   writes: WriteCall[]
+  appendRows: number
+  deleteRows: number
+  flushes: number
   clear(): void
   cellsRead(): number
 }
@@ -47,16 +50,32 @@ function recordRangeCalls(sheet: FakeSheet): Recorder {
   const recorder: Recorder = {
     reads: [],
     writes: [],
+    appendRows: 0,
+    deleteRows: 0,
+    flushes: 0,
     clear() {
       recorder.reads.length = 0
       recorder.writes.length = 0
+      recorder.appendRows = 0
+      recorder.deleteRows = 0
+      recorder.flushes = 0
     },
     cellsRead() {
       return recorder.reads.reduce((sum, r) => sum + r.numRows * r.numCols, 0)
     }
   }
   const original = sheet.getRange.bind(sheet)
+  const originalAppendRow = sheet.appendRow.bind(sheet)
+  const originalDeleteRow = sheet.deleteRow.bind(sheet)
 
+  sheet.appendRow = (values: unknown[]) => {
+    recorder.appendRows++
+    return originalAppendRow(values)
+  }
+  sheet.deleteRow = (row: number) => {
+    recorder.deleteRows++
+    return originalDeleteRow(row)
+  }
   sheet.getRange = (row: number, col: number, numRows = 1, numCols = 1) => {
     const range = original(row, col, numRows, numCols)
     const readValues = range.getValues.bind(range)
@@ -76,19 +95,49 @@ function recordRangeCalls(sheet: FakeSheet): Recorder {
   return recorder
 }
 
+const handles: GasFakesHandle[] = []
+
+afterEach(() => {
+  // Restore in reverse install order (see testing/install.ts).
+  while (handles.length > 0) handles.pop()?.restore()
+})
+
+interface Cost {
+  reads: number
+  cells: number
+  setValues: number
+  appendRow: number
+  deleteRow: number
+  flush: number
+}
+
+function cost(recorder: Recorder): Cost {
+  return {
+    reads: recorder.reads.length,
+    cells: recorder.cellsRead(),
+    setValues: recorder.writes.length,
+    appendRow: recorder.appendRows,
+    deleteRow: recorder.deleteRows,
+    flush: recorder.flushes
+  }
+}
+
+const ZERO: Cost = { reads: 0, cells: 0, setValues: 0, appendRow: 0, deleteRow: 0, flush: 0 }
+
 /**
  * Sheet with ids 1..n. Warms up with findAll() (header check + cache fill),
  * then clears the recorder so assertions count only the operation under test.
  */
 function seed(
   rowCount: number,
-  idMode: 'auto' | 'client' = 'auto'
+  idMode: 'auto' | 'client' = 'auto',
+  warm = true
 ): { adapter: SheetsAdapter<Row>; recorder: Recorder; sheet: FakeSheet } {
   const rows: unknown[][] = [COLUMNS]
   for (let i = 1; i <= rowCount; i++) rows.push([i, `user-${i}`, i * 10])
 
   const spreadsheet = fromArrays({ [SHEET_NAME]: rows })
-  installGasFakes({ spreadsheets: { [SPREADSHEET_ID]: spreadsheet }, activeId: SPREADSHEET_ID })
+  handles.push(installGasFakes({ spreadsheets: { [SPREADSHEET_ID]: spreadsheet }, activeId: SPREADSHEET_ID }))
 
   const sheet = spreadsheet.getSheetByName(SHEET_NAME)
   if (!sheet) throw new Error('seed: sheet missing')
@@ -101,7 +150,14 @@ function seed(
   })
   const recorder = recordRangeCalls(sheet)
 
-  adapter.findAll()
+  const spreadsheetApp = (globalThis as unknown as { SpreadsheetApp: { flush: () => void } }).SpreadsheetApp
+  const originalFlush = spreadsheetApp.flush.bind(spreadsheetApp)
+  spreadsheetApp.flush = () => {
+    recorder.flushes++
+    originalFlush()
+  }
+
+  if (warm) adapter.findAll()
   recorder.clear()
   return { adapter, recorder, sheet }
 }
@@ -140,12 +196,14 @@ describe('SheetsAdapter documented costs [#240]', () => {
     const loopCells = loop.recorder.cellsRead()
     expect(loopCells).toBe(M * (N + C))
     expect(loop.recorder.writes).toHaveLength(M)
+    expect(loop.recorder.flushes).toBe(2 * M)
 
     const batch = seed(N)
     batch.adapter.batchUpdate(Array.from({ length: M }, (_, i) => ({ id: i + 1, data: { score: 0 } })))
     const batchCells = batch.recorder.cellsRead()
     expect(batchCells).toBe(N * C)
     expect(batch.recorder.writes).toHaveLength(1)
+    expect(batch.recorder.flushes).toBe(2)
 
     expect(loopCells / batchCells).toBeGreaterThan(50)
   })
@@ -200,5 +258,65 @@ describe('SheetsAdapter documented costs [#240]', () => {
 
     const found = adapter.find({ where: [{ field: 'email', operator: '=', value: 'a@x' }], orderBy: [] })
     expect(found).toHaveLength(2)
+  })
+})
+
+describe('SheetsAdapter cost budget [#218]', () => {
+  it.each([100, 1000, 5000])('read paths at N=%i', N => {
+    const cold = seed(N, 'auto', false)
+    cold.adapter.findAll()
+    expect(cost(cold.recorder)).toEqual({ ...ZERO, reads: 2, cells: N * C + C })
+    expect(cold.recorder.reads).toEqual([
+      { startRow: 1, startCol: 1, numRows: 1, numCols: C },
+      { startRow: 2, startCol: 1, numRows: N, numCols: C }
+    ])
+
+    const { adapter, recorder } = seed(N)
+    adapter.findAll()
+    expect(cost(recorder)).toEqual(ZERO)
+
+    adapter.find({ where: [{ field: 'score', operator: '>', value: 5 }], orderBy: [] })
+    expect(cost(recorder)).toEqual(ZERO)
+
+    adapter.findById(N / 2)
+    expect(cost(recorder)).toEqual({ ...ZERO, reads: 2, cells: N + C })
+  })
+
+  it.each([100, 1000, 5000])('locked single-row writes at N=%i', N => {
+    const auto = seed(N)
+    auto.adapter.insert({ name: 'new', score: 1 })
+    expect(cost(auto.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, appendRow: 1, flush: 2 })
+
+    const client = seed(N, 'client')
+    client.adapter.insert({ id: N + 1, name: 'new', score: 1 })
+    expect(cost(client.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, appendRow: 1, flush: 2 })
+
+    const upd = seed(N)
+    upd.adapter.update(N / 2, { score: 0 })
+    expect(cost(upd.recorder)).toEqual({ ...ZERO, reads: 2, cells: N + C, setValues: 1, flush: 2 })
+
+    const del = seed(N)
+    del.adapter.delete(N / 2)
+    expect(cost(del.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, deleteRow: 1, flush: 2 })
+  })
+
+  it.each([100, 1000, 5000])('batch writes at N=%i', N => {
+    const ins = seed(N)
+    ins.adapter.batchInsert(Array.from({ length: 100 }, (_, i) => ({ name: `n-${i}`, score: i })))
+    expect(cost(ins.recorder)).toEqual({ ...ZERO, reads: 1, cells: N, setValues: 1, flush: 2 })
+
+    const contiguous = seed(N)
+    contiguous.adapter.batchUpdate(Array.from({ length: 100 }, (_, i) => ({ id: i + 1, data: { score: 0 } })))
+    expect(cost(contiguous.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C, setValues: 1, flush: 2 })
+
+    const scattered = seed(N)
+    scattered.adapter.batchUpdate(Array.from({ length: 10 }, (_, i) => ({ id: i * 2 + 1, data: { score: 0 } })))
+    expect(cost(scattered.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C, setValues: 10, flush: 2 })
+
+    const after = seed(N)
+    after.adapter.update(1, { score: 0 })
+    after.recorder.clear()
+    after.adapter.findAll()
+    expect(cost(after.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C })
   })
 })

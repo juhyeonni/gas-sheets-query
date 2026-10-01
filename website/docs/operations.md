@@ -146,6 +146,33 @@ JOINs, aggregation).
 Long-running triggers that poll for external edits must call `clearCache()`
 between passes.
 
+## Measured Costs
+
+Sheet calls made by `SheetsAdapter` on the data sheet, for a table with `N`
+rows and `C` columns (measured with `C = 3`, ids `1..N`, read cache warm unless
+stated). A *cell* is one value returned by `getValues`; `flush` is
+`SpreadsheetApp.flush()`, called twice per top-level locked write.
+
+| Operation | `getValues` calls | Cells read | Writes | `flush` | N=100 | N=1,000 | N=5,000 |
+|-----------|------------------:|-----------:|--------|--------:|------:|--------:|--------:|
+| `findAll`, cold (first read, or after `clearCache()`) | 2 | `N*C + C` | 0 | 0 | 303 | 3,003 | 15,003 |
+| `findAll` / `find`, warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `findAll` after a write | 1 | `N*C` | 0 | 0 | 300 | 3,000 | 15,000 |
+| `findById` | 2 | `N + C` | 0 | 0 | 103 | 1,003 | 5,003 |
+| `insert` (auto or client id) | 1 | `N` | 1 `appendRow` | 2 | 100 | 1,000 | 5,000 |
+| `update` | 2 | `N + C` | 1 `setValues` | 2 | 103 | 1,003 | 5,003 |
+| `delete` | 1 | `N` | 1 `deleteRow` | 2 | 100 | 1,000 | 5,000 |
+| `batchInsert` of 100 rows | 1 | `N` | 1 `setValues` | 2 | 100 | 1,000 | 5,000 |
+| `batchUpdate` of 100 contiguous ids | 1 | `N*C` | 1 `setValues` | 2 | 300 | 3,000 | 15,000 |
+| `batchUpdate` of 10 scattered ids | 1 | `N*C` | 10 `setValues` | 2 | 300 | 3,000 | 15,000 |
+
+These numbers are call and cell counts, not timings. They are pinned by
+`packages/core/tests/unit/sheets-adapter-documented-costs.test.ts`, so CI fails
+if a change to the adapter alters them; such a change must update this table in
+the same commit. They count data-sheet calls only (the auto-id counter on the
+`_gsquery_meta` sheet is excluded), and real GAS per-call latency is not
+measured.
+
 ## Checklist Before Going to Production
 
 - Writes go through batch APIs, not per-row loops.
