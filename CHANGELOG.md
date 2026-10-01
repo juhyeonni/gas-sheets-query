@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/juhyeonni/gas-sheets-query/compare/v1.2.0...v1.3.0) (2026-10-01)
+
+
+### Features
+
+* remove per-call O(N) costs in SheetsAdapter and shared query code, add batchDelete and count ([#243](https://github.com/juhyeonni/gas-sheets-query/issues/243)) ([7806d7f](https://github.com/juhyeonni/gas-sheets-query/commit/7806d7fe577af939645a15499fe345c42a2f1c9f))
+
+
+### Bug Fixes
+
+* compact MutationQueue writes, align index and groupBy semantics, avoid Math.max spread, correct perf docs ([#241](https://github.com/juhyeonni/gas-sheets-query/issues/241)) ([42ead06](https://github.com/juhyeonni/gas-sheets-query/commit/42ead06a9b6230807a15706415f69319645a8d56))
+
 ## [1.2.0](https://github.com/juhyeonni/gas-sheets-query/compare/v1.1.0...v1.2.0) (2026-09-15)
 
 
