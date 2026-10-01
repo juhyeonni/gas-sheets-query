@@ -3,6 +3,7 @@
  */
 import type { RowWithId, DataStore, QueryOptions, Operator, SingleValueOperator, SortDirection, WhereCondition, OrderByCondition } from './types.js'
 import { NoResultsError } from './errors.js'
+import { serializeValues } from './index-store.js'
 
 /**
  * Aggregation specification
@@ -225,7 +226,7 @@ export class QueryBuilder<T extends RowWithId> {
     const values = rows
       .map(row => row[field])
       .filter(v => typeof v === 'number') as number[]
-    return values.length > 0 ? Math.min(...values) : null
+    return values.length > 0 ? values.reduce((a, b) => Math.min(a, b), Infinity) : null
   }
 
   /**
@@ -238,7 +239,7 @@ export class QueryBuilder<T extends RowWithId> {
     const values = rows
       .map(row => row[field])
       .filter(v => typeof v === 'number') as number[]
-    return values.length > 0 ? Math.max(...values) : null
+    return values.length > 0 ? values.reduce((a, b) => Math.max(a, b), -Infinity) : null
   }
 
   /**
@@ -275,7 +276,7 @@ export class QueryBuilder<T extends RowWithId> {
     // Group rows by fields
     const groups = new Map<string, T[]>()
     for (const row of rows) {
-      const key = this.groupByFields.map(f => String(row[f])).join('|')
+      const key = serializeValues(this.groupByFields.map(f => row[f]))
       if (!groups.has(key)) {
         groups.set(key, [])
       }
@@ -373,10 +374,10 @@ export class QueryBuilder<T extends RowWithId> {
             result[name] = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : 0
             break
           case 'min':
-            result[name] = values.length > 0 ? Math.min(...values) : 0
+            result[name] = values.length > 0 ? values.reduce((a, b) => Math.min(a, b), Infinity) : 0
             break
           case 'max':
-            result[name] = values.length > 0 ? Math.max(...values) : 0
+            result[name] = values.length > 0 ? values.reduce((a, b) => Math.max(a, b), -Infinity) : 0
             break
         }
       }

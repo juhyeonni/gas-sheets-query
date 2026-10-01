@@ -193,7 +193,7 @@ tables:
 | Attribute | Purpose |
 |-----------|---------|
 | `@id` | Primary key |
-| `@unique` | Unique constraint |
+| `@unique` | Unique constraint (declarative only — not enforced) |
 | `@default(value)` | Default value |
 | `@default(autoincrement)` | Auto-increment |
 | `@default(now)` | Current timestamp |
@@ -206,7 +206,7 @@ tables:
 | Attribute | Purpose |
 |-----------|---------|
 | `@@index([fields])` | Column index |
-| `@@unique([fields])` | Unique composite constraint |
+| `@@unique([fields])` | Unique composite constraint (declarative only — not enforced) |
 | `@@map(sheetName)` | Map to sheet name |
 
 ---

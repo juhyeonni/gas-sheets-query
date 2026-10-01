@@ -207,6 +207,8 @@ tables:
       - [authorId]
 ```
 
+Indexes are used by MockAdapter and LocalAdapter for `=` lookups and have no effect on SheetsAdapter; `unique` is declarative only and is not enforced at runtime (see [Indexing and Performance](./indexing-and-performance.md)).
+
 ### Generated Types (Example Output)
 
 ```ts

@@ -166,6 +166,7 @@ interface SyncAdapter {
 interface SyncQueue {
   getMerged(): MergedMutation[]
   currentSeq(): number
+  snapshotBoundary(): number
   clearForRows(ids: Set<string | number>, maxSeq?: number): void
   purgeCancelled(maxSeq?: number): void
   push(type: 'insert' | 'update' | 'delete', id: string | number, data?: Partial<RowWithId>): void
@@ -198,6 +199,7 @@ export class SyncEngine {
   private readonly listeners: SyncEventListener[] = []
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null
   private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null
+  private disposed = false
   private readonly pushDebounceMs: number
   private syncing = false
   private opChain: Promise<unknown> = Promise.resolve()
@@ -225,6 +227,7 @@ export class SyncEngine {
     queue: MutationQueue<T>
   ): void {
     this.tables.set(tableName, { adapter, queue })
+    adapter.onLocalMutation(() => this.schedulePush())
   }
 
   /** Subscribe to sync events */
@@ -500,7 +503,7 @@ export class SyncEngine {
     // Boundary: only mutations enqueued up to this point are part of this push.
     // Anything enqueued during the await below (higher seq) must survive the
     // clear, otherwise concurrent local writes are silently lost (#109).
-    const boundary = binding.queue.currentSeq()
+    const boundary = binding.queue.snapshotBoundary()
 
     let result: SyncPushResult
     try {
@@ -657,8 +660,9 @@ export class SyncEngine {
     this.emit({ type: 'error', error: toError(err) })
   }
 
-  /** Schedule a debounced push (called after local mutations) */
+  /** Schedule a debounced push (called automatically after local mutations; no-op after dispose) */
   schedulePush(): void {
+    if (this.disposed) return
     if (this.pushDebounceMs <= 0) return
     if (this.pushDebounceTimer) clearTimeout(this.pushDebounceTimer)
     this.pushDebounceTimer = setTimeout(() => {
@@ -690,6 +694,7 @@ export class SyncEngine {
 
   /** Cleanup */
   dispose(): void {
+    this.disposed = true
     this.stopAutoSync()
     if (this.pushDebounceTimer) {
       clearTimeout(this.pushDebounceTimer)

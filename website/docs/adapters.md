@@ -191,17 +191,22 @@ The `columnTypes` option enables type-aware serialization for complex data:
 SheetsAdapter uses internal caching for performance:
 
 ```ts
-// Data is cached after the first findAll() call
+// find/findAll (and query/JOIN/aggregation) are served from the cache after the first read
 store.findAll() // reads from sheet
 store.findAll() // returns cached copy
 
-// Write operations automatically invalidate the cache
+// findById always reads the id column plus the row from the sheet
+store.findById(1)
+
+// Any write drops the cache
 store.insert(data) // cache cleared
 store.findAll()    // reads from sheet again
 
 // Manually clear all caches (sheet refs + data)
 store.clearCache()
 ```
+
+See [Operations](./operations.md) for the real read and write costs per operation.
 
 ### Concurrency
 

@@ -142,7 +142,7 @@ It adds no runtime behaviour: no automatic JOIN, no foreign-key integrity check 
 
 ### Block Attributes
 
-Indexes and composite unique constraints are declared with sibling `indexes:` and `unique:` keys, each holding a list of field-name arrays:
+Indexes and composite unique constraints are declared with sibling `indexes:` and `unique:` keys, each holding a list of field-name arrays. Indexes are used by MockAdapter and LocalAdapter for `=` lookups and have no effect on SheetsAdapter; `unique` is declarative only and is not enforced at runtime (see [Indexing and Performance](./indexing-and-performance.md)).
 
 ```yaml
 tables:

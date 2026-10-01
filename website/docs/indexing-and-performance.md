@@ -1,6 +1,6 @@
 # Indexing and Performance
 
-gas-sheets-query supports column indexing for query optimization in the `MockAdapter`.
+Column indexes speed up `=` lookups in MockAdapter and LocalAdapter (`@gsquery/client`). They have no effect on SheetsAdapter (GAS), which reads the sheet for every query. `unique` is declarative only and no adapter enforces it.
 
 ## IndexStore
 
@@ -17,7 +17,7 @@ const store = new MockAdapter<User>({
   initialData: [...],
   indexes: [
     { fields: ['status'] },                  // single-column index
-    { fields: ['email'], unique: true },     // unique index
+    { fields: ['email'], unique: true },     // unique: declarative only, not enforced
     { fields: ['role', 'status'] }           // composite index
   ]
 })
@@ -28,7 +28,7 @@ const store = new MockAdapter<User>({
 | Type | Definition | Lookup |
 |------|-----------|--------|
 | Single column | `{ fields: ['status'] }` | Equality on `status` |
-| Unique | `{ fields: ['email'], unique: true }` | Unique constraint on `email` |
+| Unique | `{ fields: ['email'], unique: true }` | Declarative only — not enforced at runtime |
 | Composite | `{ fields: ['role', 'status'] }` | Equality on both `role` AND `status` |
 
 ## How Indexes Work
@@ -68,7 +68,7 @@ Composite index on ['role', 'status']:
 
 ## Index Utilization in Queries
 
-The `MockAdapter.find()` method automatically uses available indexes:
+`MockAdapter.find()` and `LocalAdapter.find()` automatically uses available indexes:
 
 1. Extract equality conditions from the query
 2. Try single-field index lookups
@@ -142,6 +142,8 @@ Indexes are automatically maintained on data changes:
 indexes: [{ fields: ['status'] }]
 ```
 
+Applies to MockAdapter/LocalAdapter only; SheetsAdapter ignores `indexes`.
+
 ### 2. Use Composite Indexes for Multi-Field Queries
 
 ```ts
@@ -151,7 +153,7 @@ indexes: [{ fields: ['role', 'status'] }]
 
 ### 3. Batch Operations
 
-Use `batchInsert` and `batchUpdate` instead of loops:
+Use `batchInsert` and `batchUpdate` instead of loops (see [Operations](./operations.md) for why a per-row loop costs O(M·N) cells read on SheetsAdapter):
 
 ```ts
 // Good: single batch call
@@ -165,7 +167,7 @@ for (const row of rows) {
 
 ### 4. SheetsAdapter Caching
 
-`SheetsAdapter` caches `findAll()` results. The cache is invalidated on writes:
+Only `find`/`findAll` and anything built on them (`query()`, JOINs, aggregation) use the `SheetsAdapter` cache. `findById`/`update`/`delete` always read the whole id column live. Every write drops the cache, including an `insert` that throws:
 
 ```ts
 store.findAll()  // reads from sheet

@@ -20,10 +20,39 @@ describe('IndexStore', () => {
       expect(createIndexKey(['a', 'b', 'c'])).toBe('a|b|c')
     })
 
-    it('should serialize values correctly', () => {
-      expect(serializeValues(['active'])).toBe('["active"]')
-      expect(serializeValues(['admin', 'active'])).toBe('["admin","active"]')
-      expect(serializeValues([1, 'test', true])).toBe('[1,"test",true]')
+    it('serializeValues encodes the same identity as the scan\'s = comparison', () => {
+      expect(serializeValues([null])).not.toBe(serializeValues([undefined]))
+      expect(serializeValues([1])).not.toBe(serializeValues(['1']))
+      expect(serializeValues([new Date(1000)])).toBe(serializeValues([new Date(1000)]))
+      expect(serializeValues([new Date(1000)])).toBe(serializeValues([1000]))
+      expect(serializeValues([new Date(0)])).not.toBe(serializeValues([new Date(0).toISOString()]))
+      expect(serializeValues(['a|b', 'c'])).not.toBe(serializeValues(['a', 'b|c']))
+      expect(serializeValues([NaN])).not.toBe(serializeValues([null]))
+      expect(serializeValues([true])).not.toBe(serializeValues(['true']))
+    })
+  })
+
+  describe('lookup and candidates', () => {
+    it('lookup returns an empty Set on a value miss and undefined when no index exists', () => {
+      const store = new IndexStore<User>([{ fields: ['status'] }])
+      store.rebuild([{ id: 1, status: 'a' } as User])
+      const miss = store.lookup(['status'], ['zzz'])
+      expect(miss).toBeInstanceOf(Set)
+      expect(miss!.size).toBe(0)
+      expect(store.lookup(['other'], ['x'])).toBeUndefined()
+      expect(store.lookup(['status'], ['zzz'])).not.toBe(miss)
+    })
+
+    it('candidates returns ascending row indices regardless of insertion order', () => {
+      const store = new IndexStore<User>([{ fields: ['role'] }])
+      store.addToIndex(4, { role: 'x' } as User)
+      store.addToIndex(3, { role: 'x' } as User)
+      const eq = { field: 'role', operator: '=' as const, value: 'x' }
+      expect(store.candidates([eq])).toEqual({ rows: [3, 4], remaining: [] })
+      const gt = { field: 'age', operator: '>' as const, value: 1 }
+      expect(store.candidates([eq, gt])).toEqual({ rows: [3, 4], remaining: [gt] })
+      expect(store.candidates([gt])).toBeUndefined()
+      expect(new IndexStore<User>([]).candidates([eq])).toBeUndefined()
     })
   })
 
@@ -73,7 +102,7 @@ describe('IndexStore', () => {
       store.rebuild(users)
       
       const result = store.lookup(['status'], ['pending'])
-      expect(result).toBeUndefined() // No match returns undefined
+      expect(result).toEqual(new Set()) // Indexed miss is an empty set
     })
 
     it('should track index existence', () => {

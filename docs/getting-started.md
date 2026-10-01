@@ -116,6 +116,8 @@ tables:
       - [authorId]
 ```
 
+Indexes are used by MockAdapter and LocalAdapter for `=` lookups and have no effect on SheetsAdapter.
+
 ### 2. Schema Syntax
 
 #### Types
@@ -138,7 +140,7 @@ nickname: string?    # string | undefined
 | Attribute | Description |
 |-----------|-------------|
 | `@id` | Primary key |
-| `@unique` | Unique constraint |
+| `@unique` | Unique constraint (declarative only — not enforced at runtime) |
 | `@default(value)` | Default value |
 | `@updatedAt` | Auto-update timestamp |
 

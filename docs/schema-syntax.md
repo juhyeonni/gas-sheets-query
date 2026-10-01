@@ -120,7 +120,7 @@ createdAt: datetime @default(now)
 
 ### @unique
 
-Specifies that the field value must be unique.
+Marks the field as unique. Declarative only — not enforced at runtime.
 
 ```yaml
 email: string @unique
@@ -184,7 +184,7 @@ Attributes applied at the table level.
 
 ### indexes
 
-Creates indexes.
+Declares indexes. Used by MockAdapter and LocalAdapter for `=` lookups; no effect on SheetsAdapter.
 
 ```yaml
 tables:
@@ -199,7 +199,7 @@ tables:
 
 ### unique
 
-Creates composite unique constraints.
+Declares composite unique constraints. Declarative only — not enforced at runtime.
 
 ```yaml
 tables:
