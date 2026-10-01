@@ -4,8 +4,11 @@
  * Issue #7: Schema-based auto index creation and query utilization
  *
  * Structure:
- *   - Single column: "status" → Map<value, Set<rowIndex>>
- *   - Composite column: "field1|field2" → Map<serializeValues([val1, val2]), Set<rowIndex>>
+ *   - Single column: "status" → Map<value, Set<key>>
+ *   - Composite column: "field1|field2" → Map<serializeValues([val1, val2]), Set<key>>
+ *
+ * The key is the row position by default; MockAdapter and LocalAdapter use the
+ * row id so that a delete never has to renumber other buckets.
  */
 
 import type { Row, WhereCondition } from './types.js'
@@ -47,6 +50,10 @@ export function serializeValues(values: unknown[]): string {
 /**
  * IndexStore - Per-table index management
  *
+ * `K` is the bucket key type: the row position (`number`, the default) or any
+ * stable row key such as an id. `rebuild` and `reindexAfterDelete` are
+ * positional and only available on the default.
+ *
  * @example
  * ```ts
  * const store = new IndexStore<User>([
@@ -58,20 +65,20 @@ export function serializeValues(values: unknown[]): string {
  * // Build index when loading data
  * store.rebuild(users)
  *
- * // Lookup: row indices where status='active'
- * const indices = store.lookup(['status'], ['active'])
+ * // Lookup: row positions where status='active'
+ * const positions = store.lookup(['status'], ['active'])
  * ```
  */
-export class IndexStore<T extends Row> {
+export class IndexStore<T extends Row, K = number> {
   /** List of index definitions */
   private definitions: IndexDefinition[]
 
   /**
    * Index storage
    * key: "field1|field2|..." (index key)
-   * value: Map<serializedValue, Set<rowIndex>>
+   * value: Map<serializedValue, Set<key>>
    */
-  private indexes: Map<string, Map<string, Set<number>>> = new Map()
+  private indexes: Map<string, Map<string, Set<K>>> = new Map()
 
   constructor(definitions: IndexDefinition[] = []) {
     this.definitions = definitions
@@ -108,10 +115,10 @@ export class IndexStore<T extends Row> {
   /**
    * Add a single row to the index
    */
-  addToIndex(rowIndex: number, row: T): void {
+  addToIndex(key: K, row: T): void {
     for (const def of this.definitions) {
-      const key = createIndexKey(def.fields)
-      const index = this.indexes.get(key)
+      const indexName = createIndexKey(def.fields)
+      const index = this.indexes.get(indexName)
       if (!index) continue
 
       const values = this.extractValues(row, def.fields)
@@ -122,17 +129,17 @@ export class IndexStore<T extends Row> {
         rowSet = new Set()
         index.set(serialized, rowSet)
       }
-      rowSet.add(rowIndex)
+      rowSet.add(key)
     }
   }
 
   /**
    * Remove a single row from the index
    */
-  removeFromIndex(rowIndex: number, row: T): void {
+  removeFromIndex(key: K, row: T): void {
     for (const def of this.definitions) {
-      const key = createIndexKey(def.fields)
-      const index = this.indexes.get(key)
+      const indexName = createIndexKey(def.fields)
+      const index = this.indexes.get(indexName)
       if (!index) continue
 
       const values = this.extractValues(row, def.fields)
@@ -140,7 +147,7 @@ export class IndexStore<T extends Row> {
 
       const rowSet = index.get(serialized)
       if (rowSet) {
-        rowSet.delete(rowIndex)
+        rowSet.delete(key)
         if (rowSet.size === 0) {
           index.delete(serialized)
         }
@@ -151,10 +158,10 @@ export class IndexStore<T extends Row> {
   /**
    * Update index when a row is modified
    */
-  updateIndex(rowIndex: number, oldRow: T, newRow: T): void {
+  updateIndex(key: K, oldRow: T, newRow: T): void {
     for (const def of this.definitions) {
-      const key = createIndexKey(def.fields)
-      const index = this.indexes.get(key)
+      const indexName = createIndexKey(def.fields)
+      const index = this.indexes.get(indexName)
       if (!index) continue
 
       const oldValues = this.extractValues(oldRow, def.fields)
@@ -167,7 +174,7 @@ export class IndexStore<T extends Row> {
         // Remove from old value
         const oldSet = index.get(oldSerialized)
         if (oldSet) {
-          oldSet.delete(rowIndex)
+          oldSet.delete(key)
           if (oldSet.size === 0) {
             index.delete(oldSerialized)
           }
@@ -179,7 +186,7 @@ export class IndexStore<T extends Row> {
           newSet = new Set()
           index.set(newSerialized, newSet)
         }
-        newSet.add(rowIndex)
+        newSet.add(key)
       }
     }
   }
@@ -187,7 +194,7 @@ export class IndexStore<T extends Row> {
   /**
    * Rebuild indexes from all data
    */
-  rebuild(data: T[]): void {
+  rebuild(this: IndexStore<T, number>, data: T[]): void {
     this.initializeIndexes()
 
     for (let i = 0; i < data.length; i++) {
@@ -196,13 +203,13 @@ export class IndexStore<T extends Row> {
   }
 
   /**
-   * Lookup row indices by field combination
+   * Lookup row keys by field combination
    *
    * @param fields - Fields to search (must match index definition order)
    * @param values - Values to search (same order as fields)
-   * @returns Matching row indices, or undefined if no index exists
+   * @returns Matching row keys, or undefined if no index exists
    */
-  lookup(fields: string[], values: unknown[]): Set<number> | undefined {
+  lookup(fields: string[], values: unknown[]): Set<K> | undefined {
     const key = createIndexKey(fields)
     const index = this.indexes.get(key)
 
@@ -210,7 +217,7 @@ export class IndexStore<T extends Row> {
       return undefined // No index - full scan required
     }
 
-    return index.get(serializeValues(values)) ?? new Set<number>()
+    return index.get(serializeValues(values)) ?? new Set<K>()
   }
 
   /**
@@ -218,12 +225,13 @@ export class IndexStore<T extends Row> {
    * Single-field lookups first (intersected), then the compound lookup over
    * all `=` conditions in where order.
    *
-   * @returns Candidate row indices in ascending order plus the conditions the
-   *   indexes did not cover, or undefined if no index applies
+   * @returns Candidate keys (in no particular order; the caller orders them)
+   *   plus the conditions the indexes did not cover, or undefined if no index
+   *   applies
    */
   candidates(
     conditions: WhereCondition<T>[]
-  ): { rows: number[]; remaining: WhereCondition<T>[] } | undefined {
+  ): { keys: K[]; remaining: WhereCondition<T>[] } | undefined {
     const eqConditions: Array<{ field: string; value: unknown; index: number }> = []
     conditions.forEach((cond, i) => {
       if (cond.operator === '=') {
@@ -232,12 +240,12 @@ export class IndexStore<T extends Row> {
     })
     if (eqConditions.length === 0) return undefined
 
-    let used: Set<number> | undefined
+    let used: Set<K> | undefined
     const usedConditionIndices = new Set<number>()
-    const intersect = (found: Set<number>): void => {
+    const intersect = (found: Set<K>): void => {
       used = used === undefined
         ? new Set(found)
-        : new Set([...used].filter(idx => found.has(idx)))
+        : new Set([...used].filter(k => found.has(k)))
     }
 
     for (const eq of eqConditions) {
@@ -261,7 +269,7 @@ export class IndexStore<T extends Row> {
 
     if (used === undefined) return undefined
     return {
-      rows: [...(used as Set<number>)].sort((a, b) => a - b),
+      keys: [...(used as Set<K>)],
       remaining: conditions.filter((_, i) => !usedConditionIndices.has(i)),
     }
   }
@@ -270,7 +278,7 @@ export class IndexStore<T extends Row> {
    * Reindex after delete
    * Row indices after the deleted row shift down due to splice
    */
-  reindexAfterDelete(deletedIndex: number): void {
+  reindexAfterDelete(this: IndexStore<T, number>, deletedIndex: number): void {
     for (const [, index] of this.indexes) {
       for (const [, rowSet] of index) {
         const updated = new Set<number>()
@@ -296,8 +304,8 @@ export class IndexStore<T extends Row> {
   }
 
   /** Debug: dump index state */
-  debugDump(): Record<string, Record<string, number[]>> {
-    const result: Record<string, Record<string, number[]>> = {}
+  debugDump(): Record<string, Record<string, K[]>> {
+    const result: Record<string, Record<string, K[]>> = {}
 
     for (const [key, index] of this.indexes) {
       result[key] = {}

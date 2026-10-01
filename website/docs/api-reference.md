@@ -292,19 +292,20 @@ interface SchemaBuilder {
 ### IndexStore
 
 ```ts
-class IndexStore<T extends Row> {
+class IndexStore<T extends Row, K = number> {
   constructor(definitions?: IndexDefinition[])
 
   getDefinitions(): IndexDefinition[]
   hasIndex(fields: string[]): boolean
-  addToIndex(rowIndex: number, row: T): void
-  removeFromIndex(rowIndex: number, row: T): void
-  updateIndex(rowIndex: number, oldRow: T, newRow: T): void
-  rebuild(data: T[]): void
-  lookup(fields: string[], values: unknown[]): Set<number> | undefined
-  findIndexByPrefix(fields: string[]): IndexDefinition | undefined
-  reindexAfterDelete(deletedIndex: number): void
+  addToIndex(key: K, row: T): void
+  removeFromIndex(key: K, row: T): void
+  updateIndex(key: K, oldRow: T, newRow: T): void
+  rebuild(this: IndexStore<T, number>, data: T[]): void
+  lookup(fields: string[], values: unknown[]): Set<K> | undefined
+  candidates(conditions: WhereCondition<T>[]): { keys: K[]; remaining: WhereCondition<T>[] } | undefined
+  reindexAfterDelete(this: IndexStore<T, number>, deletedIndex: number): void
   clear(): void
+  debugDump(): Record<string, Record<string, K[]>>
 }
 
 interface IndexDefinition {
@@ -312,6 +313,8 @@ interface IndexDefinition {
   unique?: boolean
 }
 ```
+
+`assertClientIdsAvailable(idIndex, ids, tableName?)` rejects client-supplied ids that exist in `idIndex` or repeat within `ids` (two ids collide iff `String(a) === String(b)`), throwing `DuplicateIdError`. It reads only the id map: O(K) for K ids.
 
 ---
 

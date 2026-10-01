@@ -4,7 +4,7 @@ Column indexes speed up `=` lookups in MockAdapter and LocalAdapter (`@gsquery/c
 
 ## IndexStore
 
-The `IndexStore` manages column indexes for a single table. It maintains a mapping from field values to row indices for O(1) lookups.
+The `IndexStore` manages column indexes for a single table. It maintains a mapping from field values to row keys for O(1) lookups. A standalone `IndexStore` keys rows by position; inside MockAdapter and LocalAdapter the keys are row ids, so deleting a row never renumbers other buckets.
 
 ### Defining Indexes
 
@@ -66,6 +66,8 @@ Composite index on ['role', 'status']:
   }
 ```
 
+A standalone `IndexStore` stores row positions, as shown. Inside `MockAdapter` and `LocalAdapter` the Sets hold row ids instead, and `find()` maps them to positions through the id map.
+
 ## Index Utilization in Queries
 
 `MockAdapter.find()` and `LocalAdapter.find()` automatically uses available indexes:
@@ -109,16 +111,29 @@ const indexStore = new IndexStore<User>([
 indexStore.rebuild(users)
 
 // Lookup
-const indices = indexStore.lookup(['status'], ['active'])
+const positions = indexStore.lookup(['status'], ['active'])
 // Set{0, 3, 7} or undefined if no index
 
 // Check if index exists
 indexStore.hasIndex(['status'])          // true
 indexStore.hasIndex(['nonexistent'])     // false
 
-// Prefix matching for composite indexes
-indexStore.findIndexByPrefix(['role'])   // finds ['role', 'status'] index
+// Narrow `=` conditions: candidate keys (unordered) plus the conditions the
+// indexes did not cover, or undefined if no index applies
+indexStore.candidates([{ field: 'status', operator: '=', value: 'active' }])
 ```
+
+The second type parameter is the bucket key (default `number`, a row position). Key by id instead, as the adapters do:
+
+```ts
+interface Task { id: string; status: string }
+
+const byId = new IndexStore<Task, string>([{ fields: ['status'] }])
+for (const task of tasks) byId.addToIndex(task.id, task)
+byId.lookup(['status'], ['active'])      // Set{'t1', 't7'}
+```
+
+`rebuild()` and `reindexAfterDelete()` are positional and only available on the default `IndexStore<User>`.
 
 ## Index Maintenance
 
@@ -128,10 +143,18 @@ Indexes are automatically maintained on data changes:
 |-----------|-------------|
 | `insert()` | `addToIndex()` |
 | `update()` | `updateIndex()` (old value removed, new value added) |
-| `delete()` | `removeFromIndex()` + `reindexAfterDelete()` |
+| `delete()` | `removeFromIndex()` (buckets hold row ids, so other buckets are untouched) |
 | `batchInsert()` | `addToIndex()` for each row |
 | `batchUpdate()` | `updateIndex()` for each row |
-| `reset()` | Full `rebuild()` |
+| `reset()` | Clear, then refill from the id map |
+| `replaceAll()` (LocalAdapter) | Clear, then refill from the id map |
+
+### Write costs (MockAdapter/LocalAdapter)
+
+- The client-mode duplicate-id check reads only the id map: O(1) per id, O(K) for a batch of K ids.
+- An indexed `delete()` touches only the deleted row's buckets. It still renumbers the id map for the rows after it, so it is O(rows after the deleted row).
+- With IndexedDB enabled, LocalAdapter still rewrites the whole object store once per persist tick.
+- Seeded rows (`initialData`, `reset()`, `replaceAll()`) that share an id are visible only through the last of them: to `findById`/`update`/`delete`, the client id check and indexed `=` finds. Deleting other rows never brings an earlier duplicate back. An unindexed scan still sees all of them.
 
 ## Performance Tips
 

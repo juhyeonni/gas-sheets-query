@@ -176,8 +176,10 @@ const indexStore = new IndexStore<User>([
 indexStore.rebuild(allData)
 
 // O(1) lookup
-const rowIndices = indexStore.lookup(['email'], ['alice@test.com'])
-// Returns Set<number> of matching row indices, or undefined if no index
+const rowKeys = indexStore.lookup(['email'], ['alice@test.com'])
+// Returns Set of matching row keys, or undefined if no index.
+// A standalone IndexStore keys by row position; MockAdapter/LocalAdapter key
+// buckets by row id, so an indexed delete touches only the deleted row's buckets.
 ```
 
 ### When to Use

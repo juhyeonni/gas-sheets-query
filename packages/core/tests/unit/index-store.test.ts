@@ -43,16 +43,47 @@ describe('IndexStore', () => {
       expect(store.lookup(['status'], ['zzz'])).not.toBe(miss)
     })
 
-    it('candidates returns ascending row indices regardless of insertion order', () => {
+    it('candidates returns the matching keys and the uncovered conditions', () => {
       const store = new IndexStore<User>([{ fields: ['role'] }])
       store.addToIndex(4, { role: 'x' } as User)
       store.addToIndex(3, { role: 'x' } as User)
       const eq = { field: 'role', operator: '=' as const, value: 'x' }
-      expect(store.candidates([eq])).toEqual({ rows: [3, 4], remaining: [] })
+      const only = store.candidates([eq])!
+      expect([...only.keys].sort()).toEqual([3, 4])
+      expect(only.remaining).toEqual([])
       const gt = { field: 'age', operator: '>' as const, value: 1 }
-      expect(store.candidates([eq, gt])).toEqual({ rows: [3, 4], remaining: [gt] })
+      const mixed = store.candidates([eq, gt])!
+      expect([...mixed.keys].sort()).toEqual([3, 4])
+      expect(mixed.remaining).toEqual([gt])
       expect(store.candidates([gt])).toBeUndefined()
       expect(new IndexStore<User>([]).candidates([eq])).toBeUndefined()
+    })
+
+    it('IndexStore keyed by id: add/remove/update/lookup/candidates use the key type', () => {
+      const store = new IndexStore<User, string>([{ fields: ['status'] }])
+      const u1 = { status: 'active' } as User
+      const u2 = { status: 'active' } as User
+      const other = { status: 'other' } as User
+      store.addToIndex('u1', u1)
+      store.addToIndex('u2', u2)
+      store.addToIndex('u3', other)
+      expect(store.lookup(['status'], ['active'])).toEqual(new Set(['u1', 'u2']))
+
+      const untouched = store.lookup(['status'], ['other'])
+      store.updateIndex('u1', u1, { status: 'x' } as User)
+      expect(store.lookup(['status'], ['active'])).toEqual(new Set(['u2']))
+      const eq = { field: 'status', operator: '=' as const, value: 'x' }
+      expect(store.candidates([eq])!.keys).toEqual(['u1'])
+
+      store.removeFromIndex('u2', u2)
+      expect(store.lookup(['status'], ['active'])!.size).toBe(0)
+      expect(store.lookup(['status'], ['other'])).toBe(untouched)
+    })
+
+    it('positional default still supports rebuild and reindexAfterDelete', () => {
+      const store = new IndexStore<User>([{ fields: ['status'] }])
+      store.rebuild([{ status: 'a' }, { status: 'a' }, { status: 'a' }] as User[])
+      expect(store.lookup(['status'], ['a'])).toEqual(new Set([0, 1, 2]))
     })
   })
 
@@ -429,64 +460,56 @@ describe('MockAdapter with indexes', () => {
   })
 })
 
-describe('Index performance benchmark', () => {
-  interface BenchUser extends RowWithId {
+describe('Index lookup cost', () => {
+  interface BenchRow extends RowWithId {
     id: number
     status: string
-    category: string
   }
 
-  it('should demonstrate index lookup is faster than full scan', () => {
+  /** Rows whose `status` getter counts every read. */
+  function countingRows(size: number, counter: { reads: number }): BenchRow[] {
+    const statuses = ['active', 'inactive', 'pending', 'deleted']
+    return Array.from({ length: size }, (_, i) => {
+      const row = { id: i } as BenchRow
+      const status = statuses[i % statuses.length]
+      Object.defineProperty(row, 'status', {
+        get() {
+          counter.reads++
+          return status
+        },
+        enumerable: true,
+      })
+      return row
+    })
+  }
+
+  it('indexed find evaluates no stored row, while a scan evaluates every row', () => {
     const SIZE = 10000
     const LOOKUPS = 100
-    
-    // Generate test data with various status values
-    const statuses = ['active', 'inactive', 'pending', 'deleted']
-    const data: Omit<BenchUser, 'id'>[] = []
-    for (let i = 0; i < SIZE; i++) {
-      data.push({
-        status: statuses[i % statuses.length],
-        category: `cat${i % 10}`
-      })
-    }
-    
-    // Adapter with index
-    const indexedAdapter = new MockAdapter<BenchUser>({
-      indexes: [{ fields: ['status'] }]
+    const indexedCounter = { reads: 0 }
+    const scanCounter = { reads: 0 }
+    const indexed = new MockAdapter<BenchRow>({
+      initialData: countingRows(SIZE, indexedCounter),
+      indexes: [{ fields: ['status'] }],
     })
-    indexedAdapter.batchInsert(data)
-    
-    // Adapter without index
-    const plainAdapter = new MockAdapter<BenchUser>()
-    plainAdapter.batchInsert(data)
-    
-    // Benchmark: indexed lookups
-    const indexStart = performance.now()
-    for (let i = 0; i < LOOKUPS; i++) {
-      indexedAdapter.find({
-        where: [{ field: 'status', operator: '=', value: 'active' }],
-        orderBy: []
-      })
+    const scan = new MockAdapter<BenchRow>({ initialData: countingRows(SIZE, scanCounter) })
+    indexedCounter.reads = 0
+    scanCounter.reads = 0
+
+    const query = {
+      where: [{ field: 'status', operator: '=' as const, value: 'active' }],
+      orderBy: [],
     }
-    const indexTime = performance.now() - indexStart
-    
-    // Benchmark: full scan lookups
-    const scanStart = performance.now()
     for (let i = 0; i < LOOKUPS; i++) {
-      plainAdapter.find({
-        where: [{ field: 'status', operator: '=', value: 'active' }],
-        orderBy: []
-      })
+      const fromIndex = indexed.find(query)
+      const fromScan = scan.find(query)
+      expect(fromIndex).toHaveLength(SIZE / 4)
+      expect(fromScan).toHaveLength(SIZE / 4)
+      // Compare ids only: comparing rows would read `status` and skew the counters
+      expect(fromIndex.map(r => r.id)).toEqual(fromScan.map(r => r.id))
     }
-    const scanTime = performance.now() - scanStart
-    
-    console.log(`[Index Benchmark] ${SIZE} rows, ${LOOKUPS} lookups:`)
-    console.log(`  With index: ${indexTime.toFixed(2)}ms`)
-    console.log(`  Full scan: ${scanTime.toFixed(2)}ms`)
-    console.log(`  Speedup: ${(scanTime / indexTime).toFixed(1)}x`)
-    
-    // Index should be faster (at least 1.5x for small data, much more for large)
-    // Note: for very small datasets, overhead might make index slower
-    expect(indexTime).toBeLessThanOrEqual(scanTime * 1.5) // Allow some variance
+
+    expect(indexedCounter.reads).toBe(0)
+    expect(scanCounter.reads).toBe(LOOKUPS * SIZE)
   })
 })
