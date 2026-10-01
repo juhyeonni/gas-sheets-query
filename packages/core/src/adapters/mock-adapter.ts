@@ -63,9 +63,10 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     
     // Update nextId based on existing data (for auto mode)
     if (data.length > 0) {
-      const maxId = Math.max(...data.map(r => 
-        typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
-      ))
+      const maxId = data.reduce(
+        (m, r) => Math.max(m, typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0),
+        -Infinity
+      )
       this.nextId = maxId + 1
     }
   }
@@ -396,9 +397,10 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     this.data = [...data]
     this.rebuildIndex()
     if (data.length > 0) {
-      const maxId = Math.max(...data.map(r => 
-        typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0
-      ))
+      const maxId = data.reduce(
+        (m, r) => Math.max(m, typeof r.id === 'number' ? r.id : parseInt(r.id as string, 10) || 0),
+        -Infinity
+      )
       this.nextId = maxId + 1
     } else {
       this.nextId = 1
