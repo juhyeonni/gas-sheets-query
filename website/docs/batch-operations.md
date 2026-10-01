@@ -41,7 +41,7 @@ const newUsers = users.batchInsert([
 ### Performance Benefit
 
 - **MockAdapter**: Single iteration, builds index entries in batch
-- **SheetsAdapter**: Single ranged `setValues()` call; the id column (auto mode: plus the `_meta` counter) or the existing id keys (client mode) are read once per batch, not per row.
+- **SheetsAdapter**: Single ranged `setValues()` call; in auto mode the id column is read at most once per adapter instance (the `_meta` counter is read and advanced on every batch); in client mode the existing id keys are read once per batch, not per row.
 
 ## Batch Update
 
@@ -60,7 +60,7 @@ const updated = users.batchUpdate([
 
 ### Performance
 
-On SheetsAdapter, `batchUpdate` reads the whole table once, then writes one `setValues()` per contiguous run of updated rows — a contiguous block is one write, scattered rows cost one write each.
+On SheetsAdapter, `batchUpdate` reads the id column, then only the rows from the first to the last matched one (`N + span*C` cells), then writes one `setValues()` per contiguous run of updated rows — a contiguous block is one write, scattered rows cost one write each.
 
 ### Behavior
 
@@ -93,6 +93,22 @@ db.from('items').batchInsert([
 ])
 ```
 
+## Batch Delete
+
+Delete multiple rows by id at once:
+
+```ts
+const deleted = users.batchDelete([1, 2, 3, 99])
+// Returns the number of rows deleted (3 here)
+// Missing and duplicate ids are skipped (no error thrown)
+```
+
+On SheetsAdapter, `batchDelete` takes the script lock once, reads the id column
+once, and issues one `deleteRows` per contiguous run of rows, highest run first,
+so scattered ids cost one call per run instead of one `deleteRow` per id. Each
+run is attempted exactly once: if a run fails, the error is thrown, the runs
+already deleted stay deleted, and nothing is retried.
+
 ## Via Repository
 
 Batch operations are also available on the `Repository` directly:
@@ -102,11 +118,12 @@ const repo = db.from('users').repo
 
 repo.batchInsert([...])
 repo.batchUpdate([...])
+repo.batchDelete([...])
 ```
 
 ## Fallback Behavior
 
-If an adapter doesn't implement the optional `batchInsert` or `batchUpdate` methods, the Repository falls back to sequential individual operations automatically.
+If an adapter doesn't implement the optional `batchInsert`, `batchUpdate` or `batchDelete` methods, the Repository falls back to sequential individual operations automatically (`batchDelete` counts the `delete` calls that removed a row).
 
 ---
 

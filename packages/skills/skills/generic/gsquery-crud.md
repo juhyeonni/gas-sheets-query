@@ -46,6 +46,7 @@ users.delete(1)                // throws RowNotFoundError if missing
 // Batch
 users.batchInsert([{ name: 'Bob', email: 'b@test.com', age: 25, active: true }])
 users.batchUpdate([{ id: 1, data: { active: false } }])
+users.batchDelete([1, 2])  // number — rows deleted; missing ids skipped
 ```
 
 ## Null-Safe Alternatives (Repository)

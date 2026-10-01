@@ -27,15 +27,19 @@ same execution only burns what is left of the run, so the library does not.
 
 **Patterns**
 
-- Prefer `batchInsert` / `batchUpdate` / a single `query()` over per-row calls.
-  Quota is consumed per Sheets API call, and a batch is one ranged write.
-  `batchInsert` is one ranged write after one id read per batch; `batchUpdate` is
-  one full-table read plus one write per contiguous run of updated rows (worst
-  case one per row).
-- Never call single `insert`/`update`/`delete`/`findById` in a loop: each call
-  reads the whole id column, so M calls on an N-row sheet read O(M·N) cells
-  (about M²/2 when filling an empty sheet). Use `batchInsert`/`batchUpdate`, or
-  one `findAll`/`query()` and look rows up in memory.
+- Prefer `batchInsert` / `batchUpdate` / `batchDelete` / a single `query()` over
+  per-row calls. Quota is consumed per Sheets API call, and a batch is one
+  ranged write. `batchInsert` is one ranged write (client mode reads the id keys once per batch; auto mode reads the id column at most once per adapter instance);
+  `batchUpdate` reads the id column, then only the rows from the first to the
+  last matched one (`N + span*C` cells), plus one write per contiguous run of
+  updated rows (worst case one per row); `batchDelete` is one id-column read
+  plus one `deleteRows` per contiguous run of deleted rows.
+- Single-row calls in a loop are cheap on the read side, because the adapter
+  remembers where each id lives: it reads the id column once per adapter
+  instance, after which `update` reads one row (`C` cells) and `delete` one id
+  cell. Auto-id `insert` reads the id column at most once per instance. Every
+  call still pays its own writes and two `flush()` calls, which is why a batch
+  is still the better tool for many rows.
 - Long jobs belong in a time-driven trigger that processes a slice per run and
   records its progress, not in one execution that races the 6-minute ceiling.
 - Catch `QuotaExceededError` and check `transient` before deciding to reschedule
@@ -62,7 +66,7 @@ What is deliberately **not** retried:
   asking again immediately just spends it twice.
 - **Daily quotas and the execution ceiling.** They cannot clear inside this
   execution.
-- **Shape-changing calls** — `appendRow`, `deleteRow`, `insertSheet`,
+- **Shape-changing calls** — `appendRow`, `deleteRow`, `deleteRows`, `insertSheet`,
   `insertColumnBefore`, `deleteColumn`. A timeout from one of them does not say
   whether the mutation landed, so a retry risks a duplicated row or a second
   deleted column. These are classified but never repeated; losing the operation
@@ -138,13 +142,85 @@ The consequence is that writes made by *other* executions are invisible until:
 - you call `adapter.clearCache()`, or
 - a new execution starts.
 
-`findById`, `update` and `delete` do not use the cache: each call reads the
-whole id column and then the row, even when the cache is warm. `find` and
-`findAll` are the cached paths, and so is anything built on them (`query()`,
-JOINs, aggregation).
+`find` and `findAll` are cached paths, and so is anything built on them
+(`query()`, JOINs, aggregation). `findById` (and so `exists`) is served from the
+same cache when it is warm, with no Sheets read, so it is exactly as stale as
+`find`. When the cache is cold, `findById` reads just the row it needs. `update`
+and `delete` never use the cache: they act on the live sheet under the script
+lock.
+
+### Id memo
+
+Separately from the read cache, each adapter instance remembers which physical
+row every id is on, and the highest numeric id. Both come only from a raw read
+of the id column, survive this adapter's own writes (a successful `delete`
+patches the row numbers), and are dropped by `clearCache()`, `reset()`,
+`batchDelete` and a failed `deleteRow`. The remembered row is only a hint:
+`update` and `delete` verify it under the lock (reading the row, or just its id
+cell) and re-read the id column once when it no longer matches, so a row shifted
+by another execution is never written to or deleted by mistake. The `_gsquery_meta`
+counter is still read and advanced under the lock on every auto-id insert, which
+is what keeps ids unique across executions. One consequence: an id a person
+types into the sheet by hand during the same execution is only absorbed after
+`clearCache()` or in the next execution.
 
 Long-running triggers that poll for external edits must call `clearCache()`
 between passes.
+
+## Measured Costs
+
+Sheet calls made by `SheetsAdapter` on the data sheet, for a table with `N`
+rows and `C` columns (measured with `C = 3`, ids `1..N`, read cache warm unless
+stated). A *cell* is one value returned by `getValues`; `flush` is
+`SpreadsheetApp.flush()`, called twice per top-level locked write.
+
+| Operation | `getValues` calls | Cells read | Writes | `flush` | N=100 | N=1,000 | N=5,000 |
+|-----------|------------------:|-----------:|--------|--------:|------:|--------:|--------:|
+| `findAll`, cold (first read, or after `clearCache()`) | 2 | `N*C + C` | 0 | 0 | 303 | 3,003 | 15,003 |
+| `findAll` / `find`, warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `findAll` after a write | 1 | `N*C` | 0 | 0 | 300 | 3,000 | 15,000 |
+| `findById`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `count`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `count` after a write (cache cold, header verified) | 1 | `N` | 0 | 0 | 100 | 1,000 | 5,000 |
+| `count` after `clearCache()` | 2 | `C + N` | 0 | 0 | 103 | 1,003 | 5,003 |
+| `findById` after `clearCache()` (cache and id map cold, header re-checked) | 3 | `C + N + C` | 0 | 0 | 106 | 1,006 | 5,006 |
+| `findById`, cache cold, id map warm | 1 | `C` | 0 | 0 | 3 | 3 | 3 |
+| `insert` (auto id), first in the instance | 1 | `N` | 1 `appendRow` | 2 | 100 | 1,000 | 5,000 |
+| `insert` (auto id), later calls | 0 | 0 | 1 `appendRow` | 2 | 0 | 0 | 0 |
+| `insert` (client id), every call | 1 | current row count | 1 `appendRow` | 2 | 100 | 1,000 | 5,000 |
+| `update`, first in the instance | 2 | `N + C` | 1 `setValues` | 2 | 103 | 1,003 | 5,003 |
+| `update`, later calls | 1 | `C` | 1 `setValues` | 2 | 3 | 3 | 3 |
+| `update`, stale hint (another execution moved the row) | 3 | `C + N + C` | 1 `setValues` | 2 | 106 | 1,006 | 5,006 |
+| `delete`, first in the instance | 1 | `N` | 1 `deleteRow` | 2 | 100 | 1,000 | 5,000 |
+| `delete`, later calls | 1 | 1 | 1 `deleteRow` | 2 | 1 | 1 | 1 |
+| `delete`, stale hint | 2 | `1 + N` | 1 `deleteRow` | 2 | 101 | 1,001 | 5,001 |
+| `batchInsert` of 100 rows | 1 | `N` | 1 `setValues` | 2 | 100 | 1,000 | 5,000 |
+| `batchUpdate` of 1 id | 2 | `N + C` | 1 `setValues` | 2 | 103 | 1,003 | 5,003 |
+| `batchUpdate` of 100 contiguous ids | 2 | `N + 100*C` | 1 `setValues` | 2 | 400 | 1,300 | 5,300 |
+| `batchUpdate` of 10 scattered ids (ids `1,3,...,19`, span 19 rows) | 2 | `N + 19*C` | 10 `setValues` | 2 | 157 | 1,057 | 5,057 |
+| `batchDelete` of 100 contiguous ids | 1 | `N` | 1 `deleteRows` | 2 | 100 | 1,000 | 5,000 |
+| `batchDelete` of 10 scattered ids | 1 | `N` | 10 `deleteRows` | 2 | 100 | 1,000 | 5,000 |
+
+A loop of M auto-id inserts into an N-row sheet therefore reads `N` cells once
+instead of `M*N + M(M-1)/2` (for N = 1,000 and M = 1,000 that is 1,000 instead
+of 1,499,500), and a loop of M updates reads `N + M*C`.
+
+`batchUpdate` reads the id column, then one block spanning the first to the last
+matched row; rows in between are read but never written. When the first and last
+rows are both updated the span is the whole table, so it reads `N + N*C` cells
+(`N` more than a single full read). Both reads are retried on transient failures.
+
+`count()` is the number of rows with a non-empty id cell, which is what
+`repo.count()` returns on SheetsAdapter. A row with a blank id (for example one
+typed in by hand) is returned by `findAll` but not counted. A warm cache answers
+with no read; otherwise it reads the id column once and does not fill the cache.
+
+These numbers are call and cell counts, not timings. They are pinned by
+`packages/core/tests/unit/sheets-adapter-documented-costs.test.ts`, so CI fails
+if a change to the adapter alters them; such a change must update this table in
+the same commit. They count data-sheet calls only (the auto-id counter on the
+`_gsquery_meta` sheet is excluded), and real GAS per-call latency is not
+measured.
 
 ## Checklist Before Going to Production
 

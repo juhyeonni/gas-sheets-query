@@ -40,6 +40,7 @@ users.upsert({ id: 1, age: 31 })   // T — update by id, else insert
 users.delete(1)                    // void — throws RowNotFoundError
 users.batchInsert([{...}, {...}])  // T[]
 users.batchUpdate([{ id: 1, data: { active: false } }])
+users.batchDelete([1, 2])          // number — rows deleted; missing ids skipped
 
 // Null-safe (via Repository)
 users.repo.findByIdOrNull(1)      // T | undefined

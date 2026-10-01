@@ -85,6 +85,40 @@ describe('SheetsAdapter retry placement (#136)', () => {
     expect(() => adapter.findAll()).toThrow(SheetsApiError)
   })
 
+  it("retries a transient failure of batchUpdate's id-column read", () => {
+    const adapter = seed()
+    adapter.findAll() // verify the header so only batchUpdate's reads remain
+    failReads(2)
+
+    expect(adapter.batchUpdate([{ id: 2, data: { name: 'B' } }])).toEqual([{ id: 2, name: 'B' }])
+    expect(sheet.getRange(3, 2).getValues()[0][0]).toBe('B')
+  })
+
+  it("retries a transient failure of batchUpdate's span read", () => {
+    const adapter = seed()
+    adapter.findAll()
+
+    // The span read is the only full-width read; the id-column read is 1 wide.
+    let failed = false
+    const originalGetRange = sheet.getRange.bind(sheet)
+    sheet.getRange = (row: number, col: number, numRows = 1, numCols = 1) => {
+      const range = originalGetRange(row, col, numRows, numCols)
+      const getValues = range.getValues.bind(range)
+      range.getValues = () => {
+        if (!failed && numCols === COLUMNS.length) {
+          failed = true
+          throw new Error(TRANSIENT)
+        }
+        return getValues()
+      }
+      return range
+    }
+
+    expect(adapter.batchUpdate([{ id: 2, data: { name: 'B' } }])).toEqual([{ id: 2, name: 'B' }])
+    expect(failed).toBe(true)
+    expect(sheet.getRange(3, 2).getValues()[0][0]).toBe('B')
+  })
+
   it('retries a transient fixed-range write, which is idempotent', () => {
     const adapter = seed()
 

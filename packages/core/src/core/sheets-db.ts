@@ -55,6 +55,9 @@ export interface TableHandle<T extends RowWithId> {
 
   /** Batch update multiple rows at once (`data` excludes the immutable `id`) */
   batchUpdate(items: BatchUpdateItem<T>[]): T[]
+
+  /** Batch delete by id; missing ids are skipped. Returns how many rows were deleted */
+  batchDelete(ids: (string | number)[]): number
 }
 
 /**
@@ -92,7 +95,8 @@ function createTableHandle<T extends RowWithId>(
     upsert: (data) => repo.upsert(data),
     delete: (id) => repo.delete(id),
     batchInsert: (data) => repo.batchInsert(data),
-    batchUpdate: (items) => repo.batchUpdate(items)
+    batchUpdate: (items) => repo.batchUpdate(items),
+    batchDelete: (ids) => repo.batchDelete(ids)
   }
 }
 

@@ -4,8 +4,8 @@
 import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types.js'
 import { IndexStore } from '../core/index-store.js'
 import type { IndexDefinition } from '../core/index-store.js'
-import { evaluateCondition, compareRows } from '../core/query-utils.js'
-import { DuplicateIdError } from '../core/errors.js'
+import { applyQuery } from '../core/query-utils.js'
+import { assertClientIdsAvailable } from '../core/client-ids.js'
 
 /** MockAdapter configuration options */
 export interface MockAdapterOptions<T extends RowWithId = RowWithId> {
@@ -15,7 +15,10 @@ export interface MockAdapterOptions<T extends RowWithId = RowWithId> {
    * Seeded verbatim: unlike insert()/batchInsert() it is not checked for
    * duplicate ids, so a caller can still seed a store with colliding ids
    * (same for `reset()`). That mirrors SheetsAdapter, which likewise cannot
-   * vouch for rows that were already on the sheet (#154).
+   * vouch for rows that were already on the sheet (#154). Of rows sharing an
+   * id only the last is visible to findById/update/delete, the client id
+   * check and indexed `=` find, and that stays true after deletes; an
+   * unindexed scan still sees all of them.
    */
   initialData?: T[]
   /** Index definitions (schema-based) */
@@ -38,7 +41,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
   /** Index for O(1) lookups by ID - maps id to array index */
   private idIndex: Map<string | number, number> = new Map()
   /** Column indexes for query optimization */
-  private indexStore: IndexStore<T>
+  private indexStore: IndexStore<T, string | number>
   /** ID generation mode */
   readonly idMode: IdMode
 
@@ -57,7 +60,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     }
     
     this.idMode = idMode
-    this.indexStore = new IndexStore<T>(indexes)
+    this.indexStore = new IndexStore<T, string | number>(indexes)
     this.data = [...data]
     this.rebuildIndex()
     
@@ -78,7 +81,24 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
       this.idIndex.set(this.data[i].id, i)
     }
     // Rebuild column indexes
-    this.indexStore.rebuild(this.data)
+    // Column indexes hold exactly the rows findById can see (last row per id wins)
+    this.indexStore.clear()
+    for (const [id, pos] of this.idIndex) {
+      this.indexStore.addToIndex(id, this.data[pos])
+    }
+  }
+
+  /** Map indexed row ids to row positions in scan order. */
+  private positionsOf(keys: (string | number)[]): number[] {
+    const positions: number[] = []
+    for (const key of keys) {
+      const pos = this.idIndex.get(key)
+      if (pos === undefined) {
+        throw new Error(`IndexStore out of sync: id ${String(key)} not in idIndex`)
+      }
+      positions.push(pos)
+    }
+    return positions.sort((x, y) => x - y)
   }
 
   findAll(): T[] {
@@ -93,49 +113,21 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     if (options.where.length > 0) {
       const narrowed = this.indexStore.candidates(options.where)
       if (narrowed !== undefined) {
-        candidateIndices = narrowed.rows
+        candidateIndices = this.positionsOf(narrowed.keys)
         remainingConditions = narrowed.remaining
       }
     }
     
-    // Get candidate rows (from index or full scan)
-    let result: T[]
+    // Get candidate rows (from index or full scan); applyQuery never mutates them
+    let candidates: T[] = this.data
     if (candidateIndices !== undefined) {
-      // Index-based: only check rows in candidate set
-      result = []
+      candidates = []
       for (const idx of candidateIndices) {
-        if (idx < this.data.length) {
-          result.push(this.data[idx])
-        }
+        candidates.push(this.data[idx])
       }
-    } else {
-      // Full scan
-      result = [...this.data]
     }
 
-    // Apply remaining where conditions (non-indexed or non-equality)
-    if (remainingConditions.length > 0) {
-      result = result.filter(row => 
-        remainingConditions.every(condition => evaluateCondition(row, condition))
-      )
-    }
-
-    // Apply ordering
-    if (options.orderBy.length > 0) {
-      result.sort((a, b) => compareRows(a, b, options.orderBy))
-    }
-
-    // Apply offset
-    if (options.offsetValue !== undefined && options.offsetValue > 0) {
-      result = result.slice(options.offsetValue)
-    }
-
-    // Apply limit
-    if (options.limitValue !== undefined && options.limitValue >= 0) {
-      result = result.slice(0, options.limitValue)
-    }
-
-    return result
+    return applyQuery(candidates, remainingConditions, options)
   }
   
   /**
@@ -158,32 +150,6 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     return (data as T).id
   }
 
-  /** Every id currently held, keyed as strings so 1 and '1' collide. */
-  private readExistingIdKeys(): Set<string> {
-    const keys = new Set<string>()
-    for (const row of this.data) {
-      keys.add(String(row.id))
-    }
-    return keys
-  }
-
-  /**
-   * Reject client-supplied ids that already exist, or that repeat within the
-   * same batch. Called before any mutation so a rejected write leaves the
-   * store untouched — same contract as SheetsAdapter, which the mock stands in
-   * for during tests (#128/#154).
-   */
-  private assertClientIdsAvailable(ids: (string | number)[]): void {
-    const existing = this.readExistingIdKeys()
-    for (const id of ids) {
-      const key = String(id)
-      if (existing.has(key)) {
-        throw new DuplicateIdError(id)
-      }
-      existing.add(key)
-    }
-  }
-
   insert(data: Omit<T, 'id'> | T): T {
     let newRow: T
 
@@ -191,7 +157,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
       // Client mode: use client-provided ID, rejecting one that is taken
       // before anything is written.
       const id = this.requireClientId(data)
-      this.assertClientIdsAvailable([id])
+      assertClientIdsAvailable(this.idIndex, [id])
       newRow = data as T
     } else {
       // Auto mode: server generates numeric ID (default, backward compatible)
@@ -203,7 +169,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     this.data.push(newRow)
     this.idIndex.set(newRow.id, index)
     // Update column indexes
-    this.indexStore.addToIndex(index, newRow)
+    this.indexStore.addToIndex(newRow.id, newRow)
     return newRow
   }
 
@@ -221,7 +187,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     this.data[index] = newRow
 
     // Update column indexes
-    this.indexStore.updateIndex(index, oldRow, newRow)
+    this.indexStore.updateIndex(oldRow.id, oldRow, newRow)
     
     return newRow
   }
@@ -233,18 +199,17 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     const deletedRow = this.data[index]
     
     // Remove from column indexes before splice
-    this.indexStore.removeFromIndex(index, deletedRow)
+    this.indexStore.removeFromIndex(id, deletedRow)
     
     this.data.splice(index, 1)
     this.idIndex.delete(id)
     
-    // Rebuild ID index since splice shifts all subsequent elements
+    // Renumber only the row idIndex points to: shadowed rows sharing an id
+    // stay invisible (#154/#235).
     for (let i = index; i < this.data.length; i++) {
-      this.idIndex.set(this.data[i].id, i)
+      const rowId = this.data[i].id
+      if (this.idIndex.get(rowId) === i + 1) this.idIndex.set(rowId, i)
     }
-    
-    // Reindex column indexes after delete (shift row indices)
-    this.indexStore.reindexAfterDelete(index)
     
     return true
   }
@@ -265,7 +230,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
         ids.push(this.requireClientId(item))
         newRows.push(item as T)
       }
-      this.assertClientIdsAvailable(ids)
+      assertClientIdsAvailable(this.idIndex, ids)
     } else {
       // Auto mode: server generates numeric IDs
       for (const item of items) {
@@ -280,7 +245,7 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
       this.data.push(newRow)
       this.idIndex.set(newRow.id, rowIndex)
       // Update column indexes
-      this.indexStore.addToIndex(rowIndex, newRow)
+      this.indexStore.addToIndex(newRow.id, newRow)
     }
 
     return newRows
@@ -305,12 +270,24 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
       this.data[index] = newRow
 
       // Update column indexes
-      this.indexStore.updateIndex(index, oldRow, newRow)
+      this.indexStore.updateIndex(oldRow.id, oldRow, newRow)
 
       results.push(newRow)
     }
     
     return results
+  }
+
+  /**
+   * Batch delete multiple rows by id
+   * Returns how many rows were deleted (skips ids that don't exist)
+   */
+  batchDelete(ids: (string | number)[]): number {
+    let deleted = 0
+    for (const id of new Set(ids)) {
+      if (this.delete(id)) deleted++
+    }
+    return deleted
   }
 
   /** Test helper: reset all data (seeded verbatim, see {@link MockAdapterOptions.initialData}) */

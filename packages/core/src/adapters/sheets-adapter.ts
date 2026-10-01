@@ -11,7 +11,7 @@ import type {
   UpdateData,
   AddColumnOptions
 } from '../core/types.js'
-import { evaluateCondition, compareRows } from '../core/query-utils.js'
+import { applyQuery } from '../core/query-utils.js'
 import {
   CellSizeLimitError,
   DuplicateIdError,
@@ -168,7 +168,7 @@ export interface SheetsAdapterOptions {
  *
  * Sheets API calls that are safe to repeat (all reads, and `setValues` over a
  * fixed range) are retried with bounded backoff; calls that are not
- * idempotent (`appendRow`, `deleteRow`, `insertSheet`, `insertColumnBefore`,
+ * idempotent (`appendRow`, `deleteRow`, `deleteRows`, `insertSheet`, `insertColumnBefore`,
  * `deleteColumn`) are attempted exactly once. See
  * {@link SheetsAdapter.sheetsCall}.
  */
@@ -187,8 +187,25 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _metaSheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null
-  // Data cache - invalidated on write operations
-  private _dataCache: T[] | null = null
+  // Data cache - invalidated on write operations. `idCount` is the number of
+  // retained raw rows with a non-empty id cell, taken before deserialization so
+  // count() agrees warm and cold (#236).
+  private _dataCache: { rows: T[]; idCount: number } | null = null
+  /**
+   * id -> 1-based physical row, built only from a raw read of the id column
+   * (#137). Never built from {@link _dataCache}: findAll drops blank rows, so
+   * cache positions are not physical rows.
+   *
+   * It is a hint, not a source of truth: another execution can shift rows at
+   * any time, so every use verifies the row under the lock and falls back to
+   * one fresh id-column read (see {@link locateRowIndex}). Unlike
+   * `_dataCache` it survives this adapter's own writes; it is patched after a
+   * successful `deleteRow` and dropped whenever the outcome of a shape change
+   * is unknown, by {@link clearCache}, and by {@link reset}.
+   */
+  private _idRows: Map<string, number> | null = null
+  /** Largest numeric id seen by the last id-column read (0 when empty); same lifetime as {@link _idRows}. */
+  private _maxId: number | null = null
   /**
    * Whether the physical header was already checked against the schema in this
    * execution (#179). Set only on success, so a drifted sheet keeps throwing.
@@ -316,8 +333,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this._metaSheet = null
     this._spreadsheet = null
     this._dataCache = null
+    this.dropIdMemos()
     // The sheet may have been edited since the last check — re-arm the guard.
     this._headerVerified = false
+  }
+
+  /** Forget the id -> row map and the max id; the next lookup re-reads the id column. */
+  private dropIdMemos(): void {
+    this._idRows = null
+    this._maxId = null
   }
 
   /** Invalidate data cache (called after write operations) */
@@ -644,7 +668,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
    * Run one **non-idempotent** Sheets API call: classify its failure, never
    * repeat it (#136).
    *
-   * `appendRow`, `deleteRow`, `insertSheet`, `insertColumnBefore` and
+   * `appendRow`, `deleteRow`, `deleteRows`, `insertSheet`, `insertColumnBefore` and
    * `deleteColumn` change the sheet's shape. A timeout from one of them does
    * not say whether the mutation landed, so retrying risks a second append (in
    * auto id mode, a duplicate row under a duplicate id), a second deleted row,
@@ -666,20 +690,39 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     return record[this.idColumn] as string | number
   }
 
-  /** Read every id currently on the sheet, keyed as strings for comparison. */
-  private readExistingIdKeys(): Set<string> {
+  /**
+   * Read the id column once (rows 2..lastRow, nothing when the sheet has no
+   * data rows) and refresh {@link _idRows} and {@link _maxId} from it. Returns
+   * the raw cell values.
+   */
+  private readIdColumn(): unknown[] {
     const sheet = this.getSheet()
     const lastRow = sheet.getLastRow()
-    const keys = new Set<string>()
-
-    if (lastRow <= 1) return keys
-
     const idColIndex = this.columns.indexOf(this.idColumn) + 1
-    const ids = this.sheetsCall(() =>
-      sheet.getRange(2, idColIndex, lastRow - 1, 1).getValues()
-    ).flat()
-    for (const id of ids) {
-      if (id === '' || id === null || id === undefined) continue
+    const raw = lastRow <= 1
+      ? []
+      : this.sheetsCall(() => sheet.getRange(2, idColIndex, lastRow - 1, 1).getValues()).flat()
+
+    const rows = new Map<string, number>()
+    for (let i = 0; i < raw.length; i++) {
+      if (isEmptyCellValue(raw[i])) continue
+      // Unescape so a stored id keeps matching the id the caller passes (#130).
+      const key = String(this.unescapeCellValue(raw[i]))
+      if (!rows.has(key)) rows.set(key, i + 2) // +2 for header row and 1-indexing
+    }
+    this._idRows = rows
+
+    const numbers = raw.filter((id): id is number => typeof id === 'number' && !isNaN(id))
+    this._maxId = numbers.length === 0 ? 0 : numbers.reduce((a, b) => Math.max(a, b), -Infinity)
+
+    return raw
+  }
+
+  /** Every id currently on the sheet, keyed as strings for comparison (a live full read). */
+  private readExistingIdKeys(): Set<string> {
+    const keys = new Set<string>()
+    for (const id of this.readIdColumn()) {
+      if (isEmptyCellValue(id)) continue
       keys.add(String(id))
     }
     return keys
@@ -778,8 +821,10 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       }
     }
 
-    const first = Math.max(stored, this.readMaxId() + 1)
+    if (this._maxId === null) this.readIdColumn()
+    const first = Math.max(stored, this._maxId! + 1)
     const next = first + count
+    this._maxId = next - 1
 
     if (rowIndex === -1) {
       // A spurious-failure retry could append a duplicate table row; the
@@ -793,109 +838,117 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     return first
   }
 
-  /** Read the current max ID from the sheet */
-  private readMaxId(): number {
-    const sheet = this.getSheet()
-    const lastRow = sheet.getLastRow()
+  /**
+   * Resolve an id to its 1-based physical row, or -1 (#137).
+   *
+   * The memoized row is only a hint: it is used when it is still inside the
+   * sheet and `isAt` confirms the id really sits there. Otherwise the id
+   * column is re-read once and that fresh read is authoritative, so no probe
+   * follows it. Callers must hold the lock so the row cannot move between the
+   * lookup and the write.
+   */
+  private locateRowIndex(id: string | number, isAt: (rowIndex: number) => boolean): number {
+    const key = String(id)
+    const hint = this._idRows?.get(key)
+    if (hint !== undefined && hint <= this.getSheet().getLastRow() && isAt(hint)) return hint
 
-    if (lastRow <= 1) return 0
-
-    const idColIndex = this.columns.indexOf(this.idColumn) + 1
-    const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
-    const ids = this.sheetsCall(() => idRange.getValues())
-      .flat()
-      .filter((id): id is number => typeof id === 'number' && !isNaN(id))
-
-    if (ids.length === 0) return 0
-    return ids.reduce((a, b) => Math.max(a, b), -Infinity)
+    this.readIdColumn()
+    return this._idRows!.get(key) ?? -1
   }
 
-  /** Find row index by ID (1-indexed, returns -1 if not found) */
-  private findRowIndexById(id: string | number): number {
+  /**
+   * Locate the row holding `id` and return its raw values, or undefined when
+   * the id is not on the sheet. The row is read in full either way (1 x C), so
+   * the hint probe and the returned values are the same read.
+   */
+  private locateRow(id: string | number): { rowIndex: number; values: unknown[] } | undefined {
     const sheet = this.getSheet()
-    const lastRow = sheet.getLastRow()
-    
-    if (lastRow <= 1) return -1
-    
-    const idColIndex = this.columns.indexOf(this.idColumn) + 1
-    const idRange = sheet.getRange(2, idColIndex, lastRow - 1, 1)
-    // Unescape so a stored id keeps matching the id the caller passes (#130).
-    const ids = this.sheetsCall(() => idRange.getValues())
-      .flat()
-      .map(rowId => this.unescapeCellValue(rowId))
+    const idIndex = this.columns.indexOf(this.idColumn)
+    const readRow = (rowIndex: number): unknown[] =>
+      this.sheetsCall(() => sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues())[0]
+    const holdsId = (values: unknown[]): boolean => {
+      const rowId = this.unescapeCellValue(values[idIndex])
+      return rowId === id || String(rowId) === String(id)
+    }
 
-    // Support both string and number comparison
-    const rowOffset = ids.findIndex(rowId => rowId === id || String(rowId) === String(id))
-    return rowOffset === -1 ? -1 : rowOffset + 2 // +2 for header row and 1-indexing
+    let probed: unknown[] | undefined
+    const rowIndex = this.locateRowIndex(id, candidate => {
+      const values = readRow(candidate)
+      if (!holdsId(values)) return false
+      probed = values
+      return true
+    })
+    if (rowIndex === -1) return undefined
+
+    // After a refresh the row has not been read yet. Re-verifying it also
+    // guards the unlocked (LockService-less) path.
+    const values = probed ?? readRow(rowIndex)
+    return holdsId(values) ? { rowIndex, values } : undefined
   }
 
   findAll(): T[] {
     this.assertHeaderAligned()
 
     if (this._dataCache !== null) {
-      return [...this._dataCache]
+      return [...this._dataCache.rows]
     }
 
     const sheet = this.getSheet()
     const lastRow = sheet.getLastRow()
 
     if (lastRow <= 1) {
-      this._dataCache = []
+      this._dataCache = { rows: [], idCount: 0 }
       return []
     }
 
     const dataRange = sheet.getRange(2, 1, lastRow - 1, this.columns.length)
     const values = this.sheetsCall(() => dataRange.getValues())
+    const idColIndex = this.columns.indexOf(this.idColumn)
 
-    this._dataCache = values
-      .filter(row => row.some(cell => cell !== ''))
-      .map(row => this.rowToObject(row))
+    const retained = values.filter(row => row.some(cell => cell !== ''))
+    this._dataCache = {
+      rows: retained.map(row => this.rowToObject(row)),
+      idCount: retained.filter(row => !isEmptyCellValue(row[idColIndex])).length
+    }
 
-    return [...this._dataCache]
+    return [...this._dataCache.rows]
+  }
+
+  /**
+   * Number of data rows whose id cell is not empty, i.e. the rows a caller can
+   * address by id. A blank-id row (for example one a person typed in) is
+   * returned by {@link findAll} but not counted; a duplicated id counts once
+   * per row.
+   *
+   * A warm read cache answers with no I/O. Otherwise it reads the id column
+   * once and does not fill the cache.
+   */
+  count(): number {
+    this.assertHeaderAligned()
+
+    if (this._dataCache !== null) return this._dataCache.idCount
+    return this.readIdColumn().filter(value => !isEmptyCellValue(value)).length
   }
 
   findById(id: string | number): T | undefined {
     this.assertHeaderAligned()
 
-    const rowIndex = this.findRowIndexById(id)
-    if (rowIndex === -1) return undefined
-    
-    const sheet = this.getSheet()
-    const values = this.sheetsCall(() =>
-      sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()
-    )[0]
-    return this.rowToObject(values)
+    // Same staleness as find/findAll: a warm read cache answers without I/O.
+    if (this._dataCache !== null) {
+      const key = String(id)
+      return this._dataCache.rows.find(row => String((row as Record<string, unknown>)[this.idColumn]) === key)
+    }
+
+    const found = this.locateRow(id)
+    return found ? this.rowToObject(found.values) : undefined
   }
 
   find(options: QueryOptions<T>): T[] {
     this.assertHeaderAligned()
 
     // Get all data first (GAS doesn't support SQL-like queries)
-    let result = this.findAll()
-    
-    // Apply where conditions
-    if (options.where.length > 0) {
-      result = result.filter(row =>
-        options.where.every(condition => evaluateCondition(row, condition))
-      )
-    }
-    
-    // Apply ordering
-    if (options.orderBy.length > 0) {
-      result.sort((a, b) => compareRows(a, b, options.orderBy))
-    }
-    
-    // Apply offset
-    if (options.offsetValue !== undefined && options.offsetValue > 0) {
-      result = result.slice(options.offsetValue)
-    }
-    
-    // Apply limit
-    if (options.limitValue !== undefined && options.limitValue >= 0) {
-      result = result.slice(0, options.limitValue)
-    }
-    
-    return result
+    const rows = this.findAll()
+    return applyQuery(rows, options.where, options)
   }
 
   insert(data: Omit<T, 'id'> | T): T {
@@ -936,19 +989,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // concurrent deleteRow above the target shifts rows up and the write would
     // land on a different record (#128).
     return this.withLock(() => {
-      const rowIndex = this.findRowIndexById(id)
-      if (rowIndex === -1) return undefined
+      const found = this.locateRow(id)
+      if (!found) return undefined
 
       this.invalidateDataCache()
-      const currentValues = this.sheetsCall(() =>
-        sheet.getRange(rowIndex, 1, 1, this.columns.length).getValues()
-      )[0]
-
-      // Cheap re-verification of the row we are about to overwrite — free here
-      // because the row was read anyway, and it still guards the unlocked
-      // (LockService-less) path.
-      const currentId = this.unescapeCellValue(currentValues[this.columns.indexOf(this.idColumn)])
-      if (currentId !== id && String(currentId) !== String(id)) return undefined
+      const { rowIndex, values: currentValues } = found
 
       const currentRow = this.rowToObject(currentValues)
 
@@ -975,15 +1020,81 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // Same find-then-write race as update(): without the lock a concurrent
     // delete above the target makes this remove the wrong row (#128).
     return this.withLock(() => {
-      const rowIndex = this.findRowIndexById(id)
+      // A hinted row is verified by its id cell alone (1 cell).
+      const idColIndex = this.columns.indexOf(this.idColumn) + 1
+      const rowIndex = this.locateRowIndex(id, candidate => {
+        const cell = this.sheetsCall(() => sheet.getRange(candidate, idColIndex, 1, 1).getValues())[0][0]
+        const rowId = this.unescapeCellValue(cell)
+        return rowId === id || String(rowId) === String(id)
+      })
       if (rowIndex === -1) return false
 
       this.invalidateDataCache()
-      // deleteRow shifts every row below it up, so a repeat after a spurious
-      // failure removes a second, innocent row. Attempt it exactly once.
-      this.sheetsCallOnce(() => sheet.deleteRow(rowIndex))
+      try {
+        // deleteRow shifts every row below it up, so a repeat after a spurious
+        // failure removes a second, innocent row. Attempt it exactly once.
+        this.sheetsCallOnce(() => sheet.deleteRow(rowIndex))
+      } catch (err) {
+        // Whether the row went away is unknown, so the map can no longer be trusted.
+        this.dropIdMemos()
+        throw err
+      }
+
+      // Patch instead of re-reading: every row below the deleted one moved up.
+      const rows = this._idRows!
+      rows.delete(String(id))
+      for (const [key, row] of rows) {
+        if (row > rowIndex) rows.set(key, row - 1)
+      }
 
       return true
+    })
+  }
+
+  /**
+   * Delete every row whose id is in `ids`; returns how many rows were deleted.
+   * Missing and duplicate ids are skipped, never an error.
+   *
+   * One lock, one id-column read, then one `deleteRows` per contiguous run of
+   * rows, highest run first so lower row numbers stay valid. Each run is
+   * attempted exactly once (deleting is not idempotent). If a run throws, the
+   * error propagates: runs above it are already deleted, nothing is retried.
+   */
+  batchDelete(ids: (string | number)[]): number {
+    if (ids.length === 0) return 0
+
+    this.assertHeaderAligned()
+    this.invalidateDataCache()
+    const sheet = this.getSheet()
+
+    return this.withLock(() => {
+      this.dropIdMemos()
+      this.readIdColumn()
+      const rows = this._idRows!
+
+      const targets = new Set<number>()
+      for (const id of ids) {
+        const row = rows.get(String(id))
+        if (row !== undefined) targets.add(row)
+      }
+      const descending = [...targets].sort((a, b) => b - a)
+
+      try {
+        let i = 0
+        while (i < descending.length) {
+          let last = i
+          while (last + 1 < descending.length && descending[last + 1] === descending[last] - 1) last++
+          const start = descending[last]
+          const count = last - i + 1
+          this.sheetsCallOnce(() => sheet.deleteRows(start, count))
+          i = last + 1
+        }
+      } finally {
+        // Every row below a deleted run moved; the next lookup re-reads.
+        this.dropIdMemos()
+      }
+
+      return targets.size
     })
   }
 
@@ -1056,44 +1167,49 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       updateMap.set(id, data)
     }
 
-    // Read, resolve row indices and write inside one lock. The row numbers
-    // below are positions within the block read at the top, so a concurrent
-    // deleteRow or insert landing in between shifts them and the ranged writes
-    // hit the wrong rows — the stale-index race of #128, amplified because
-    // writeRowRuns rewrites a whole contiguous span at once (#155).
+    // Resolve row indices, read and write inside one lock. The row numbers come
+    // from the id-column read made in this lock acquisition; a concurrent
+    // deleteRow or insert landing between that read and the writes would shift
+    // them and the ranged writes would hit the wrong rows — the stale-index
+    // race of #128, amplified because writeRowRuns rewrites a whole contiguous
+    // span at once (#155).
     // withScriptLock is re-entrant, so callers already holding the lock (a
     // migration delegating to batchUpdate) reuse their acquisition.
     return this.withLock(() => {
-      const results: T[] = []
+      // Every row whose id matches is updated, duplicates included. Unescape so
+      // an escaped id still matches the caller's id (#130).
+      const matched: number[] = []
+      this.readIdColumn().forEach((cell, i) => {
+        const rowId = this.unescapeCellValue(cell) as string | number
+        if (updateMap.has(rowId) || updateMap.has(String(rowId))) matched.push(i + 2) // +2 for header and 1-indexing
+      })
+      if (matched.length === 0) return []
 
-      // Get all data to find rows to update
-      const lastRow = sheet.getLastRow()
-      if (lastRow <= 1) return results
-
-      const allData = sheet.getRange(2, 1, lastRow - 1, this.columns.length).getValues()
+      // One read covers the first to the last matched row; rows in between are
+      // read but never written.
+      const first = matched[0]
+      const span = this.sheetsCall(() =>
+        sheet.getRange(first, 1, matched[matched.length - 1] - first + 1, this.columns.length).getValues()
+      )
       const idColIndex = this.columns.indexOf(this.idColumn)
 
+      const results: T[] = []
       const updatedRows: { rowIndex: number; values: unknown[] }[] = []
 
-      for (let i = 0; i < allData.length; i++) {
-        // Unescape so an escaped id still matches the caller's id (#130).
-        const rowId = this.unescapeCellValue(allData[i][idColIndex]) as string | number
+      for (const rowIndex of matched) {
+        const raw = span[rowIndex - first]
+        const rowId = this.unescapeCellValue(raw[idColIndex]) as string | number
         const updateData = updateMap.get(rowId) ?? updateMap.get(String(rowId))
 
-        if (updateData) {
-          const currentRow = this.rowToObject(allData[i])
-          const updatedRow = { ...currentRow, ...updateData } as T
-          // id is immutable via batchUpdate too — mirrors the guard update()
-          // already has (#98/#113). Without this, `data` carrying an id rewrites
-          // the key cell and the row becomes reachable only at its new id.
-          ;(updatedRow as Record<string, unknown>)[this.idColumn] =
-            (currentRow as Record<string, unknown>)[this.idColumn]
-          results.push(updatedRow)
-          updatedRows.push({
-            rowIndex: i + 2, // +2 for header and 1-indexing
-            values: this.objectToRow(updatedRow)
-          })
-        }
+        const currentRow = this.rowToObject(raw)
+        const updatedRow = { ...currentRow, ...updateData } as T
+        // id is immutable via batchUpdate too — mirrors the guard update()
+        // already has (#98/#113). Without this, `data` carrying an id rewrites
+        // the key cell and the row becomes reachable only at its new id.
+        ;(updatedRow as Record<string, unknown>)[this.idColumn] =
+          (currentRow as Record<string, unknown>)[this.idColumn]
+        results.push(updatedRow)
+        updatedRows.push({ rowIndex, values: this.objectToRow(updatedRow) })
       }
 
       this.writeRowRuns(sheet, updatedRows)
@@ -1147,6 +1263,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // human's column instead of reporting the drift (#179).
     this.assertHeaderAligned()
     this.invalidateDataCache()
+    this.dropIdMemos()
     const sheet = this.getSheet()
 
     // Serialize before clearing. A cell-size rejection discovered after

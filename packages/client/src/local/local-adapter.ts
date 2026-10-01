@@ -19,10 +19,9 @@ import type {
 } from '@gsquery/core'
 import {
   IndexStore,
-  evaluateCondition,
-  compareRows,
+  applyQuery,
   deserializeRow,
-  DuplicateIdError,
+  assertClientIdsAvailable,
 } from '@gsquery/core'
 import type { IndexDefinition, ColumnType } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
@@ -115,7 +114,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
   private data: T[] = []
   private nextId = 1
   private idIndex: Map<string | number, number> = new Map()
-  private indexStore: IndexStore<T>
+  private indexStore: IndexStore<T, string | number>
   readonly idMode: IdMode
   private readonly columnTypes: Record<string, ColumnType> | undefined
 
@@ -133,7 +132,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     this.tableName = options.tableName
     this.idMode = options.idMode ?? 'client'
     this.idbEnabled = !options.disableIDB && typeof indexedDB !== 'undefined'
-    this.indexStore = new IndexStore<T>(options.indexes ?? [])
+    this.indexStore = new IndexStore<T, string | number>(options.indexes ?? [])
     this.columnTypes = options.columnTypes
     this.namespace = options.namespace
 
@@ -210,7 +209,11 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     for (let i = 0; i < this.data.length; i++) {
       this.idIndex.set(this.data[i].id, i)
     }
-    this.indexStore.rebuild(this.data)
+    // Column indexes hold exactly the rows findById can see (last row per id wins)
+    this.indexStore.clear()
+    for (const [id, pos] of this.idIndex) {
+      this.indexStore.addToIndex(id, this.data[pos])
+    }
 
     // Update nextId for auto mode
     if (this.data.length > 0) {
@@ -224,6 +227,19 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   // ── DataStore<T> implementation ────────────────────────────────────
 
+  /** Map indexed row ids to row positions in scan order. */
+  private positionsOf(keys: (string | number)[]): number[] {
+    const positions: number[] = []
+    for (const key of keys) {
+      const pos = this.idIndex.get(key)
+      if (pos === undefined) {
+        throw new Error(`IndexStore out of sync: id ${String(key)} not in idIndex`)
+      }
+      positions.push(pos)
+    }
+    return positions.sort((x, y) => x - y)
+  }
+
   findAll(): T[] {
     return [...this.data]
   }
@@ -235,42 +251,20 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     if (options.where.length > 0) {
       const narrowed = this.indexStore.candidates(options.where)
       if (narrowed !== undefined) {
-        candidateIndices = narrowed.rows
+        candidateIndices = this.positionsOf(narrowed.keys)
         remainingConditions = narrowed.remaining
       }
     }
 
-    let result: T[]
+    let candidates: T[] = this.data
     if (candidateIndices !== undefined) {
-      result = []
+      candidates = []
       for (const idx of candidateIndices) {
-        if (idx < this.data.length) {
-          result.push(this.data[idx])
-        }
+        candidates.push(this.data[idx])
       }
-    } else {
-      result = [...this.data]
     }
 
-    if (remainingConditions.length > 0) {
-      result = result.filter(row =>
-        remainingConditions.every(c => evaluateCondition(row, c))
-      )
-    }
-
-    if (options.orderBy.length > 0) {
-      result.sort((a, b) => compareRows(a, b, options.orderBy))
-    }
-
-    if (options.offsetValue !== undefined && options.offsetValue > 0) {
-      result = result.slice(options.offsetValue)
-    }
-
-    if (options.limitValue !== undefined && options.limitValue >= 0) {
-      result = result.slice(0, options.limitValue)
-    }
-
-    return result
+    return applyQuery(candidates, remainingConditions, options)
   }
 
   findById(id: string | number): T | undefined {
@@ -287,42 +281,17 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     return (data as T).id
   }
 
-  /** Every id currently held, keyed as strings so 1 and '1' collide. */
-  private readExistingIdKeys(): Set<string> {
-    const keys = new Set<string>()
-    for (const row of this.data) {
-      keys.add(String(row.id))
-    }
-    return keys
-  }
-
-  /**
-   * Reject client-supplied ids that already exist locally, or that repeat
-   * within the same batch — the same contract SheetsAdapter enforces on the
-   * server (#128/#154). Called before any mutation, so a rejected write leaves
-   * the rows, the MutationQueue and IndexedDB untouched: the duplicate fails
-   * at the call site instead of being pushed and dead-lettered (#132).
-   *
-   * Rows arriving through replaceAll()/reset() are seeded verbatim and are not
-   * checked, mirroring rows that were already on the sheet.
-   */
-  private assertClientIdsAvailable(ids: (string | number)[]): void {
-    const existing = this.readExistingIdKeys()
-    for (const id of ids) {
-      const key = String(id)
-      if (existing.has(key)) {
-        throw new DuplicateIdError(id, this.tableName)
-      }
-      existing.add(key)
-    }
-  }
-
   insert(data: Omit<T, 'id'> | T): T {
     let newRow: T
 
     if (this.idMode === 'client') {
+      // Reject a taken id before anything is written: a rejected write leaves
+      // the rows, the MutationQueue and IndexedDB untouched, so the duplicate
+      // fails at the call site instead of being pushed and dead-lettered
+      // (#132). Rows arriving through replaceAll()/reset() are seeded verbatim
+      // and are not checked, mirroring rows already on the sheet (#154).
       const id = this.requireClientId(data)
-      this.assertClientIdsAvailable([id])
+      assertClientIdsAvailable(this.idIndex, [id], this.tableName)
       newRow = data as T
     } else {
       const id = this.nextId++
@@ -332,7 +301,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     const index = this.data.length
     this.data.push(newRow)
     this.idIndex.set(newRow.id, index)
-    this.indexStore.addToIndex(index, newRow)
+    this.indexStore.addToIndex(newRow.id, newRow)
 
     // Record mutation and persist
     this.queue.push('insert', newRow.id, undefined, newRow)
@@ -351,7 +320,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     // and behavior matches the other adapters (#98).
     const newRow = { ...oldRow, ...data, id: oldRow.id }
     this.data[index] = newRow
-    this.indexStore.updateIndex(index, oldRow, newRow)
+    this.indexStore.updateIndex(oldRow.id, oldRow, newRow)
 
     // Record mutation and persist
     this.queue.push('update', id, data as Partial<T>)
@@ -366,15 +335,17 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     if (index === undefined) return false
 
     const deletedRow = this.data[index]
-    this.indexStore.removeFromIndex(index, deletedRow)
+    this.indexStore.removeFromIndex(id, deletedRow)
 
     this.data.splice(index, 1)
     this.idIndex.delete(id)
 
+    // Renumber only the row idIndex points to: shadowed rows sharing an id
+    // stay invisible (#154/#235).
     for (let i = index; i < this.data.length; i++) {
-      this.idIndex.set(this.data[i].id, i)
+      const rowId = this.data[i].id
+      if (this.idIndex.get(rowId) === i + 1) this.idIndex.set(rowId, i)
     }
-    this.indexStore.reindexAfterDelete(index)
 
     // Record mutation and persist
     this.queue.push('delete', id)
@@ -395,7 +366,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
         ids.push(this.requireClientId(item))
         newRows.push(item as T)
       }
-      this.assertClientIdsAvailable(ids)
+      assertClientIdsAvailable(this.idIndex, ids, this.tableName)
     } else {
       for (const item of items) {
         newRows.push({ ...item, id: this.nextId++ } as T)
@@ -409,7 +380,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       const rowIndex = startIndex + i
       this.data.push(newRow)
       this.idIndex.set(newRow.id, rowIndex)
-      this.indexStore.addToIndex(rowIndex, newRow)
+      this.indexStore.addToIndex(newRow.id, newRow)
 
       entries.push({ type: 'insert', id: newRow.id, row: newRow })
     }
@@ -431,7 +402,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       const oldRow = this.data[index]
       const newRow = { ...oldRow, ...data, id: oldRow.id } // id immutable (#98)
       this.data[index] = newRow
-      this.indexStore.updateIndex(index, oldRow, newRow)
+      this.indexStore.updateIndex(oldRow.id, oldRow, newRow)
 
       entries.push({ type: 'update', id, data: data as Partial<T> })
       results.push(newRow)

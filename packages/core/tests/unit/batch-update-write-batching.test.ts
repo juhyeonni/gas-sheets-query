@@ -110,10 +110,10 @@ describe('batchUpdate write batching [#129]', () => {
     const results = adapter.batchUpdate(items)
 
     expect(results).toHaveLength(rowCount)
-    // Two reads: the once-per-execution header-drift check (#179, a single 1xN
-    // read of row 1) plus one read of the whole data block. One write of the
-    // whole data block.
-    expect(recorder.reads).toBe(2)
+    // Three reads: the once-per-execution header-drift check (#179, a single
+    // 1xN read of row 1), the id-column read and the read of the matched span.
+    // One write of the whole data block.
+    expect(recorder.reads).toBe(3)
     expect(recorder.writes).toEqual([{ startRow: 2, numRows: rowCount, numCols: COLUMNS.length }])
   })
 

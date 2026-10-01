@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { Repository } from '../../src/core/repository'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
 import type { RowWithId } from '../../src/core/types'
@@ -121,6 +121,22 @@ describe('Repository', () => {
   })
 
   describe('count', () => {
+    it('delegates to store.count() when the store implements it', () => {
+      const count = vi.fn(() => 42)
+      const store = Object.assign(new MockAdapter<User>(), { count })
+      const findAll = vi.spyOn(store, 'findAll')
+
+      expect(new Repository(store).count()).toBe(42)
+      expect(count).toHaveBeenCalledTimes(1)
+      expect(findAll).not.toHaveBeenCalled()
+    })
+
+    it('falls back to findAll().length otherwise', () => {
+      const findAll = vi.spyOn(adapter, 'findAll')
+      expect(repo.count()).toBe(0)
+      expect(findAll).toHaveBeenCalledTimes(1)
+    })
+
     it('should return 0 when empty', () => {
       expect(repo.count()).toBe(0)
     })

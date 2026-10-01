@@ -162,6 +162,28 @@ describe('FakeSheet', () => {
     })
   })
 
+  describe('deleteRows', () => {
+    function five(): FakeSheet {
+      const sheet = new FakeSheet('Sheet1')
+      for (const v of ['a', 'b', 'c', 'd', 'e']) sheet.appendRow([v])
+      return sheet
+    }
+
+    it('removes a block of rows, shifting the rest up', () => {
+      const sheet = five()
+      sheet.deleteRows(2, 2)
+      expect(sheet.getRange(1, 1, 3, 1).getValues()).toEqual([['a'], ['d'], ['e']])
+      expect(sheet.getLastRow()).toBe(3)
+    })
+
+    it('throws when the block is out of bounds', () => {
+      const sheet = five()
+      expect(() => sheet.deleteRows(0, 1)).toThrow(/out of bounds/)
+      expect(() => sheet.deleteRows(2, 0)).toThrow(/out of bounds/)
+      expect(() => sheet.deleteRows(4, 3)).toThrow(/out of bounds/)
+    })
+  })
+
   describe('insertColumnBefore', () => {
     it('shifts cells at and after the position one column right', () => {
       const sheet = new FakeSheet('Sheet1')

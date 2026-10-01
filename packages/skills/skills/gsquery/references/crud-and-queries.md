@@ -85,6 +85,7 @@ users.batchUpdate([
   { id: 1, data: { active: false } },
   { id: 2, data: { age: 26 } },
 ])
+users.batchDelete([1, 2, 99])  // number — rows deleted; missing ids skipped
 
 // Access underlying Repository and QueryBuilder
 users.repo             // Repository<T>
@@ -111,6 +112,7 @@ repo.count()                    // number
 repo.exists(1)                  // boolean
 repo.batchInsert([...])         // T[]
 repo.batchUpdate([...])         // T[]
+repo.batchDelete([1, 2])        // number — rows deleted; missing ids skipped
 ```
 
 ## QueryBuilder — Fluent Queries

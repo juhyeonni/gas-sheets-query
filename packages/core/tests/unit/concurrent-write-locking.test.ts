@@ -136,31 +136,6 @@ function interruptAfterIdScan(sheet: FakeSheet, run: () => void): void {
   )
 }
 
-/**
- * Fires `run` once, right after the first full-width data-block read returns —
- * i.e. between batchUpdate's "read every row" and its ranged writes, where a
- * concurrent deleteRow shifts every computed row index up by one.
- */
-function interruptAfterDataScan(sheet: FakeSheet, run: () => void): void {
-  let armed = true
-  const original = sheet.getRange.bind(sheet)
-  vi.spyOn(sheet, 'getRange').mockImplementation(
-    (row: number, col: number, numRows = 1, numCols = 1) => {
-      const range = original(row, col, numRows, numCols)
-      if (armed && row === 2 && col === 1 && numCols === COLUMNS.length) {
-        armed = false
-        const getValues = range.getValues.bind(range)
-        range.getValues = () => {
-          const values = getValues()
-          run()
-          return values
-        }
-      }
-      return range
-    }
-  )
-}
-
 /** Fires `run` once, right after the first `getLastRow()` reads its value. */
 function interruptAfterLastRow(sheet: FakeSheet, run: () => void): void {
   let armed = true
@@ -301,10 +276,10 @@ describe('SheetsAdapter concurrency (#128)', () => {
       const other = concurrentExecution(lockState, () => {
         deleter.delete(1)
       })
-      // The delete lands between the data-block read and writeRowRuns, so an
+      // The delete lands between the id-column read and writeRowRuns, so an
       // unlocked batchUpdate writes Carol's values into row 4 — which by then
       // holds Dave.
-      interruptAfterDataScan(sheet, () => other.run())
+      interruptAfterIdScan(sheet, () => other.run())
 
       const results = writer.batchUpdate([{ id: 3, data: { name: 'Carol Updated' } }])
       other.drain()
@@ -333,6 +308,101 @@ describe('SheetsAdapter concurrency (#128)', () => {
       expect(idsOnSheet(sheet)).toEqual(['dup'])
       expect(lockState.acquisitions).toBeGreaterThan(0)
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Id memo across operations (#137)
+// ---------------------------------------------------------------------------
+
+describe('SheetsAdapter id memo across operations (#137)', () => {
+  const FOUR = [
+    ['id', 'name', 'age'],
+    [1, 'Alice', 30],
+    [2, 'Bob', 25],
+    [3, 'Carol', 35],
+    [4, 'Dave', 40]
+  ]
+
+  it('update re-resolves when another execution deleted a row above between two calls', () => {
+    const sheet = setupSharedSheet(FOUR)
+    const writer = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+    const deleter = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+
+    writer.update(3, { name: 'C1' })
+    deleter.delete(1)
+    writer.update(3, { name: 'C2' })
+    writer.update(4, { name: 'D2' })
+
+    expect(idsOnSheet(sheet)).toEqual([2, 3, 4])
+    expect(dataRows(sheet)[1]).toEqual([3, 'C2', 35])
+    expect(dataRows(sheet)[2]).toEqual([4, 'D2', 40])
+  })
+
+  it('delete verifies the hinted row before deleteRow', () => {
+    const sheet = setupSharedSheet(FOUR)
+    const first = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+    const second = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+
+    first.update(1, {})
+    second.delete(1)
+
+    expect(first.delete(3)).toBe(true)
+    expect(idsOnSheet(sheet)).toEqual([2, 4])
+  })
+
+  it("a row number reused by another execution's delete+insert is not mistaken for the cached id", () => {
+    const sheet = setupSharedSheet(FOUR.slice(0, 4))
+    const first = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+    const second = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+
+    first.update(3, {})
+    // The insert creates the id counter, so the deleted id 3 is not reused.
+    second.insert({ name: 'New', age: 1 })
+    second.delete(3)
+
+    expect(first.update(3, { name: 'X' })).toBeUndefined()
+    expect(first.delete(3)).toBe(false)
+    expect(dataRows(sheet)[2]).toEqual([4, 'New', 1])
+  })
+
+  it('cold-cache findById does not return a shifted row', () => {
+    setupSharedSheet(FOUR)
+    const first = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+    const second = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+
+    first.update(1, {})
+    second.delete(2)
+
+    expect(first.findById(3)?.name).toBe('Carol')
+    expect(first.findById(2)).toBeUndefined()
+  })
+
+  it('client-mode insert still sees ids another execution inserted between calls', () => {
+    const sheet = setupSharedSheet([['id', 'name', 'age']])
+    const first = new SheetsAdapter<TestRow>({ ...BASE_OPTIONS, idMode: 'client' })
+    const second = new SheetsAdapter<TestRow>({ ...BASE_OPTIONS, idMode: 'client' })
+
+    first.insert({ id: 'a', name: 'A', age: 1 })
+    second.insert({ id: 'b', name: 'B', age: 2 })
+
+    expect(() => first.insert({ id: 'b', name: 'B2', age: 3 })).toThrow(DuplicateIdError)
+    expect(idsOnSheet(sheet).filter(id => id === 'b')).toHaveLength(1)
+  })
+
+  it('auto ids stay unique when another execution inserts between calls', () => {
+    const sheet = setupSharedSheet(FOUR.slice(0, 4))
+    const first = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+    const second = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+
+    expect(first.insert({ name: 'a', age: 1 }).id).toBe(4)
+    expect(second.insert({ name: 'b', age: 1 }).id).toBe(5)
+    expect(first.insert({ name: 'c', age: 1 }).id).toBe(6)
+    expect(second.batchInsert([{ name: 'd', age: 1 }, { name: 'e', age: 1 }]).map(r => r.id)).toEqual([7, 8])
+    expect(first.insert({ name: 'f', age: 1 }).id).toBe(9)
+
+    const ids = idsOnSheet(sheet)
+    expect(new Set(ids).size).toBe(ids.length)
   })
 })
 
@@ -435,6 +505,31 @@ describe('SheetsAdapter lock coverage (#128)', () => {
     const deleteRow = sheet.deleteRow as unknown as { mock: { invocationCallOrder: number[] } }
     expect(order(lock.waitLock)).toBeLessThan(order(deleteRow))
     expect(order(lock.releaseLock)).toBeGreaterThan(order(deleteRow))
+  })
+
+  it('batchDelete() holds the lock across the id scan and deleteRows (#137)', () => {
+    const sheet = setupSharedSheet([
+      ['id', 'name', 'age'],
+      [1, 'Alice', 30],
+      [2, 'Bob', 25],
+      [3, 'Carol', 35],
+      [4, 'Dave', 40]
+    ])
+    const lockState = installExclusiveLock()
+
+    const first = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+    const second = new SheetsAdapter<TestRow>(BASE_OPTIONS)
+
+    const other = concurrentExecution(lockState, () => {
+      second.delete(1)
+    })
+    interruptAfterIdScan(sheet, () => other.run())
+
+    expect(first.batchDelete([3])).toBe(1)
+    expect(other.wasDeferred).toBe(true)
+    other.drain()
+
+    expect(idsOnSheet(sheet)).toEqual([2, 4])
   })
 
   it('client-mode insert() holds the lock across the uniqueness check and appendRow', () => {

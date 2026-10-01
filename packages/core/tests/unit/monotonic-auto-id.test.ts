@@ -130,6 +130,20 @@ describe('monotonic auto ids (#177)', () => {
     expect(adapter.insert({ name: 'b' }).id).toBe(101)
   })
 
+  it('picks up a hand-entered high id only after clearCache() within one execution (#137 memo)', () => {
+    const spreadsheet = setup()
+    const adapter = makeAdapter()
+
+    expect(adapter.insert({ name: 'a' }).id).toBe(1)
+    spreadsheet.getSheetByName('users')!.appendRow([100, 'manual'])
+
+    // The max id is memoized per adapter instance: documented limitation.
+    expect(adapter.insert({ name: 'b' }).id).toBe(2)
+
+    adapter.clearCache()
+    expect(adapter.insert({ name: 'c' }).id).toBe(101)
+  })
+
   it('keeps per-table counters independent on one spreadsheet', () => {
     setup()
     const users = makeAdapter()
