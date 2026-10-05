@@ -58,6 +58,7 @@ export { deserializeColumnValue, deserializeRow } from './core/column-conversion
 // Index Store
 export { IndexStore, createIndexKey, serializeValues } from './core/index-store.js'
 export type { IndexDefinition } from './core/index-store.js'
+export { findWithIndexes } from './core/indexed-find.js'
 export { assertClientIdsAvailable } from './core/client-ids.js'
 
 // Errors

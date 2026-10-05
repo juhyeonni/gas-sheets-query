@@ -42,7 +42,7 @@ const admins = db.from('users')
 | Import | Contents |
 |---|---|
 | `@gsquery/core` | `defineSheetsDB`, query/JOIN builders, `SheetsAdapter`, `MockAdapter`, migrations, errors |
-| `@gsquery/core/testing` | GAS fakes (`FakeSheet`, …) and CSV/JSON fixture loaders for unit tests |
+| `@gsquery/core/testing` | GAS fakes (`FakeSheet`, …), CSV/JSON fixture loaders, and `runDataStoreConformance` for checking a `DataStore` implementation |
 
 Ships ESM (`dist/index.mjs`), CJS (`dist/index.cjs`), and a standalone GAS bundle (`dist/gas/bundle.js`) for `clasp push`.
 
