@@ -7,11 +7,15 @@
  * syncs, then both pull.
  *
  * The suite MEASURES the outcome rather than asserting a policy: how many of
- * client A's field-writes survive, and which were silently overwritten. The
- * root cause is #138 — `MergedMutation` carries `{id, type, data}` and nothing
- * else, so the server has no base version to compare against and can never
- * populate `conflicts`. Both clients report a clean, successful, "converged"
- * sync while writes disappear.
+ * client A's field-writes survive, and which were silently overwritten. Against
+ * a backend that reports no row versions, `MergedMutation` carries
+ * `{id, type, data}` and nothing else, so the server has no base version to
+ * compare against and can never populate `conflicts`. Both clients report a
+ * clean, successful, "converged" sync while writes disappear.
+ *
+ * Against a versioning backend (#138) every pushed edit carries the version it
+ * was built on, so the later pusher's stale edits come back as conflicts
+ * instead of silently overwriting the earlier pusher's writes.
  *
  * Two backend write policies are measured, because the loss depends on the
  * server's granularity and both shapes are written in practice:
@@ -27,8 +31,11 @@ import { createClientDB } from '../../src/local/create-client-db.js'
 import type { ClientDBResult, ClientDBSchema } from '../../src/local/create-client-db.js'
 import type { MutationStorage } from '../../src/local/mutation-queue.js'
 import type {
+  ConflictItem,
   MergedMutation,
+  RowVersions,
   SyncEvent,
+  SyncPullResult,
   SyncPushResult,
   SyncTransport,
 } from '../../src/local/sync-transport.js'
@@ -69,35 +76,83 @@ type ServerWritePolicy = 'row-replace' | 'field-merge'
  *
  * Honors the documented push contract minimally: inserts are upserts, deletes
  * are no-ops when the row is gone, and `appliedIds` reports exactly what was
- * committed. It never reports a conflict — not out of laziness, but because
- * the protocol gives it nothing to detect one with (#138).
+ * committed.
+ *
+ * Without `versioned` it never reports a conflict — not out of laziness, but
+ * because the protocol gives it nothing to detect one with. With `versioned`
+ * it follows the row-version contract (#138): a per-row counter bumped on every
+ * write, returned on pull and push, and a mutation whose `baseVersion` is stale
+ * is reported as a conflict instead of applied.
  */
 class SharedGasBackend {
   private readonly rows = new Map<string | number, ServerDoc>()
+  private readonly versions = new Map<string, number>()
   readonly pushLog: Array<{ client: string; mutations: MergedMutation<ServerDoc>[] }> = []
   conflictsReported = 0
+  /** Row ids the backend reported to each client as conflicts */
+  readonly conflictIds = new Map<string, Set<string | number>>()
 
-  constructor(private readonly policy: ServerWritePolicy) {
-    for (const row of SEED) this.rows.set(row.id, { ...row })
+  constructor(
+    private readonly policy: ServerWritePolicy,
+    readonly versioned = false
+  ) {
+    for (const row of SEED) {
+      this.rows.set(row.id, { ...row })
+      this.versions.set(String(row.id), 1)
+    }
   }
 
   snapshot(): ServerDoc[] {
     return [...this.rows.values()].map(r => ({ ...r }))
   }
 
+  /** Current version of every row, or none for a versionless backend */
+  snapshotVersions(): RowVersions | undefined {
+    if (!this.versioned) return undefined
+    return Object.fromEntries([...this.rows.keys()].map(id => [String(id), this.versionOf(id)]))
+  }
+
+  conflictsFor(client: string): Set<string | number> {
+    return this.conflictIds.get(client) ?? new Set()
+  }
+
+  private versionOf(id: string | number): number {
+    return this.versions.get(String(id)) ?? 0
+  }
+
   apply(client: string, mutations: MergedMutation<ServerDoc>[]): SyncPushResult<ServerDoc> {
     this.pushLog.push({ client, mutations: mutations.map(m => ({ ...m })) })
 
+    const conflicts: ConflictItem<ServerDoc>[] = []
+    const applied: (string | number)[] = []
+
     for (const m of mutations) {
+      const existing = this.rows.get(m.id)
+      if (
+        this.versioned &&
+        existing &&
+        m.baseVersion !== undefined &&
+        m.baseVersion !== this.versionOf(m.id)
+      ) {
+        conflicts.push({
+          id: m.id,
+          serverRow: { ...existing },
+          clientMutation: m,
+          serverVersion: this.versionOf(m.id),
+        })
+        continue
+      }
+      applied.push(m.id)
+
       if (m.type === 'delete') {
         this.rows.delete(m.id)
         continue
       }
       if (m.type === 'insert') {
         this.rows.set(m.id, { ...m.data, id: m.id } as ServerDoc)
+        this.versions.set(String(m.id), this.versionOf(m.id) + 1)
         continue
       }
-      const existing = this.rows.get(m.id)
       if (!existing) continue
       this.rows.set(
         m.id,
@@ -105,11 +160,27 @@ class SharedGasBackend {
           ? ({ ...m.data, id: m.id } as ServerDoc)
           : ({ ...existing, ...m.data, id: m.id } as ServerDoc)
       )
+      this.versions.set(String(m.id), this.versionOf(m.id) + 1)
     }
 
-    // No base version arrives with the batch, so there is nothing to compare
-    // the stored row against. `conflicts` stays empty by construction.
-    return { success: true, appliedIds: mutations.map(m => m.id) }
+    if (!this.versioned) {
+      // No base version arrives with the batch, so there is nothing to compare
+      // the stored row against. `conflicts` stays empty by construction.
+      return { success: true, appliedIds: applied }
+    }
+
+    this.conflictsReported += conflicts.length
+    const reported = this.conflictsFor(client)
+    for (const c of conflicts) reported.add(c.id)
+    this.conflictIds.set(client, reported)
+
+    const versions: RowVersions = {}
+    for (const id of applied) {
+      if (this.rows.has(id)) versions[String(id)] = this.versionOf(id)
+    }
+    return conflicts.length > 0
+      ? { success: false, conflicts, appliedIds: applied, versions }
+      : { success: true, appliedIds: applied, versions }
   }
 }
 
@@ -120,8 +191,10 @@ class ClientLink implements SyncTransport {
     private readonly clientName: string
   ) {}
 
-  async pull<T extends RowWithId>(_tableName: string): Promise<{ rows: T[] }> {
-    return { rows: this.backend.snapshot() as unknown as T[] }
+  async pull<T extends RowWithId>(_tableName: string): Promise<SyncPullResult<T>> {
+    const rows = this.backend.snapshot() as unknown as T[]
+    const versions = this.backend.snapshotVersions()
+    return versions ? { rows, versions } : { rows }
   }
 
   async push<T extends RowWithId>(
@@ -220,14 +293,17 @@ function describeWrites(writes: readonly FieldWrite[]): string[] {
  * Both clients end up reading the same rows, which is what makes the loss
  * invisible to either of them.
  */
-async function runConvergence(policy: ServerWritePolicy): Promise<{
+async function runConvergence(
+  policy: ServerWritePolicy,
+  versioned = false
+): Promise<{
   backend: SharedGasBackend
   final: ServerDoc[]
   clientA: ClientDBResult<Tables>
   clientB: ClientDBResult<Tables>
   events: { a: SyncEvent[]; b: SyncEvent[] }
 }> {
-  const backend = new SharedGasBackend(policy)
+  const backend = new SharedGasBackend(policy, versioned)
   const clientA = await openClient(backend, 'clientA')
   const clientB = await openClient(backend, 'clientB')
 
@@ -411,4 +487,54 @@ describe('S6 two-client convergence', () => {
     await clientA.close()
     await clientB.close()
   })
+})
+
+describe('S6 two-client convergence against a versioning backend [#138]', () => {
+  for (const policy of ['row-replace', 'field-merge'] as const) {
+    it(`A loses no field-write, and every B write that does not land was reported to B as a conflict (${policy})`, async () => {
+      const { backend, final, clientA, clientB, events } = await runConvergence(policy, true)
+
+      // Every edit of a pulled row went out with the version it was built on.
+      const pushed = backend.pushLog.flatMap(entry => entry.mutations)
+      expect(pushed.length).toBeGreaterThan(0)
+      for (const mutation of pushed) {
+        expect(mutation.baseVersion).toBe(1)
+      }
+
+      // A pushed first, against the versions it pulled: nothing of A's is lost.
+      expect(backend.conflictsFor('clientA').size).toBe(0)
+      expect(measure(A_WRITES, final).lost).toEqual([])
+
+      // B's edits of rows 3-5 were built on versions A had since replaced, so
+      // they came back as conflicts instead of overwriting A's writes.
+      const conflicted = backend.conflictsFor('clientB')
+      expect([...conflicted].sort()).toEqual(['r3', 'r4', 'r5'])
+      expect(backend.conflictsReported).toBe(3)
+
+      const b = measure(B_WRITES, final)
+      expect(b.lost.length).toBeGreaterThan(0)
+      for (const w of b.lost) {
+        expect(conflicted.has(w.row)).toBe(true)
+      }
+      expect(describeWrites(b.lost)).toEqual([
+        'r3.y',
+        'r3.z',
+        'r4.y',
+        'r4.z',
+        'r5.y',
+        'r5.z',
+      ])
+
+      // The sync itself still completes, and both clients converge.
+      expect(events.a.filter(e => e.type === 'error')).toEqual([])
+      expect(events.b.filter(e => e.type === 'error')).toEqual([])
+      expect(localRows(clientA)).toEqual(final)
+      expect(localRows(clientB)).toEqual(final)
+      expect(clientA.adapters.Doc.queue.getMerged()).toEqual([])
+      expect(clientB.adapters.Doc.queue.getMerged()).toEqual([])
+
+      await clientA.close()
+      await clientB.close()
+    })
+  }
 })

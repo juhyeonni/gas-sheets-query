@@ -3,6 +3,24 @@
  */
 import type { RowWithId } from '@gsquery/core'
 
+/**
+ * A row's version, as the server defines it (#138).
+ *
+ * Opaque to the client: it only stores a version and echoes it back as a
+ * mutation's `baseVersion`. The server picks the representation (a per-row
+ * counter column is the recommended one), so the protocol never dictates how
+ * versions are stored.
+ */
+export type RowVersion = string | number
+
+/**
+ * Row versions keyed by `String(id)`.
+ *
+ * A plain record keeps it JSON-native over both `google.script.run` and REST.
+ * The ids of one table share a type, so the string keys cannot collide.
+ */
+export type RowVersions = Record<string, RowVersion>
+
 /** Mutation types that can be queued */
 export type MutationType = 'insert' | 'update' | 'delete'
 
@@ -21,6 +39,13 @@ export interface Mutation<T extends RowWithId = RowWithId> {
    * instead of being silently dropped. See SyncEngine.pushTable (#109).
    */
   seq: number
+  /**
+   * The row's known version when this mutation was enqueued: the version the
+   * edit was built on. Absent when the client knows no version for the row
+   * (a row created locally, or a server that reports no versions). Persisted
+   * with the queue, so it survives a reload (#138).
+   */
+  baseVersion?: RowVersion
 }
 
 /** A merged mutation ready for transport */
@@ -29,6 +54,12 @@ export interface MergedMutation<T extends RowWithId = RowWithId> {
   type: MutationType
   /** Merged data for insert/update */
   data?: Partial<T>
+  /**
+   * The version of the row this merged edit was built on: the stamp of its
+   * oldest unpushed mutation. Absent → the client knows no version for the
+   * row, and the server applies the mutation unconditionally (#138).
+   */
+  baseVersion?: RowVersion
 }
 
 /** Conflict item returned from push */
@@ -36,6 +67,24 @@ export interface ConflictItem<T extends RowWithId = RowWithId> {
   id: string | number
   serverRow: T
   clientMutation: MergedMutation<T>
+  /**
+   * The server row's current version. Resolving the conflict moves the row's
+   * base to it, so a client-wins re-push or the next edit is not rejected
+   * again for the same reason (#138).
+   */
+  serverVersion?: RowVersion
+}
+
+/**
+ * Result of a transport pull.
+ *
+ * `versions` is optional: a server that reports none keeps today's wire
+ * format, and the client then sends no `baseVersion` either (#138).
+ */
+export interface SyncPullResult<T extends RowWithId = RowWithId> {
+  rows: T[]
+  /** The current version of each pulled row, keyed by `String(id)` */
+  versions?: RowVersions
 }
 
 /**
@@ -80,6 +129,13 @@ export interface SyncPushResult<T extends RowWithId = RowWithId>
   conflicts?: ConflictItem<T>[]
   /** Ids the server confirms it applied. Absent → inferred from `success`. */
   appliedIds?: (string | number)[]
+  /**
+   * The new version of each row this push wrote, keyed by `String(id)`. These
+   * become the client's known versions, and edits of those rows queued while
+   * the push was in flight are rebased onto them. A settled row with no entry
+   * here is forgotten, so its next edit goes out without a base (#138).
+   */
+  versions?: RowVersions
 }
 
 /**
@@ -93,9 +149,16 @@ export interface SyncPushResult<T extends RowWithId = RowWithId>
  * The client guarantees it never emits an `update` for a row the server has not
  * seen: a delete-then-recreate is coalesced to a single `insert` (upsert), so a
  * strict-update server still applies it correctly. Inserts must therefore be upserts.
+ *
+ * Row versions (#138), all optional: a mutation that carries `baseVersion` is
+ * applied only when the stored row's current version equals it; otherwise the
+ * server reports a conflict with `serverRow` and `serverVersion` instead of
+ * applying it. A mutation without `baseVersion` is applied unconditionally.
+ * The server bumps a row's version on every write it applies, and returns
+ * versions on pull (every row) and on push (every row the push wrote).
  */
 export interface SyncTransport {
-  pull<T extends RowWithId>(tableName: string): Promise<{ rows: T[] }>
+  pull<T extends RowWithId>(tableName: string): Promise<SyncPullResult<T>>
   push<T extends RowWithId>(
     tableName: string,
     mutations: MergedMutation<T>[]

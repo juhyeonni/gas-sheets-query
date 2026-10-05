@@ -103,7 +103,8 @@ Handle for table-specific CRUD and query operations.
 ### Properties and Methods
 
 ```typescript
-interface TableHandle<T> {
+// TName: the table's name, a literal from db.from(name) (default: string)
+interface TableHandle<T, TName extends string = string> {
   // Direct repository access
   readonly repo: Repository<T>
   
@@ -111,7 +112,7 @@ interface TableHandle<T> {
   query(): QueryBuilder<T>
   
   // JOIN-enabled query builder
-  joinQuery(): JoinQueryBuilder<T>
+  joinQuery(): JoinQueryBuilder<T, TName>
   
   // CRUD shortcut methods
   create(data: Omit<T, 'id'>): T
@@ -287,6 +288,22 @@ const result = db.from('comments')
 // Result: { ...comment, post: {...}, author: {...} }
 ```
 
+### Filtering
+
+`where()` filters the main table only. The field is a main-table key, bare or in the `<mainTable>.<key>` form, and the value is typed by that key:
+
+```typescript
+const posts = db.from('posts').joinQuery()
+
+posts.where('published', '=', true)        // OK
+posts.where('posts.published', '=', true)  // OK: same filter
+posts.where('posts.published', '=', 'yes') // compile error: boolean column
+posts.where('nope', '=', 'x')              // compile error: unknown key
+posts.where('users.name', '=', 'Alice')    // compile error: not the main table
+```
+
+`db.from('posts')` carries the table name as a literal type: `JoinQueryBuilder<Post, 'posts'>`. A builder annotated `JoinQueryBuilder<Post>` accepts any prefix before a valid key at compile time, and throws at runtime on a prefix other than the main table's name. To filter on joined data, filter the results after `exec()`.
+
 ### Full Example
 
 ```typescript
@@ -329,6 +346,8 @@ const min = query.min('amount')
 const max = query.max('amount')
 ```
 
+`sum()`, `avg()`, `min()` and `max()` take a numeric column: one whose type can hold a number (`number`, `number | null`, an optional `number`). Any other column always aggregates to `0` or `null`, so `query.sum('category')` does not compile.
+
 ### Group Aggregation
 
 ```typescript
@@ -351,9 +370,11 @@ const stats = db.from('orders')
 // ]
 ```
 
+The result type has the `groupBy()` keys (typed `unknown`) and the spec names only: `stats[0].category` compiles, `stats[0].status` does not. Without `groupBy()`, only the spec names exist.
+
 ### Having
 
-`having()` filters groups by aggregation results. Chain it before `agg()` - it references the agg field names defined in `agg()`.
+`having()` filters groups by aggregation results. Chain it before `agg()` - it references the agg field names defined in `agg()`. If an alias is not one of the spec names, `agg()` throws a `SheetsQueryError` (code `UNKNOWN_AGGREGATION`) naming it, before it reads any rows, with or without `groupBy()`.
 
 ```typescript
 // Filter groups - 'orderCount' must match a key in agg()
@@ -376,6 +397,8 @@ const bigCategories = db.from('orders')
 | `'avg:field'` | Field average |
 | `'min:field'` | Field minimum |
 | `'max:field'` | Field maximum |
+
+`field` must be a numeric column of the row type. An unknown column (`'sum:amout'`) or a string-only column (`'sum:category'`) does not compile. The exported type is `AggSpec<F extends string = string>`; a bare `AggSpec` accepts any field name.
 
 ---
 
@@ -569,7 +592,7 @@ Options:
 | `DuplicateIdError` | Insert would duplicate an existing id (`idMode: 'client'`) |
 | `NoResultsError` | No query results (`firstOrFail`) |
 | `MissingStoreError` | DataStore not found |
-| `ValidationError` | Validation failed |
+| `ValidationError` | `upsert` with an id no row carries on an `auto` idMode store |
 | `InvalidOperatorError` | Invalid operator |
 | `MigrationVersionError` | Migration version error |
 | `MigrationExecutionError` | Migration execution failed |

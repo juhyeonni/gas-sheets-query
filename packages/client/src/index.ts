@@ -43,6 +43,9 @@ export type {
   ClientDBSchema,
   SyncTransport,
   SyncPushResult,
+  SyncPullResult,
+  RowVersion,
+  RowVersions,
   Mutation,
   MutationType,
   MergedMutation,
@@ -60,7 +63,11 @@ export type {
 // Transports
 export { MockTransport } from "./transports/index.js";
 export { GasApiTransport } from "./transports/index.js";
-export type { GasApiTransportOptions } from "./transports/index.js";
+export type {
+  GasApiTransportOptions,
+  MockTransportOptions,
+  PushContentType,
+} from "./transports/index.js";
 
 // Runtime exports (always available)
 export {
@@ -89,6 +96,8 @@ export type {
   RuntimeTableSchema,
   ColumnType,
   IndexDefinition,
+  ColumnDefault,
+  CreateInputMap,
 } from "./runtime.js";
 
 // =============================================================================

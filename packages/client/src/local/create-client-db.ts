@@ -5,7 +5,7 @@
 import type { RowWithId, DataStore, SheetsDBConfig, TypedSheetsDBConfig } from '@gsquery/core'
 import { createSheetsDB } from '@gsquery/core'
 import type { SheetsDB } from '@gsquery/core'
-import { LocalAdapter, openSharedIDB } from './local-adapter.js'
+import { LocalAdapter, openSharedIDB, IDBUpgradeBlockedError } from './local-adapter.js'
 import type { LocalAdapterOptions } from './local-adapter.js'
 import { SyncEngine } from './sync-engine.js'
 import type { SyncEngineOptions } from './sync-engine.js'
@@ -16,8 +16,9 @@ import type {
   PoisonedMutationHandler,
 } from './sync-transport.js'
 import type { MutationStorage } from './mutation-queue.js'
-import type { RuntimeSchema } from '@gsquery/core'
+import type { RuntimeSchema, CreateInputMap } from '@gsquery/core'
 import { composeName } from './naming.js'
+import { toSheetsDBConfig } from '../schema-config.js'
 
 /**
  * Schema definition for createClientDB.
@@ -45,6 +46,12 @@ export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>>
    * ids to drop — see {@link PoisonedMutationAction}.
    */
   onPoisonedMutation?: PoisonedMutationHandler
+  /**
+   * Most mutations per `transport.push` call (default unlimited). A larger
+   * queue is pushed in slices of this size, in order; must be a positive
+   * integer.
+   */
+  maxBatchSize?: number
   /** Custom mutation storage (defaults to localStorage) */
   mutationStorage?: MutationStorage
   /** Disable IndexedDB (for testing in non-browser environments) */
@@ -59,8 +66,11 @@ export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>>
   namespace?: string
 }
 
-export interface ClientDBResult<Tables extends Record<string, RowWithId>> {
-  db: SheetsDB<Tables>
+export interface ClientDBResult<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+> {
+  db: SheetsDB<Tables, CreateInputs>
   sync: SyncEngine
   /** Access adapters directly (for testing/advanced use) */
   adapters: { [K in keyof Tables & string]: LocalAdapter<Tables[K]> }
@@ -74,9 +84,12 @@ export interface ClientDBResult<Tables extends Record<string, RowWithId>> {
 }
 
 /** Create a local-first client DB (async init for IndexedDB hydration) */
-export async function createClientDB<Tables extends Record<string, RowWithId>>(
+export async function createClientDB<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+>(
   options: CreateClientDBOptions<Tables>
-): Promise<ClientDBResult<Tables>> {
+): Promise<ClientDBResult<Tables, CreateInputs>> {
   const {
     schema,
     transport,
@@ -86,6 +99,7 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     retryBaseDelayMs,
     maxRetryDelayMs,
     onPoisonedMutation,
+    maxBatchSize,
     mutationStorage,
     disableIDB,
     namespace,
@@ -99,10 +113,13 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     retryBaseDelayMs,
     maxRetryDelayMs,
     onPoisonedMutation,
+    maxBatchSize,
   } satisfies SyncEngineOptions)
 
-  const stores: Record<string, DataStore<any>> = {}
-  const adapters: Record<string, LocalAdapter<any>> = {}
+  // Keyed by runtime table name, so the per-table row type is erased to
+  // RowWithId here and narrowed back to Tables[K] where the maps leave.
+  const stores: Record<string, DataStore<RowWithId>> = {}
+  const adapters: Record<string, LocalAdapter<RowWithId>> = {}
 
   // Open shared IDB with all table stores in a single upgrade transaction
   const idbEnabled = !(disableIDB ?? false) && typeof indexedDB !== 'undefined'
@@ -111,12 +128,26 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     try {
       const allTableNames = Object.keys(schema.tables)
       sharedDb = await openSharedIDB(allTableNames, composeName('gsquery', namespace))
-    } catch {
+    } catch (err) {
       // IndexedDB unavailable - adapters will run in-memory only
+      if (err instanceof IDBUpgradeBlockedError) {
+        // The blocked request stays queued, so a per-adapter open would queue
+        // behind it and hang init again: skip IndexedDB for this session (#120).
+        // Leaving sharedDb undefined already keeps every adapter memory-only.
+        console.warn(`[gsquery] ${err.message}; continuing memory-only for this session`)
+      }
     }
   }
 
-  // Create LocalAdapter per table with shared IDB handle
+  // Create LocalAdapter per table with shared IDB handle. Without one, the
+  // adapters must not open connections of their own: close() only closes
+  // sharedDb, so any other connection would leak and wedge later upgrades
+  // (#139). The mutation queue keeps its own storage either way.
+  // Each init() is one IndexedDB round trip, so they run concurrently (#237);
+  // tables register with the engine only once every init() resolved, in schema
+  // order, so no pull can land mid-init() and tables keep syncing in a stable
+  // order.
+  const created: Array<[string, LocalAdapter<RowWithId>]> = []
   for (const [tableName, tableSchema] of Object.entries(schema.tables)) {
     const adapterOpts: LocalAdapterOptions = {
       tableName,
@@ -124,33 +155,28 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
       columnTypes: tableSchema.columnTypes,
       idMode: 'client',
       mutationStorage,
-      disableIDB: disableIDB ?? false,
-      initialData: options.initialData?.[tableName as keyof Tables] as any[],
+      disableIDB: sharedDb === undefined,
+      initialData: options.initialData?.[tableName as keyof Tables],
       idbDb: sharedDb,
       namespace,
     }
 
-    const adapter = new LocalAdapter(adapterOpts)
-    await adapter.init()
+    created.push([tableName, new LocalAdapter(adapterOpts)])
+  }
 
+  await Promise.all(created.map(([, adapter]) => adapter.init()))
+
+  for (const [tableName, adapter] of created) {
     stores[tableName] = adapter
     adapters[tableName] = adapter
-
-    // Register with SyncEngine
     syncEngine.registerTable(tableName, adapter, adapter.queue)
   }
 
-  // Build SheetsDBConfig from schema
-  const config: SheetsDBConfig = {
-    tables: Object.fromEntries(
-      Object.entries(schema.tables).map(([name, s]) => [
-        name,
-        { columns: [...s.columns], sheetName: s.sheetName },
-      ])
-    ),
-  }
+  // Build SheetsDBConfig from schema. Defaults and @updatedAt fields reach each
+  // table's Repository through it, exactly as on the server path (#199).
+  const config: SheetsDBConfig = toSheetsDBConfig(schema)
 
-  const db = createSheetsDB<Tables>({
+  const db = createSheetsDB<Tables, CreateInputs>({
     // Built from the runtime schema, so its columns are plain strings that the
     // compiler cannot tie to Tables' keys (#246).
     config: config as TypedSheetsDBConfig<Tables>,
@@ -172,7 +198,10 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
   return {
     db,
     sync: syncEngine,
-    adapters: adapters as { [K in keyof Tables & string]: LocalAdapter<Tables[K]> },
+    // Each adapter was built for its own table (seeded from initialData[name]),
+    // but TypeScript cannot tie a runtime key to its K, and LocalAdapter is
+    // invariant in its row type, so the narrowing goes through unknown.
+    adapters: adapters as unknown as { [K in keyof Tables & string]: LocalAdapter<Tables[K]> },
     close,
   }
 }

@@ -32,7 +32,7 @@
     "dev": "vitest",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.type-tests.json",
     "clean": "rm -rf dist"
   },
   "keywords": [

@@ -41,6 +41,8 @@ This package is published as ESM only (`"type": "module"`, `exports` with an `im
 - [Local-First Client](https://juhyeonni.github.io/gas-sheets-query/local-first-client) · [Typed Client](https://juhyeonni.github.io/gas-sheets-query/typed-client)
 - [Installation](https://juhyeonni.github.io/gas-sheets-query/installation) · [API Reference](https://juhyeonni.github.io/gas-sheets-query/api-reference)
 
+One backend serving several spreadsheets (one per tenant)? Give `GasApiTransport` a `context` to route each pull and push on the server — see [Routing context](https://juhyeonni.github.io/gas-sheets-query/local-first-client#routing-context) in the `GasApiTransport` section for the wire format, how it differs from `namespace`, and the security rules.
+
 The local-first client is single-tab: two tabs sharing a namespace can clobber each other's queued mutations. See the wiki for the full trade-off list.
 
 ## License
