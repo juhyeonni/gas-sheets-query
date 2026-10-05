@@ -108,6 +108,75 @@ new GasApiTransport({ pullFn: 'syncPull', pushFn: 'syncPush' })  // GAS function
 
 The GAS side exposes `syncPull(tableName)` / `syncPush(tableName, mutations)` handlers backed by `SheetsAdapter` (typically with `idMode: 'client'`, since the browser generates IDs).
 
+### Routing context
+
+When one backend serves several spreadsheets (for example one per team), the server has to know which one a sync request is for. Pass a `context` and the transport sends it on every pull and push:
+
+```typescript
+const transport = new GasApiTransport({ context: { tenant: 'team-a' } })
+```
+
+`context` is a `Record<string, string>` captured once, when the transport is constructed. Build one transport per client instance; to switch tenants, `close()` the old client and create a new one with a new transport. The library treats the context as opaque: it never reads the keys or values.
+
+How it travels, on each path:
+
+| Path | Pull | Push |
+|---|---|---|
+| GAS (`google.script.run`) | `syncPull(table, context)` | `syncPush(table, mutations, context)` |
+| REST (`fetch`) | `GET …/sync/pull?table=<table>&<key>=<value>…` | `POST …/sync/push?<key>=<value>…`, body `{ table, mutations }` |
+
+Without a `context` the calls are unchanged: no trailing argument, no extra query parameters. REST keys and values are URL-encoded. A `table` key is rejected at construction because it collides with the pull URL's `table` parameter. Empty-string values are sent as they are.
+
+**`context` vs `namespace`.** `namespace` (on `createClientDB`) partitions *local* storage: IndexedDB and the mutation queue. `context` is *server-routing* metadata. They are separate concepts, even when an app binds both to the same tenant id.
+
+**Security.** Carry a validated identifier the server authorizes, never a resolved resource id such as a spreadsheetId. The server checks that the caller may use that tenant, then maps it to the spreadsheet itself; a client that names a spreadsheet directly can name any spreadsheet. Query parameters appear in access logs, so the context must never hold secrets or tokens.
+
+A server handler that reads the context on both paths:
+
+```typescript
+// GAS: google.script.run passes the context as the trailing argument
+function syncPull(table: string, context?: { tenant?: string }) {
+  return { rows: dbFor(context?.tenant).from(table).findAll() }
+}
+
+// REST: doGet / doPost cannot read headers, so the context is in e.parameter
+function doGet(e: GoogleAppsScript.Events.DoGet) {
+  return json(syncPull(e.parameter.table, { tenant: e.parameter.tenant }))
+}
+
+function doPost(e: GoogleAppsScript.Events.DoPost) {
+  const { table, mutations } = JSON.parse(e.postData.contents)
+  return json(syncPush(table, mutations, { tenant: e.parameter.tenant }))
+}
+
+function json(body: unknown) {
+  return ContentService.createTextOutput(JSON.stringify(body))
+    .setMimeType(ContentService.MimeType.JSON)
+}
+
+// Validate, then resolve: never trust a spreadsheet id from the client
+function dbFor(tenant: string | undefined) {
+  const user = Session.getActiveUser().getEmail()
+  const spreadsheetId = lookupSpreadsheetFor(user, tenant)  // throws if not a member
+  return createSheetsDB({ spreadsheetId, tables })
+}
+```
+
+### Overriding the transport
+
+`gasPull`, `gasPush`, `fetchPull` and `fetchPush` are `protected`, and `GasApiTransport.isGas()` is a `protected static` method, so a subclass can change one call path and keep the rest:
+
+```typescript
+class LoggingTransport extends GasApiTransport {
+  protected override async fetchPull<T extends RowWithId>(table: string) {
+    console.debug('pull', table, GasApiTransport.isGas())
+    return super.fetchPull<T>(table)
+  }
+}
+```
+
+`pull` and `push` call the overridden methods.
+
 ## Limitations
 
 - **Single-tab.** Two tabs sharing a namespace can overwrite each other's queued mutations and IndexedDB snapshots. Use one tab, or give each tab its own `namespace`.
