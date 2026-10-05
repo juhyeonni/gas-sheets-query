@@ -6,6 +6,7 @@ import type { RowWithId } from '@gsquery/core'
 import type {
   SyncTransport,
   MergedMutation,
+  SyncPullResult,
   SyncPushResult,
 } from '../local/sync-transport.js'
 
@@ -49,7 +50,7 @@ export class GasApiTransport implements SyncTransport {
     this.pushFn = options.pushFn ?? 'syncPush'
   }
 
-  async pull<T extends RowWithId>(tableName: string): Promise<{ rows: T[] }> {
+  async pull<T extends RowWithId>(tableName: string): Promise<SyncPullResult<T>> {
     if (isGas()) {
       return this.gasPull<T>(tableName)
     }
@@ -68,10 +69,10 @@ export class GasApiTransport implements SyncTransport {
 
   // ── GAS (google.script.run) ────────────────────────────────────────
 
-  private gasPull<T extends RowWithId>(tableName: string): Promise<{ rows: T[] }> {
+  private gasPull<T extends RowWithId>(tableName: string): Promise<SyncPullResult<T>> {
     return new Promise((resolve, reject) => {
       const handler = google.script.run
-        .withSuccessHandler((result: { rows: T[] }) => resolve(result))
+        .withSuccessHandler((result: SyncPullResult<T>) => resolve(result))
         .withFailureHandler((error: Error) => reject(error))
       ;(handler as any)[this.pullFn](tableName)
     })
@@ -93,7 +94,7 @@ export class GasApiTransport implements SyncTransport {
 
   private async fetchPull<T extends RowWithId>(
     tableName: string
-  ): Promise<{ rows: T[] }> {
+  ): Promise<SyncPullResult<T>> {
     const url = this.baseUrl
       ? `${this.baseUrl}/sync/pull?table=${encodeURIComponent(tableName)}`
       : `/api/sync/pull?table=${encodeURIComponent(tableName)}`

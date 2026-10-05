@@ -43,6 +43,9 @@ export type {
   ClientDBSchema,
   SyncTransport,
   SyncPushResult,
+  SyncPullResult,
+  RowVersion,
+  RowVersions,
   Mutation,
   MutationType,
   MergedMutation,
@@ -60,7 +63,10 @@ export type {
 // Transports
 export { MockTransport } from "./transports/index.js";
 export { GasApiTransport } from "./transports/index.js";
-export type { GasApiTransportOptions } from "./transports/index.js";
+export type {
+  GasApiTransportOptions,
+  MockTransportOptions,
+} from "./transports/index.js";
 
 // Runtime exports (always available)
 export {

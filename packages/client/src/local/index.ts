@@ -15,6 +15,9 @@ export type { CreateClientDBOptions, ClientDBResult, ClientDBSchema } from './cr
 export type {
   SyncTransport,
   SyncPushResult,
+  SyncPullResult,
+  RowVersion,
+  RowVersions,
   Mutation,
   MutationType,
   MergedMutation,

@@ -9,9 +9,20 @@
  * | update  | update  | update (last wins)         |
  * | update  | delete  | delete                     |
  * | delete  | insert  | update (re-creation)       |
+ *
+ * Row versions (#138): the queue also keeps the known version of each row,
+ * persisted next to the mutations. Every mutation is stamped with its row's
+ * known version when it is enqueued, and a merged mutation carries the stamp of
+ * its oldest unpushed mutation as `baseVersion`.
  */
 import type { RowWithId } from '@gsquery/core'
-import type { Mutation, MutationType, MergedMutation } from './sync-transport.js'
+import type {
+  Mutation,
+  MutationType,
+  MergedMutation,
+  RowVersion,
+  RowVersions,
+} from './sync-transport.js'
 import { composeName } from './naming.js'
 
 /** Storage interface for testability (defaults to localStorage) */
@@ -51,11 +62,21 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
    * and must never be mutated. Memory only: after a reload nothing is in flight.
    */
   private lastSnapshotSeq = 0
+  /**
+   * Known server version per row, keyed by `String(id)` (#138). Persisted so an
+   * edit made after an offline cold start, before any pull, still carries a
+   * base version.
+   */
+  private knownVersions = new Map<string, RowVersion>()
+  private readonly versionsKey: string
 
   constructor(options: MutationQueueOptions) {
-    this.storageKey = `${composeName('gsquery', options.namespace)}:${options.tableName}:mutations`
+    const prefix = `${composeName('gsquery', options.namespace)}:${options.tableName}`
+    this.storageKey = `${prefix}:mutations`
+    this.versionsKey = `${prefix}:versions`
     this.storage = options.storage ?? this.detectStorage()
     this.loadFromStorage()
+    this.loadVersionsFromStorage()
   }
 
   private detectStorage(): MutationStorage | null {
@@ -98,6 +119,11 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
         timestamp: Date.now(),
         seq: ++this.seqCounter,
       }
+      // Stamp the version this edit is built on. An update compacted into an
+      // earlier entry above keeps that entry's (older) stamp, which is the one
+      // the merged edit must carry.
+      const base = this.knownVersions.get(String(id))
+      if (base !== undefined) entry.baseVersion = base
       this.mutations.push(entry)
       this.lastById.set(id, entry)
     }
@@ -151,10 +177,21 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
    */
   private foldGroup(group: Mutation<T>[]): MergedMutation<T> | null {
     let acc: MergedMutation<T> | null = null
+    // The stamp of the oldest mutation in the current run: the merged edit was
+    // built on that version (#138).
+    let base: RowVersion | undefined
     for (const m of group) {
-      // First mutation for this id, or a fresh start after a cancelling pair.
-      acc = acc === null ? this.seed(m) : this.mergePair(acc, m)
+      if (acc === null) {
+        // First mutation for this id, or a fresh start after a cancelling pair.
+        acc = this.seed(m)
+        base = m.baseVersion
+      } else {
+        acc = this.mergePair(acc, m)
+      }
     }
+    // Set only when known, so a versionless queue keeps the exact
+    // {id, type, data} wire shape.
+    if (acc !== null && base !== undefined) acc.baseVersion = base
     return acc
   }
 
@@ -286,6 +323,76 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
     this.persist()
   }
 
+  // ── Row versions (#138) ─────────────────────────────────────────────
+
+  /** The known server version of a row, if any. A pure read. */
+  knownVersion(id: string | number): RowVersion | undefined {
+    return this.knownVersions.get(String(id))
+  }
+
+  /**
+   * Replace every known version with the ones a pull reported.
+   *
+   * A pull carries the whole table, so a row it reports no version for is
+   * forgotten. Queued mutations keep their stamps: they were built on the
+   * version they were stamped with, not on the newer one.
+   */
+  replaceKnownVersions(versions: RowVersions): void {
+    const next = new Map<string, RowVersion>()
+    for (const [key, version] of Object.entries(versions)) {
+      if (isRowVersion(version)) next.set(key, version)
+    }
+    if (sameVersions(this.knownVersions, next)) return
+    this.knownVersions = next
+    this.persistVersions()
+  }
+
+  /**
+   * Move the base of the given rows to a new version, or forget it
+   * (`undefined`).
+   *
+   * Sets each row's known version, and restamps that row's queued mutations
+   * enqueued after `afterSeq` (all of them when it is omitted), so they are
+   * pushed as edits of the new version. Used after a push, for the versions it
+   * reported, and when a conflict is resolved.
+   */
+  rebaseRows(
+    updates: ReadonlyMap<string | number, RowVersion | undefined>,
+    afterSeq?: number
+  ): void {
+    if (updates.size === 0) return
+
+    let versionsChanged = false
+    for (const [id, version] of updates) {
+      const key = String(id)
+      if (version === undefined) {
+        if (this.knownVersions.delete(key)) versionsChanged = true
+      } else if (this.knownVersions.get(key) !== version) {
+        this.knownVersions.set(key, version)
+        versionsChanged = true
+      }
+    }
+
+    let mutationsChanged = false
+    for (const m of this.mutations) {
+      if (!updates.has(m.id)) continue
+      if (afterSeq !== undefined && m.seq <= afterSeq) continue
+      const version = updates.get(m.id)
+      if (version === undefined) {
+        if (m.baseVersion !== undefined) {
+          delete m.baseVersion
+          mutationsChanged = true
+        }
+      } else if (m.baseVersion !== version) {
+        m.baseVersion = version
+        mutationsChanged = true
+      }
+    }
+
+    if (mutationsChanged) this.persist()
+    if (versionsChanged) this.persistVersions()
+  }
+
   /** Get raw mutation count (before merge) */
   get length(): number {
     return this.mutations.length
@@ -343,4 +450,50 @@ export class MutationQueue<T extends RowWithId = RowWithId> {
       this.rebuildIndex()
     }
   }
+
+  /** Persist the known versions; same error policy as `persist()` */
+  private persistVersions(): void {
+    if (!this.storage) return
+    if (this.knownVersions.size === 0) {
+      this.storage.removeItem(this.versionsKey)
+    } else {
+      this.storage.setItem(
+        this.versionsKey,
+        JSON.stringify(Object.fromEntries(this.knownVersions))
+      )
+    }
+  }
+
+  /** Load the known versions persisted by a previous session */
+  private loadVersionsFromStorage(): void {
+    if (!this.storage) return
+    try {
+      const raw = this.storage.getItem(this.versionsKey)
+      if (!raw) return
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return
+      for (const [key, version] of Object.entries(parsed)) {
+        if (isRowVersion(version)) this.knownVersions.set(key, version)
+      }
+    } catch {
+      // Corrupted data: start without known versions. Edits then go out without
+      // a base and are applied unconditionally, which is today's behavior.
+      this.knownVersions = new Map()
+    }
+  }
+}
+
+function isRowVersion(value: unknown): value is RowVersion {
+  return typeof value === 'string' || typeof value === 'number'
+}
+
+function sameVersions(
+  a: ReadonlyMap<string, RowVersion>,
+  b: ReadonlyMap<string, RowVersion>
+): boolean {
+  if (a.size !== b.size) return false
+  for (const [key, version] of a) {
+    if (b.get(key) !== version) return false
+  }
+  return true
 }
