@@ -31,6 +31,10 @@ export type {
   InferTablesFromConfig
 } from './core/types.js'
 
+// Schema sample wrappers (nullable / optional columns in defineSheetsDB)
+export { nullable, optional } from './core/schema-samples.js'
+export type { PrimitiveTypeSample, NullableSample, OptionalSample } from './core/schema-samples.js'
+
 // Core classes
 export { Repository } from './core/repository.js'
 export { QueryBuilder, createQueryBuilder } from './core/query-builder.js'

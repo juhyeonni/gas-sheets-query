@@ -27,6 +27,23 @@ function defineSheetsDB<const TableSchemas extends Record<string, TableSchemaTyp
 
 > Either `stores` or `mock: true` must be provided.
 
+#### `nullable(sample)` / `optional(sample)`
+
+Wrap a sample value in a `types` entry to declare a nullable or optional column. They affect types only; `defineSheetsDB` does not read `types` at runtime.
+
+```ts
+function nullable<const S extends PrimitiveTypeSample>(sample: S): NullableSample<S>
+function optional<const S extends PrimitiveTypeSample | NullableSample>(sample: S): OptionalSample<S>
+```
+
+| `types` entry | Row field |
+|---------------|-----------|
+| `nullable('')` | `field: string \| null` |
+| `optional('')` | `field?: string` |
+| `optional(nullable(0))` | `field?: number \| null` |
+
+See [Schema Definition](./schema-definition.md#nullable-and-optional-columns).
+
 #### `createSheetsDB(options)` (Legacy)
 
 Create a `SheetsDB` instance with explicit type parameters.
@@ -353,7 +370,10 @@ type Row = Record<string, unknown>
 type RowWithId = { id: string | number }
 type Operator = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'like' | 'in'
 type SortDirection = 'asc' | 'desc'
-type TypeSample = string | number | boolean | null | Date
+type PrimitiveTypeSample = string | number | boolean | null | Date
+type TypeSample = PrimitiveTypeSample | NullableSample | OptionalSample
+interface NullableSample<S extends PrimitiveTypeSample> { readonly kind: 'nullable'; readonly sample: S }
+interface OptionalSample<S extends PrimitiveTypeSample | NullableSample> { readonly kind: 'optional'; readonly sample: S }
 
 interface WhereCondition<T> { field: keyof T & string; operator: Operator; value: unknown }
 interface OrderByCondition<T> { field: keyof T & string; direction: SortDirection }
