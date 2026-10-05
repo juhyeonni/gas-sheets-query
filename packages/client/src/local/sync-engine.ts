@@ -51,6 +51,37 @@ export interface SyncEngineOptions {
    * (#174) — see {@link PoisonedMutationAction}.
    */
   onPoisonedMutation?: PoisonedMutationHandler
+  /**
+   * Most mutations sent in one `transport.push` call (default: unlimited). A
+   * larger queue goes out in slices of this size, in queue order, one after
+   * another; each slice is settled as soon as it returns. A failing slice
+   * stops the table's push and leaves the later slices queued. Must be a
+   * positive integer.
+   */
+  maxBatchSize?: number
+}
+
+/**
+ * Validate `maxBatchSize`. Omitted means unlimited: one all-or-nothing call,
+ * which existing servers may rely on.
+ */
+function readMaxBatchSize(value: number | undefined): number {
+  if (value === undefined) return Number.POSITIVE_INFINITY
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`maxBatchSize must be a positive integer, got ${String(value)}`)
+  }
+  return value
+}
+
+/**
+ * Whether a background tick should be skipped because the tab is hidden or the
+ * browser reports itself offline. Where `document` or `navigator` does not
+ * exist (Node, GAS) nothing is skipped.
+ */
+function isTabIdle(): boolean {
+  if (typeof document !== 'undefined' && document?.hidden === true) return true
+  if (typeof navigator !== 'undefined' && navigator?.onLine === false) return true
+  return false
 }
 
 /** A single table's failure inside an otherwise partial sync */
@@ -228,7 +259,15 @@ export class SyncEngine {
   private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
   private readonly pushDebounceMs: number
-  private syncing = false
+  /** Operations (sync/push/pull, explicit or background) started but not settled */
+  private pendingOps = 0
+  /** sync() passes started but not settled, queued ones included */
+  private activeSyncPasses = 0
+  /**
+   * Explicit sync() passes that are queued but have not started yet, by scope
+   * (`undefined` = all tables). A caller arriving before one starts shares it.
+   */
+  private readonly queuedSyncs = new Map<string | undefined, Promise<void>>()
   private opChain: Promise<unknown> = Promise.resolve()
 
   private readonly maxRetries: number
@@ -236,8 +275,10 @@ export class SyncEngine {
   private readonly maxRetryDelayMs: number
   private readonly onPoisonedMutation?: PoisonedMutationHandler
   private readonly retryStates = new Map<string, TableRetryState>()
+  private readonly maxBatchSize: number
 
   constructor(options: SyncEngineOptions) {
+    this.maxBatchSize = readMaxBatchSize(options.maxBatchSize)
     this.transport = options.transport
     this.conflictStrategy = options.conflictStrategy ?? 'server-wins'
     this.pushDebounceMs = options.pushDebounceMs ?? 0
@@ -295,7 +336,27 @@ export class SyncEngine {
     return run
   }
 
-  /** Full sync: push first (preserve local changes), then pull */
+  /**
+   * Count an operation as in flight from the moment it is called until it
+   * settles, so `isSyncing` covers every sync/push/pull — including the time
+   * spent waiting behind earlier operations.
+   */
+  private track<T>(start: () => Promise<T>): Promise<T> {
+    this.pendingOps += 1
+    return start().finally(() => {
+      this.pendingOps -= 1
+    })
+  }
+
+  /**
+   * Full sync: push first (preserve local changes), then pull.
+   *
+   * A call made while another pass is running does not join it: the running
+   * pass snapshotted its batch before the caller's latest writes, so it would
+   * resolve without having pushed them. Instead every such call for the same
+   * scope shares one pass queued after it, and resolves (or rejects) with that
+   * pass.
+   */
   async sync(tableName?: string): Promise<void> {
     return this.runSync(tableName, false)
   }
@@ -307,50 +368,72 @@ export class SyncEngine {
 
   /** Pull server data to local */
   async pull(tableName?: string): Promise<void> {
-    await this.serialize(() =>
-      this.runTables(tableName, false, name => this.pullTable(name))
+    await this.track(() =>
+      this.serialize(() =>
+        this.runTables(tableName, false, name => this.pullTable(name))
+      )
     )
   }
 
-  private async runSync(tableName: string | undefined, background: boolean): Promise<void> {
-    // Flag is set synchronously so overlapping sync() calls still drop rather
-    // than queue up — auto-sync ticks must not pile up behind a slow transport.
-    if (this.syncing) return
-    this.syncing = true
+  private runSync(tableName: string | undefined, background: boolean): Promise<void> {
+    if (background) {
+      // Auto-sync ticks skip while any pass is running or queued: nobody awaits
+      // them, and they must not pile up behind a slow transport — the next tick
+      // covers whatever this one would have done.
+      if (this.activeSyncPasses > 0) return Promise.resolve()
+    } else {
+      // A pass for this scope that has not started yet will push everything
+      // written so far, so this caller can share it.
+      const queued = this.queuedSyncs.get(tableName)
+      if (queued) return queued
+    }
 
-    return this.serialize(async () => {
-      try {
-        this.emit({ type: 'sync-start', table: tableName })
-
-        const outcome = await this.runTables(tableName, background, async name => {
-          await this.pushTable(name)
-          await this.pullTable(name)
-        })
-
-        // Failures never reach this point — they were reported as per-table
-        // 'error' events and raised as a SyncError. What is left is a pass in
-        // which nothing failed, which is only *complete* if nothing was left
-        // out either: a table skipped by backoff synced no data, and reporting
-        // that as a completed sync turned "all changes saved" green while the
-        // network was down (#173).
-        if (outcome.deferred.length > 0) {
-          this.emit({
-            type: 'sync-deferred',
-            table: tableName,
-            deferredTables: outcome.deferred,
-          })
-        } else {
-          this.emit({ type: 'sync-complete', table: tableName })
-        }
-      } finally {
-        this.syncing = false
-      }
+    this.activeSyncPasses += 1
+    const pass: Promise<void> = this.track(() =>
+      this.serialize(() => {
+        // The pass starts now. A write made after this point may miss its
+        // snapshot, so later callers must queue a pass of their own.
+        if (this.queuedSyncs.get(tableName) === pass) this.queuedSyncs.delete(tableName)
+        return this.runSyncPass(tableName, background)
+      })
+    ).finally(() => {
+      this.activeSyncPasses -= 1
     })
+
+    if (!background) this.queuedSyncs.set(tableName, pass)
+    return pass
+  }
+
+  private async runSyncPass(tableName: string | undefined, background: boolean): Promise<void> {
+    this.emit({ type: 'sync-start', table: tableName })
+
+    const outcome = await this.runTables(tableName, background, async name => {
+      await this.pushTable(name)
+      await this.pullTable(name)
+    })
+
+    // Failures never reach this point — they were reported as per-table
+    // 'error' events and raised as a SyncError. What is left is a pass in
+    // which nothing failed, which is only *complete* if nothing was left
+    // out either: a table skipped by backoff synced no data, and reporting
+    // that as a completed sync turned "all changes saved" green while the
+    // network was down (#173).
+    if (outcome.deferred.length > 0) {
+      this.emit({
+        type: 'sync-deferred',
+        table: tableName,
+        deferredTables: outcome.deferred,
+      })
+    } else {
+      this.emit({ type: 'sync-complete', table: tableName })
+    }
   }
 
   private async runPush(tableName: string | undefined, background: boolean): Promise<void> {
-    await this.serialize(() =>
-      this.runTables(tableName, background, name => this.pushTable(name))
+    await this.track(() =>
+      this.serialize(() =>
+        this.runTables(tableName, background, name => this.pushTable(name))
+      )
     )
   }
 
@@ -528,10 +611,39 @@ export class SyncEngine {
     }
 
     // Boundary: only mutations enqueued up to this point are part of this push.
-    // Anything enqueued during the await below (higher seq) must survive the
-    // clear, otherwise concurrent local writes are silently lost (#109).
+    // Anything enqueued during the awaits below (higher seq) must survive the
+    // clear, otherwise concurrent local writes are silently lost (#109). Every
+    // slice shares it, since they all come from this one snapshot.
     const boundary = binding.queue.snapshotBoundary()
 
+    // A long offline session can queue more than one call should carry (#237).
+    // Slices go out in queue order, one after another, and each is settled the
+    // moment it returns, so a later failure never re-sends what already landed.
+    // A failing slice throws out of here: the slices after it stay queued and
+    // untried, and only its own mutations are reported as rejected (D5).
+    for (let start = 0; start < merged.length; start += this.maxBatchSize) {
+      const slice = merged.slice(start, start + this.maxBatchSize)
+      await this.pushSlice(tableName, binding, slice, boundary)
+    }
+
+    // Only a push in which every slice landed is a successful one: a slice that
+    // succeeded before a later one failed does not break the failure streak.
+    const state = this.retryStates.get(tableName)
+    if (state) state.pushFailures = 0
+    this.emit({ type: 'push-complete', table: tableName, pushedCount: merged.length })
+  }
+
+  /**
+   * Send one slice of a push and settle it: clear what the server applied,
+   * resolve its conflicts, and throw a {@link PushPhaseError} naming whatever
+   * is still unapplied when the server reports a failure.
+   */
+  private async pushSlice(
+    tableName: string,
+    binding: TableBinding,
+    merged: MergedMutation[],
+    boundary: number
+  ): Promise<void> {
     let result: SyncPushResult
     try {
       result = await this.transport.push(tableName, merged)
@@ -593,15 +705,17 @@ export class SyncEngine {
         readRejectedIds(result)
       )
     }
-
-    const state = this.retryStates.get(tableName)
-    if (state) state.pushFailures = 0
-    this.emit({ type: 'push-complete', table: tableName, pushedCount: merged.length })
   }
 
   /**
    * Apply each conflict's resolution locally and decide what happens to the
    * pending mutation behind it, by adding to / removing from `settledIds`.
+   *
+   * All resolutions are applied to one snapshot of the table, which is written
+   * back with a single `replaceAll` — or not at all when nothing was resolved
+   * locally (`client-wins`). Writing back per conflict copied the table,
+   * rebuilt its index and persisted it once per conflict, so a large rejected
+   * batch froze the UI for seconds (#237).
    */
   private resolveConflicts(
     binding: TableBinding,
@@ -609,28 +723,41 @@ export class SyncEngine {
     settledIds: Set<string | number>,
     boundary: number
   ): void {
+    // Resolving a conflict moves the row's base to the server's version, so
+    // neither the re-push nor the next edit is rejected again for the same
+    // reason (#138). Collected into one rebase, so the queue is walked and
+    // persisted once per push rather than once per conflict (#237); for a
+    // repeated id the last conflict wins, as it does for the row itself.
+    const rebase = new Map<string | number, RowVersion | undefined>()
     for (const conflict of conflicts) {
-      // Resolving a conflict moves the row's base to the server's version, so
-      // neither the re-push nor the next edit is rejected again for the same
-      // reason (#138).
-      const rebase = new Map([[conflict.id, toRowVersion(conflict.serverVersion)]])
+      rebase.set(conflict.id, toRowVersion(conflict.serverVersion))
+    }
 
-      if (this.conflictStrategy === 'client-wins') {
-        // Keep the local row *and* its mutation, so the next push re-sends it;
-        // clearing it would let the next pull overwrite the local edit with the
-        // server version (#110). The kept mutation is rebased onto the server's
-        // version, or the re-push would conflict forever.
-        binding.queue.rebaseRows(rebase)
-        settledIds.delete(conflict.id)
-        continue
-      }
+    if (this.conflictStrategy === 'client-wins') {
+      // Keep the local row *and* its mutation, so the next push re-sends it;
+      // clearing it would let the next pull overwrite the local edit with the
+      // server version (#110). The kept mutation is rebased onto the server's
+      // version, or the re-push would conflict forever. Nothing changes
+      // locally, so nothing is written.
+      binding.queue.rebaseRows(rebase)
+      for (const conflict of conflicts) settledIds.delete(conflict.id)
+      return
+    }
 
-      // The resolution replaces the local row with one built on the server's
-      // version: adopt it, and rebase edits made while the push was in flight.
-      // Done before the custom resolver's mutation below is enqueued, so that
-      // mutation is stamped with it.
-      binding.queue.rebaseRows(rebase, boundary)
+    // The resolution replaces the local row with one built on the server's
+    // version: adopt it, and rebase edits made while the push was in flight.
+    // Done before the custom resolver's mutations below are enqueued, so they
+    // are stamped with it.
+    binding.queue.rebaseRows(rebase, boundary)
 
+    const rows = binding.adapter.getRawData()
+    const positions = new Map<string | number, number>()
+    for (let i = 0; i < rows.length; i++) {
+      // First occurrence, matching the findIndex this replaced
+      if (!positions.has(rows[i].id)) positions.set(rows[i].id, i)
+    }
+
+    for (const conflict of conflicts) {
       const resolved =
         typeof this.conflictStrategy === 'function'
           ? this.conflictStrategy(conflict)
@@ -638,7 +765,17 @@ export class SyncEngine {
       // id is immutable across a resolution, mirroring update() (#98).
       const resolvedRow: RowWithId = { ...resolved, id: conflict.id }
 
-      this.applyResolvedRow(binding, resolvedRow)
+      const idx = positions.get(conflict.id)
+      if (idx !== undefined) {
+        rows[idx] = resolvedRow
+      } else {
+        // The row was deleted locally. Dropping the resolution here would leave
+        // the strategy's decision unapplied (#131); the resolution wins, so
+        // re-materialize the row. A later resolution for the same id replaces
+        // this one, so the last resolution wins either way.
+        positions.set(conflict.id, rows.length)
+        rows.push(resolvedRow)
+      }
 
       // The pending mutation was superseded by the resolution, so it must not
       // be re-pushed as it stands.
@@ -654,19 +791,7 @@ export class SyncEngine {
         binding.queue.push('update', conflict.id, fields)
       }
     }
-  }
 
-  private applyResolvedRow(binding: TableBinding, row: RowWithId): void {
-    const rows = binding.adapter.getRawData()
-    const idx = rows.findIndex(r => r.id === row.id)
-    if (idx >= 0) {
-      rows[idx] = row
-    } else {
-      // The row was deleted locally. Dropping the resolution here would leave
-      // the strategy's decision unapplied (#131); the resolution wins, so
-      // re-materialize the row.
-      rows.push(row)
-    }
     binding.adapter.replaceAll(rows)
   }
 
@@ -735,10 +860,19 @@ export class SyncEngine {
     }, this.pushDebounceMs)
   }
 
-  /** Start auto-sync at interval */
+  /**
+   * Start auto-sync at interval.
+   *
+   * A tick is skipped while `document.hidden` is true or `navigator.onLine` is
+   * false (#237): an idle hidden tab kept pulling the whole table every
+   * interval. A skipped tick does nothing and emits nothing, so it never
+   * reports a sync it did not do (#173). Where those globals do not exist
+   * (Node, GAS) every tick runs. Explicit sync()/push()/pull() are not gated.
+   */
   startAutoSync(intervalMs: number): void {
     this.stopAutoSync()
     this.autoSyncTimer = setInterval(() => {
+      if (isTabIdle()) return
       this.runSync(undefined, true).catch(err => this.emitBackgroundError(err))
     }, intervalMs)
   }
@@ -751,9 +885,12 @@ export class SyncEngine {
     }
   }
 
-  /** Check if currently syncing */
+  /**
+   * Whether any sync(), push() or pull() — explicit or background — has been
+   * called and not yet settled, including time spent queued behind another.
+   */
   get isSyncing(): boolean {
-    return this.syncing
+    return this.pendingOps > 0
   }
 
   /** Cleanup */

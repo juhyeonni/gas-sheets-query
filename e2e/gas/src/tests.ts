@@ -38,6 +38,20 @@ function cellText(value: unknown): string {
   return value === null || value === undefined ? '' : String(value)
 }
 
+/**
+ * The text SheetsAdapter writes for `value` (#130, #201), restated here so the
+ * escape test can check the raw cell without reaching into the adapter: k ≥ 1
+ * leading apostrophes go behind 2k+1 of them, a formula trigger goes behind one,
+ * anything else is written as is.
+ */
+function writtenEscapeText(value: string): string {
+  let leading = 0
+  while (leading < value.length && value.charAt(leading) === "'") leading++
+  if (leading > 0) return "'".repeat(leading + 1) + value
+  if (['=', '+', '-', '@', '\t', '\r'].indexOf(value.charAt(0)) !== -1) return `'${value}`
+  return value
+}
+
 /** MigrationRunner's emptiness test, inlined (it is not exported from core). */
 function isEmptyValue(value: unknown): boolean {
   return value === undefined || value === null || value === ''
@@ -84,9 +98,25 @@ export function registerTests(ctx: HarnessContext): void {
     })
 
   // ── 1. Formula-injection escaping: the #130 USER_ENTERED assumption ──────
-  test('formula escape: dangerous strings round-trip as literals, never as formulas', () => {
+  test('formula escape: dangerous strings round-trip as literals, never as formulas', t => {
     const adapter = makeAdapter('escape', ['id', 'note'], { idMode: 'client' })
-    const dangerous = ['=1+1', '=IMPORTXML("http://example.invalid/","//x")', '+2+2', '-3-3', '@sum', "'already quoted"]
+    const dangerous = [
+      '=1+1',
+      '=IMPORTXML("http://example.invalid/","//x")',
+      '+2+2',
+      '-3-3',
+      '@sum',
+      "'already quoted",
+      // Apostrophe + trigger and bare apostrophes (#201): the old scheme lost a
+      // character on real Sheets for these.
+      "'=note",
+      "''",
+      "'-5",
+      "'@x",
+      "'",
+      "'quoted",
+      "''=x"
+    ]
 
     dangerous.forEach((note, i) => adapter.insert({ id: `r${i}`, note }))
 
@@ -98,17 +128,35 @@ export function registerTests(ctx: HarnessContext): void {
       assertEq(row?.note, note, `value for ${JSON.stringify(note)} survives the round trip unchanged`)
     })
 
-    // Real-GAS-only raw check: the cell must not have become a live formula.
+    // Raw check: each cell holds the written text (a verbatim store, as the
+    // fakes are) or the written text minus one leading apostrophe (Sheets
+    // parsing the marker away), and is never a live formula. The form real
+    // Sheets chose is recorded on the result.
     const ss = SpreadsheetApp.openById(ctx.spreadsheetId)
     const sheet = ss.getSheetByName(`e2e_${ctx.runId}_escape`)
-    if (sheet) {
-      const range = sheet.getRange(2, 2)
-      if (typeof (range as { getFormula?: () => string }).getFormula === 'function') {
-        assertEq(range.getFormula(), '', 'cell holds literal text, not a formula')
-        const display = range.getValue()
-        assertOk(display !== 2, 'the "=1+1" cell did not evaluate to 2')
+    assertOk(sheet, 'escape sheet present')
+    if (!sheet) return
+    const forms = new Set<string>()
+    dangerous.forEach((note, i) => {
+      const range = sheet.getRange(i + 2, 2)
+      const raw = cellText(range.getValues()[0][0])
+      const written = writtenEscapeText(note)
+      if (raw === written) {
+        forms.add('verbatim')
+      } else if (raw === written.slice(1)) {
+        forms.add('one apostrophe dropped')
+      } else {
+        throw new Error(
+          `raw cell for ${JSON.stringify(note)} is ${JSON.stringify(raw)}, ` +
+          `expected ${JSON.stringify(written)} or ${JSON.stringify(written.slice(1))}`
+        )
       }
-    }
+      // Real-GAS-only: the fakes have no formula layer to inspect.
+      if (typeof (range as { getFormula?: () => string }).getFormula === 'function') {
+        assertEq(range.getFormula(), '', `cell for ${JSON.stringify(note)} holds literal text, not a formula`)
+      }
+    })
+    t.info(`raw form: ${Array.from(forms).join(' + ')}`)
   })
 
   // ── 2. Date round-trip through columnTypes ────────────────────────────────

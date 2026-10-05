@@ -1,10 +1,10 @@
 /**
  * Mock adapter for testing - in-memory data storage
  */
-import type { RowWithId, DataStore, QueryOptions, WhereCondition, BatchUpdateItem, IdMode, UpdateData } from '../core/types.js'
+import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, IdMode, UpdateData } from '../core/types.js'
 import { IndexStore } from '../core/index-store.js'
 import type { IndexDefinition } from '../core/index-store.js'
-import { applyQuery } from '../core/query-utils.js'
+import { findWithIndexes } from '../core/indexed-find.js'
 import { assertClientIdsAvailable } from '../core/client-ids.js'
 
 /** MockAdapter configuration options */
@@ -88,46 +88,12 @@ export class MockAdapter<T extends RowWithId> implements DataStore<T> {
     }
   }
 
-  /** Map indexed row ids to row positions in scan order. */
-  private positionsOf(keys: (string | number)[]): number[] {
-    const positions: number[] = []
-    for (const key of keys) {
-      const pos = this.idIndex.get(key)
-      if (pos === undefined) {
-        throw new Error(`IndexStore out of sync: id ${String(key)} not in idIndex`)
-      }
-      positions.push(pos)
-    }
-    return positions.sort((x, y) => x - y)
-  }
-
   findAll(): T[] {
     return [...this.data]
   }
 
   find(options: QueryOptions<T>): T[] {
-    let candidateIndices: number[] | undefined
-    let remainingConditions = options.where
-    
-    // Try to use column indexes for equality conditions
-    if (options.where.length > 0) {
-      const narrowed = this.indexStore.candidates(options.where)
-      if (narrowed !== undefined) {
-        candidateIndices = this.positionsOf(narrowed.keys)
-        remainingConditions = narrowed.remaining
-      }
-    }
-    
-    // Get candidate rows (from index or full scan); applyQuery never mutates them
-    let candidates: T[] = this.data
-    if (candidateIndices !== undefined) {
-      candidates = []
-      for (const idx of candidateIndices) {
-        candidates.push(this.data[idx])
-      }
-    }
-
-    return applyQuery(candidates, remainingConditions, options)
+    return findWithIndexes(this.data, this.idIndex, this.indexStore, options)
   }
   
   /**

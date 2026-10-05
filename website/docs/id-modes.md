@@ -6,6 +6,8 @@ gas-sheets-query supports two ID generation strategies. Choose based on your use
 
 Server generates sequential numeric IDs: `1, 2, 3, ...`
 
+Auto is the default for `MockAdapter` and `SheetsAdapter`. The local-first client's `LocalAdapter` defaults to [client mode](#client-mode) instead, and `createClientDB` always uses client mode. See [LocalAdapter: session-scoped counter](#localadapter-session-scoped-counter) below.
+
 ```ts
 const db = defineSheetsDB({
   tables: {
@@ -34,10 +36,19 @@ console.log(user2.id) // 2
 
 - **MockAdapter**: Maintains an internal counter, auto-increments on each insert
 - **SheetsAdapter**: Allocates from a persistent per-table counter stored in a hidden `_gsquery_meta` sheet inside the spreadsheet, under the GAS `LockService` script lock
+- **LocalAdapter** (local-first client, only with an explicit `idMode: 'auto'`): Keeps an in-memory counter that only lasts for the session. See [LocalAdapter: session-scoped counter](#localadapter-session-scoped-counter)
 
 Like a SQL `AUTO_INCREMENT`, the counter only moves forward: **deleting a row never frees its id for reuse**, so a foreign key pointing at a deleted record stays a visible orphan instead of silently re-binding to whatever row is inserted next. Expect gaps in the id sequence after deletions — that is by design.
 
 If someone deletes the `_gsquery_meta` sheet, the next insert recreates it and re-bootstraps the counter from the current max id. One caveat: while the counter is missing, allocation degrades to `max + 1` — so if the highest-id rows are also deleted **before** the next insert, those ids are re-issued in that window. Treat the meta sheet as part of your data, not as a disposable artifact. Within one execution the adapter reads the data sheet's id column only once (the highest id is memoized, the counter is still read and advanced on every insert), so an id typed into the sheet by hand mid-execution is only absorbed after `adapter.clearCache()` or in the next execution. The counter lives in the spreadsheet — not in script properties — so every script project that opens the spreadsheet shares one counter, and a copied spreadsheet carries its counter along.
+
+### LocalAdapter: Session-Scoped Counter
+
+`LocalAdapter` in auto mode keeps the "deleting a row never frees its id" guarantee **only within a session**. Within a session its counter never goes backward, until the next server pull. The counter is not persisted, though: after a page reload (the IndexedDB hydrate) or a server pull (`replaceAll`), the next id is the highest id currently held plus one. So the ids of deleted highest rows can be issued again: insert `1, 2, 3`, delete `3`, reload the page, and the next insert gets `3` again.
+
+Auto mode has a second, larger limit in a local-first client: the counter is per device. Two devices that insert while offline allocate the same ids, and those ids collide when the devices sync.
+
+Reused or colliding ids silently re-bind foreign keys to the wrong row. For local-first tables use [client mode](#client-mode) with UUIDs, which is `LocalAdapter`'s default and what `createClientDB` always uses. This matters most for tables that foreign keys point at and for any multi-device use. See [Local-First Client](./local-first-client.md).
 
 ## Client Mode
 
@@ -92,7 +103,7 @@ db.from('users').create({ id: crypto.randomUUID(), name: 'Alice' })
 | ID required at insert | No (generated) | Yes (must provide) |
 | Concurrency | Lock-based (GAS) | Client responsibility |
 | Best for | Online-first, single source | Offline-first, distributed |
-| Default | Yes | No |
+| Default for | `MockAdapter`, `SheetsAdapter` | `LocalAdapter`, `createClientDB` |
 
 ## Setting ID Mode per Adapter
 
@@ -117,3 +128,4 @@ const sheetsStore = new SheetsAdapter({
 - [Adapters](./adapters.md) -- Full adapter configuration reference
 - [CRUD Operations](./crud-operations.md) -- How create() works with each ID mode
 - [Batch Operations](./batch-operations.md) -- Batch insert with ID modes
+- [Local-First Client](./local-first-client.md) -- The offline-first client, which uses client mode
