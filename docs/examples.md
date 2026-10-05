@@ -382,7 +382,7 @@ const monthlyRevenue = db.from('orders')
 
 ### Having (Group Filter)
 
-`having()` filters groups by aggregation results. The first argument must match a key in `agg()`.
+`having()` filters groups by aggregation results. The first argument must match a key in `agg()`: otherwise `agg()` throws a `SheetsQueryError` (code `UNKNOWN_AGGREGATION`) naming it. Each `sum:`/`avg:`/`min:`/`max:` field must be a numeric column, or the spec does not compile.
 
 ```typescript
 // Only categories with more than 10 orders
