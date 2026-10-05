@@ -24,8 +24,11 @@ export type {
   CreateInputOf,
   ColumnDefault,
   AddColumnOptions,
+  ColumnName,
   TableSchema,
+  SheetsDBTableConfig,
   SheetsDBConfig,
+  TypedSheetsDBConfig,
   RuntimeTableSchema,
   RuntimeSchema,
   // Schema-based type inference

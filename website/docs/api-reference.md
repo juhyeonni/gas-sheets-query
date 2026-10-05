@@ -52,7 +52,47 @@ Create a `SheetsDB` instance with explicit type parameters.
 function createSheetsDB<Tables extends Record<string, RowWithId>>(
   options: CreateSheetsDBOptions<Tables>
 ): SheetsDB<Tables>
+
+interface CreateSheetsDBOptions<Tables> {
+  config: TypedSheetsDBConfig<Tables>
+  stores: { [K in keyof Tables]: DataStore<Tables[K]> }
+}
+
+interface TypedSheetsDBConfig<Tables> {
+  spreadsheetId?: string
+  tables: { [K in keyof Tables]: TableSchema<Tables[K]> }  // one entry per table, like stores
+}
+
+interface TableSchema<T extends RowWithId = RowWithId> {
+  columns: readonly ColumnName<T>[]  // only T's keys; `as const` tuples accepted
+  sheetName?: string
+  idColumn?: string                  // deprecated
+}
+
+// T's string keys; any string when T is exactly the bare RowWithId (no row type given)
+type ColumnName<T extends RowWithId>
 ```
+
+Each table's `columns` is checked against its row type, so a typo fails to compile where it is written:
+
+```ts
+interface User { id: number; name: string; email: string }
+
+createSheetsDB<{ users: User }>({
+  config: { tables: { users: { columns: ['id', 'name', 'emial'] } } },
+  //                                                  ~~~~~~~ not a key of User
+  stores: { users: new MockAdapter<User>() }
+})
+```
+
+Called with no type argument and untyped stores, every table is the bare `RowWithId` and any column name is accepted. `SheetsDB.config` exposes the erased `SheetsDBConfig`, whose column lists are plain strings; a typed config is assignable to it, but not the other way round.
+
+**Migrating from 1.x (2.0, #246):**
+
+- A column the sheet has but the row type does not declare: add it to the row type. The store already returns it in every row.
+- A column list held in a `string[]` variable: type it as the row's keys, `(keyof User & string)[]`, or write it as an `as const` tuple.
+- A config typed as `SheetsDBConfig` (erased) passed to `createSheetsDB<Tables>`: type it as `TypedSheetsDBConfig<Tables>`, or drop the annotation and let the call check it.
+- A table that has a store but no `config.tables` entry: add the entry. `from()` on such a table threw `TableNotFoundError` at runtime; it now fails to compile.
 
 ---
 
@@ -242,7 +282,7 @@ interface MockAdapterOptions<T> {
 
 ```ts
 class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
-  constructor(options: SheetsAdapterOptions)
+  constructor(options: SheetsAdapterOptions<T>)
 
   findAll(): T[]
   find(options: QueryOptions<T>): T[]
@@ -261,18 +301,41 @@ class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   getRawData(): unknown[][]
 }
 
-interface SheetsAdapterOptions {
+interface SheetsAdapterOptions<T extends RowWithId = RowWithId> {
   spreadsheetId?: string
   sheetName: string
-  columns: string[]
+  columns: readonly ColumnName<T>[] // only T's keys; any string when no row type is given
   createIfNotExists?: boolean       // default: true
   idColumn?: string                 // default: 'id'
   idMode?: 'auto' | 'client'       // default: 'auto'
   columnTypes?: Record<string, ColumnType>
+  allowFormulas?: boolean           // default: false
+  skipHeaderCheck?: boolean         // default: false
 }
 
 type ColumnType = 'string' | 'number' | 'boolean' | 'date' | 'string[]' | 'number[]' | 'object' | 'json'
 ```
+
+`columns` is typed against the row type (#246). It is what a new sheet's header row is written from and what the header-drift check compares the sheet against, so a typo here can only be caught by the compiler:
+
+```ts
+interface User { id: number; name: string; email: string }
+
+new SheetsAdapter<User>({ sheetName: 'Users', columns: ['id', 'name', 'email'] })  // ok
+new SheetsAdapter<User>({ sheetName: 'Users', columns: ['id', 'emial'] })          // error: 'emial'
+
+const columns = ['id', 'name', 'email'] as const
+new SheetsAdapter<User>({ sheetName: 'Users', columns })                           // ok: readonly tuple
+
+new SheetsAdapter({ sheetName: 'Users', columns: ['id', 'anything'] })             // ok: no row type, SheetsAdapter<RowWithId>
+```
+
+A row type whose fields besides `id` are all optional is still checked; only the bare `RowWithId` accepts any string.
+
+**Migrating from 1.x (2.0, #246):**
+
+- A column the sheet has but `T` does not declare: add it to `T`. The adapter already returns every listed column in every row.
+- A column list held in a `string[]` variable: type it as `(keyof User & string)[]`, or write it as an `as const` tuple.
 
 ---
 

@@ -9,7 +9,8 @@ import type {
   BatchUpdateItem,
   IdMode,
   UpdateData,
-  AddColumnOptions
+  AddColumnOptions,
+  ColumnName
 } from '../core/types.js'
 import { applyQuery } from '../core/query-utils.js'
 import {
@@ -81,14 +82,32 @@ export const MAX_CELL_LENGTH = 50000
  */
 export const META_SHEET_NAME = '_gsquery_meta'
 
-/** SheetsAdapter configuration options */
-export interface SheetsAdapterOptions {
+/**
+ * SheetsAdapter configuration options
+ *
+ * `T` is the adapter's row type. It types {@link SheetsAdapterOptions.columns}:
+ * with a row type given, only its keys are accepted; without one (the bare
+ * `RowWithId`), any string is.
+ */
+export interface SheetsAdapterOptions<T extends RowWithId = RowWithId> {
   /** Spreadsheet ID (optional - uses active spreadsheet if not provided) */
   spreadsheetId?: string
   /** Sheet name */
   sheetName: string
-  /** Column names in order (first column should be 'id') */
-  columns: string[]
+  /**
+   * Column names in order (first column should be 'id').
+   *
+   * Typed against the row type `T` (#246): a name that is not a key of `T`
+   * fails to compile, so a typo cannot reach the sheet. That matters because
+   * the list is also what a new sheet's header row is written from, and what
+   * the header-drift check compares the sheet against, so neither can catch a
+   * typo here. A readonly `as const` tuple is accepted as is. Without a row
+   * type (`new SheetsAdapter({...})`), any string is accepted.
+   *
+   * A sheet column that `T` does not declare must be added to `T`: the adapter
+   * returns every listed column in every row.
+   */
+  columns: readonly ColumnName<T>[]
   /** Whether to create sheet if it doesn't exist (default: true) */
   createIfNotExists?: boolean
   /**
@@ -268,10 +287,13 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
    */
   private _headerVerified = false
 
-  constructor(options: SheetsAdapterOptions) {
+  constructor(options: SheetsAdapterOptions<T>) {
     this.spreadsheetId = options.spreadsheetId
     this.sheetName = options.sheetName
-    this.columns = options.columns
+    // Kept by reference, as before #246. The adapter never mutates it; the
+    // mutable type only satisfies `Range.setValues`, which takes `any[][]`.
+    const columns: readonly string[] = options.columns
+    this.columns = columns as string[]
     this.idColumn = options.idColumn || 'id'
     this.createIfNotExists = options.createIfNotExists ?? true
     this.idMode = options.idMode ?? 'auto'

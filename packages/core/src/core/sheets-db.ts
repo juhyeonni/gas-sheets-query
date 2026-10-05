@@ -5,6 +5,7 @@ import type {
   RowWithId,
   DataStore,
   SheetsDBConfig,
+  TypedSheetsDBConfig,
   TableSchemaTyped,
   InferRowFromSchema,
   InferTablesFromConfig,
@@ -134,9 +135,13 @@ function createTableHandle<T extends RowWithId, TName extends string, C = Defaul
  * Factory options for createSheetsDB (legacy - explicit types)
  */
 export interface CreateSheetsDBOptions<Tables extends Record<string, RowWithId>> {
-  /** Database configuration */
-  config: SheetsDBConfig
-  
+  /**
+   * Database configuration. Each table's `columns` holds only the keys of its
+   * row type in `Tables` (#246); a table typed as the bare `RowWithId` accepts
+   * any column name.
+   */
+  config: TypedSheetsDBConfig<Tables>
+
   /** Data stores for each table (for testing or custom implementations) */
   stores: { [K in keyof Tables]: DataStore<Tables[K]> }
 }

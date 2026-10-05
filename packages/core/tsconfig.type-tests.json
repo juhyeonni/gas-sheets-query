@@ -1,15 +1,18 @@
 {
   // Compiles the type-level tests and compile-time assertions in tests/types
-  // (#194, #200). Vitest does not typecheck, and tests/ is excluded from the
-  // main tsconfig, so without this project an `@ts-expect-error` or type
-  // assertion there would check nothing. `pnpm typecheck` runs it after the
-  // main project, so a misuse that compiles again fails CI.
-  // Only tests/types is included: the rest of the suite is not type-checked.
+  // (#194, #200, #246). tests/ is excluded from the main tsconfig, so without
+  // this project an `@ts-expect-error` or type assertion there would check
+  // nothing. Two runners use it: `pnpm typecheck` runs tsc on it after the main
+  // project, and Vitest's typecheck mode (vitest.config.ts) checks the
+  // `*.test-d.ts` files through it during `pnpm test`. Either way, a misuse
+  // that compiles again fails CI.
+  // Only src and tests/types are included: the rest of the suite is not
+  // type-checked.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["tests/types/**/*.ts"],
+  "include": ["src/**/*", "tests/types/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

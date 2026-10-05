@@ -4,6 +4,15 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // Compile-time contracts (#246): `*.test-d.ts` files are checked by tsc,
+    // never executed, so a `@ts-expect-error` that stops matching fails the
+    // run. The packages' own `tsc` pass excludes tests, and Vitest strips
+    // types from ordinary tests, so neither would notice.
+    typecheck: {
+      enabled: true,
+      include: ['tests/types/**/*.test-d.ts'],
+      tsconfig: './tsconfig.type-tests.json'
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'json-summary', 'html'],

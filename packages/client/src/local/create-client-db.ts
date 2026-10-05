@@ -2,7 +2,7 @@
  * createClientDB - Factory that assembles LocalAdapter + MutationQueue + SyncEngine
  * into a SheetsDB-compatible local-first client.
  */
-import type { RowWithId, DataStore, SheetsDBConfig } from '@gsquery/core'
+import type { RowWithId, DataStore, SheetsDBConfig, TypedSheetsDBConfig } from '@gsquery/core'
 import { createSheetsDB } from '@gsquery/core'
 import type { SheetsDB } from '@gsquery/core'
 import { LocalAdapter, openSharedIDB, IDBUpgradeBlockedError } from './local-adapter.js'
@@ -177,7 +177,9 @@ export async function createClientDB<
   const config: SheetsDBConfig = toSheetsDBConfig(schema)
 
   const db = createSheetsDB<Tables, CreateInputs>({
-    config,
+    // Built from the runtime schema, so its columns are plain strings that the
+    // compiler cannot tie to Tables' keys (#246).
+    config: config as TypedSheetsDBConfig<Tables>,
     stores: stores as { [K in keyof Tables]: DataStore<Tables[K]> },
   })
 

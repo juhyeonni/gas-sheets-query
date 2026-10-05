@@ -9,6 +9,7 @@ import type {
   RowWithId,
   DataStore,
   SheetsDBConfig,
+  TypedSheetsDBConfig,
   IdMode,
   RuntimeSchema,
   RuntimeTableSchema,
@@ -114,17 +115,18 @@ export function createStore<T extends RowWithId>(
     }
 
     const sheetName = tableSchema.sheetName || tableName
-    // Type assertion needed: While T extends RowWithId (which has id: string | number),
-    // TypeScript can't verify at compile time that T's id field exactly matches
-    // SheetsAdapter's requirement. This is safe because RowWithId guarantees id exists
-    // with the correct type at runtime.
-    return new SheetsAdapter<T>({
+    // Built untyped, then handed out as T: the runtime schema's columns are
+    // plain strings, and nothing at this point ties them to T's keys, so a
+    // SheetsAdapter<T> would reject them (#246). The generated schema and the
+    // generated row types come from the same source, which is what keeps the
+    // two in step.
+    return new SheetsAdapter({
       spreadsheetId: options.spreadsheetId,
       sheetName,
       columns: [...tableSchema.columns],
       columnTypes: tableSchema.columnTypes,
       idMode
-    }) as DataStore<T>
+    }) as DataStore<RowWithId> as DataStore<T>
   }
 
   // No spreadsheetId, not in GAS, and mock not requested. Refuse to silently
@@ -197,7 +199,9 @@ export function createClientFactory<
     }
 
     return createSheetsDB<Tables, CreateInputs>({
-      config,
+      // Built from the runtime schema, so its columns are plain strings that
+      // the compiler cannot tie to Tables' keys (#246).
+      config: config as TypedSheetsDBConfig<Tables>,
       stores: stores as { [K in keyof Tables]: DataStore<Tables[K]> }
     })
   }
