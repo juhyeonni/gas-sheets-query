@@ -5,7 +5,7 @@
 import type { RowWithId, DataStore, SheetsDBConfig } from '@gsquery/core'
 import { createSheetsDB } from '@gsquery/core'
 import type { SheetsDB } from '@gsquery/core'
-import { LocalAdapter, openSharedIDB } from './local-adapter.js'
+import { LocalAdapter, openSharedIDB, IDBUpgradeBlockedError } from './local-adapter.js'
 import type { LocalAdapterOptions } from './local-adapter.js'
 import { SyncEngine } from './sync-engine.js'
 import type { SyncEngineOptions } from './sync-engine.js'
@@ -107,12 +107,19 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
   // Open shared IDB with all table stores in a single upgrade transaction
   const idbEnabled = !(disableIDB ?? false) && typeof indexedDB !== 'undefined'
   let sharedDb: IDBDatabase | undefined
+  let memoryOnly = disableIDB ?? false
   if (idbEnabled) {
     try {
       const allTableNames = Object.keys(schema.tables)
       sharedDb = await openSharedIDB(allTableNames, composeName('gsquery', namespace))
-    } catch {
+    } catch (err) {
       // IndexedDB unavailable - adapters will run in-memory only
+      if (err instanceof IDBUpgradeBlockedError) {
+        // The blocked request stays queued, so a per-adapter open would queue
+        // behind it and hang init again: skip IndexedDB for this session (#120).
+        memoryOnly = true
+        console.warn(`[gsquery] ${err.message}; continuing memory-only for this session`)
+      }
     }
   }
 
@@ -124,7 +131,7 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
       columnTypes: tableSchema.columnTypes,
       idMode: 'client',
       mutationStorage,
-      disableIDB: disableIDB ?? false,
+      disableIDB: memoryOnly,
       initialData: options.initialData?.[tableName as keyof Tables] as any[],
       idbDb: sharedDb,
       namespace,
