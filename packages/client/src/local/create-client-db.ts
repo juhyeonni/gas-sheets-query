@@ -116,7 +116,10 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     }
   }
 
-  // Create LocalAdapter per table with shared IDB handle
+  // Create LocalAdapter per table with shared IDB handle. Without one, the
+  // adapters must not open connections of their own: close() only closes
+  // sharedDb, so any other connection would leak and wedge later upgrades
+  // (#139). The mutation queue keeps its own storage either way.
   for (const [tableName, tableSchema] of Object.entries(schema.tables)) {
     const adapterOpts: LocalAdapterOptions = {
       tableName,
@@ -124,7 +127,7 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
       columnTypes: tableSchema.columnTypes,
       idMode: 'client',
       mutationStorage,
-      disableIDB: disableIDB ?? false,
+      disableIDB: sharedDb === undefined,
       initialData: options.initialData?.[tableName as keyof Tables] as any[],
       idbDb: sharedDb,
       namespace,
