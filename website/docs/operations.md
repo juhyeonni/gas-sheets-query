@@ -138,7 +138,8 @@ the same execution from that snapshot — one API call instead of one per query.
 The consequence is that writes made by *other* executions are invisible until:
 
 - any write by this adapter drops the cache (an `insert` drops it even if it
-  throws, e.g. `DuplicateIdError`), or
+  throws, e.g. `DuplicateIdError`) — unless the adapter was built with
+  `patchCacheOnWrite: true`, see below, or
 - you call `adapter.clearCache()`, or
 - a new execution starts.
 
@@ -167,6 +168,56 @@ types into the sheet by hand during the same execution is only absorbed after
 Long-running triggers that poll for external edits must call `clearCache()`
 between passes.
 
+### Patching the cache on write (`patchCacheOnWrite`)
+
+By default (`patchCacheOnWrite: false`) every write drops the cache, so a loop of
+`insert` + `findAll` re-reads the whole table on every iteration. Construct the
+adapter with `patchCacheOnWrite: true` and `insert`, `batchInsert`, `update`,
+`batchUpdate`, `delete` and `batchDelete` instead apply what they wrote to a warm
+cache, so the loop reads the table once:
+
+```ts
+const store = new SheetsAdapter<User>({
+  sheetName: 'users',
+  columns: ['id', 'name', 'email'],
+  patchCacheOnWrite: true // default: false
+})
+```
+
+The trade-off is staleness. With the option on, a write no longer refreshes the
+snapshot, so rows that **other executions** wrote appear only after
+`adapter.clearCache()` or in a new execution. With it off, they also appear after
+this adapter's next write. Turn it on for executions that own the table while
+they run (an import, a batch job); leave it off when other executions write the
+same sheet and you rely on writes to pick up their rows.
+
+A patched row is exactly what a fresh read would return: the written cells are
+run back through the same deserialization (formula escaping, JSON, typed
+columns), not copied from the object you passed. When that is not certain, the
+write drops the cache as it does with the option off, and the next read re-reads
+the table:
+
+- a written string Sheets may parse into something else: any string containing a
+  digit (`"123"`, `"007"`, `"2024-01-01"`, `"10:30"`, `"user-1"`), `true`/`false`
+  in any case, a string with leading or trailing whitespace or a leading `#`;
+- any value in a `date`-typed column, including a `Date`;
+- with `allowFormulas: true`, a string that opens a formula (`=`, `+`, `-`, `@`,
+  tab, CR) or starts with `'`;
+- an `update`, `batchUpdate`, `delete` or `batchDelete` of an id that has no
+  cached row (another execution inserted it after the snapshot), has several
+  (a duplicate typed by hand), or that the cache holds but the sheet no longer
+  does;
+- a write that throws, because its outcome is unknown.
+
+`update` and `batchUpdate` rewrite every cell of the row, so the check covers the
+cells you did not change too: updating one column of a row whose other cells
+hold such a string drops the cache. Plain text, numbers, booleans, `Date`s in
+untyped columns, JSON array and object columns, `boolean`-typed columns, and
+strings `SheetsAdapter` escapes as text are patched.
+
+A cold cache stays cold, so a write never adds a read. `reset()` and the schema
+operations (`addColumn`, `renameColumn`, `removeColumn`) always drop the cache.
+
 ## Measured Costs
 
 Sheet calls made by `SheetsAdapter` on the data sheet, for a table with `N`
@@ -179,6 +230,7 @@ stated). A *cell* is one value returned by `getValues`; `flush` is
 | `findAll`, cold (first read, or after `clearCache()`) | 2 | `N*C + C` | 0 | 0 | 303 | 3,003 | 15,003 |
 | `findAll` / `find`, warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `findAll` after a write | 1 | `N*C` | 0 | 0 | 300 | 3,000 | 15,000 |
+| `findAll` after a patched write (`patchCacheOnWrite: true`, cache was warm) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `findById`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `count`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `count` after a write (cache cold, header verified) | 1 | `N` | 0 | 0 | 100 | 1,000 | 5,000 |

@@ -147,7 +147,54 @@ export interface SheetsAdapterOptions {
    * execution, shared by every operation.
    */
   skipHeaderCheck?: boolean
+  /**
+   * Patch the warm read cache with this adapter's own writes instead of
+   * dropping it (default: false) (#236).
+   *
+   * Off, every write drops the cache, so the next read re-reads the whole data
+   * range — and, as a side effect, picks up rows other executions wrote since
+   * the snapshot. On, `insert`, `batchInsert`, `update`, `batchUpdate`,
+   * `delete` and `batchDelete` apply what they wrote to the cache, so a loop of
+   * insert + `findAll` reads the table once instead of once per iteration.
+   * The trade-off: other executions' rows then show up only after
+   * {@link SheetsAdapter.clearCache} or in a new execution.
+   *
+   * A write still drops the cache when patching could make a warm read differ
+   * from a fresh one: a written string Sheets may coerce (one containing a
+   * digit, `true`/`false`, a value in a `date`-typed column, a formula under
+   * `allowFormulas`, ...), an id with no cached row or with several, or a write
+   * that throws. A cold cache stays cold, and `reset` and the schema
+   * operations always drop it.
+   */
+  patchCacheOnWrite?: boolean
 }
+
+/**
+ * Snapshot of the data rows, in sheet order, blank rows excluded.
+ *
+ * `keys[i]` is the id of `rows[i]` as the id column holds it (unescaped,
+ * stringified), or null for an empty id cell. It is taken from the raw cell,
+ * like {@link SheetsAdapter} keys its id map, so a patch finds a written row
+ * the same way the write did. `idCount` is the number of non-null keys, so
+ * `count()` agrees warm and cold.
+ */
+interface DataCache<T> {
+  rows: T[]
+  keys: (string | null)[]
+  idCount: number
+}
+
+/** A row as a fresh read would cache it. */
+interface CacheEntry<T> {
+  row: T
+  key: string | null
+}
+
+/** Booleans Sheets parses from text, compared case-insensitively. */
+const BOOLEAN_TEXT = /^(true|false)$/i
+
+/** Any decimal digit, in any script: the conservative test for "may parse as a number, date or time". */
+const DIGIT = /\p{Nd}/u
 
 
 /**
@@ -190,15 +237,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private columnTypes: Record<string, ColumnType>
   private allowFormulas: boolean
   private skipHeaderCheck: boolean
+  private patchCacheOnWrite: boolean
 
   // Sheet reference cache
   private _sheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _metaSheet: GoogleAppsScript.Spreadsheet.Sheet | null = null
   private _spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet | null = null
-  // Data cache - invalidated on write operations. `idCount` is the number of
-  // retained raw rows with a non-empty id cell, taken before deserialization so
-  // count() agrees warm and cold (#236).
-  private _dataCache: { rows: T[]; idCount: number } | null = null
+  // Data cache - dropped on write operations, or patched with them when
+  // `patchCacheOnWrite` is on (#236).
+  private _dataCache: DataCache<T> | null = null
   /**
    * id -> 1-based physical row, built only from a raw read of the id column
    * (#137). Never built from {@link _dataCache}: findAll drops blank rows, so
@@ -207,7 +254,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
    * It is a hint, not a source of truth: another execution can shift rows at
    * any time, so every use verifies the row under the lock and falls back to
    * one fresh id-column read (see {@link locateRowIndex}). Unlike
-   * `_dataCache` it survives this adapter's own writes; it is patched after a
+   * `_dataCache` (without `patchCacheOnWrite`) it survives this adapter's own
+   * writes; it is patched after a
    * successful `deleteRow` and dropped whenever the outcome of a shape change
    * is unknown, by {@link clearCache}, and by {@link reset}.
    */
@@ -230,6 +278,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     this.columnTypes = options.columnTypes ?? {}
     this.allowFormulas = options.allowFormulas ?? false
     this.skipHeaderCheck = options.skipHeaderCheck ?? false
+    this.patchCacheOnWrite = options.patchCacheOnWrite ?? false
 
     // Validate that id column is in columns
     if (!this.columns.includes(this.idColumn)) {
@@ -355,6 +404,154 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   /** Invalidate data cache (called after write operations) */
   private invalidateDataCache(): void {
     this._dataCache = null
+  }
+
+  /**
+   * Take the data cache out for a row write (#236).
+   *
+   * Always leaves `_dataCache` null, exactly like {@link invalidateDataCache},
+   * so a write that throws leaves the cache cold. Returns the warm cache when
+   * `patchCacheOnWrite` is on, for the write to patch and put back once it has
+   * succeeded; null when the option is off or the cache was already cold, so a
+   * cold cache stays cold.
+   */
+  private detachCacheForPatch(): DataCache<T> | null {
+    const cache = this.patchCacheOnWrite ? this._dataCache : null
+    this._dataCache = null
+    return cache
+  }
+
+  /** Cache key of a raw id cell: unescaped and stringified, null when the cell is empty. */
+  private cacheKey(idCell: unknown): string | null {
+    return isEmptyCellValue(idCell) ? null : String(this.unescapeCellValue(idCell))
+  }
+
+  /**
+   * The entry a fresh read of the written `cells` would cache, or null when
+   * that is not certain (#236).
+   *
+   * The row is the written cells run back through {@link rowToObject}, not the
+   * caller's object, so formula escaping, JSON and typed columns come out
+   * exactly as a fresh read deserializes them. A row whose cells are all blank
+   * is never kept by a fresh read, so it cannot be patched either.
+   */
+  private toCacheEntry(cells: unknown[]): CacheEntry<T> | null {
+    if (!cells.some(cell => cell !== '')) return null
+    for (let i = 0; i < this.columns.length; i++) {
+      if (!this.readsBackAsWritten(this.columns[i], cells[i])) return null
+    }
+    const idIndex = this.columns.indexOf(this.idColumn)
+    return { row: this.rowToObject(cells), key: this.cacheKey(cells[idIndex]) }
+  }
+
+  /**
+   * Whether Sheets certainly stores a serialized cell as written (#236).
+   *
+   * Real `setValues` parses a string the way a user typing it would, so `"007"`
+   * reads back as the number 7, `"true"` as a boolean and `"2024-01-01"` as a
+   * Date, while the testing fakes keep the string. Patching such a cell would
+   * make the warm cache disagree with a fresh read on the live platform, so it
+   * counts as uncertain and the write drops the cache instead. The test is
+   * deliberately conservative: a needless drop costs one re-read, a wrong
+   * patch is silent divergence.
+   *
+   * Certain: blanks, finite numbers, booleans, valid Dates, strings escaped as
+   * text, JSON array or object text, the `TRUE`/`FALSE` of a `boolean` column,
+   * and other strings with no digit, no surrounding whitespace, no leading `#`
+   * and not spelling a boolean. Never certain: any value in a `date` column,
+   * and under `allowFormulas` a string that opens a formula or a text marker.
+   */
+  private readsBackAsWritten(column: string, cell: unknown): boolean {
+    if (cell === '') return true
+    const colType = this.columnTypes[column]
+    if (colType === 'date') return false
+    if (typeof cell === 'number') return Number.isFinite(cell)
+    if (typeof cell === 'boolean') return true
+    if (cell instanceof Date) return !isNaN(cell.getTime())
+    if (typeof cell !== 'string') return false
+    if (colType === 'boolean') return cell === 'TRUE' || cell === 'FALSE'
+
+    const first = cell.charAt(0)
+    // Without allowFormulas a leading marker was added by escapeCellValue, and
+    // the rest is stored as literal text.
+    if (first === TEXT_PREFIX) return !this.allowFormulas
+    if (this.allowFormulas && FORMULA_TRIGGER_CHARS.indexOf(first) !== -1) return false
+    if (first === '[' || first === '{') return true
+    return !DIGIT.test(cell) && !BOOLEAN_TEXT.test(cell) && cell === cell.trim() && first !== '#'
+  }
+
+  /** Cache positions of each of `keys`, ignoring every other row. */
+  private cachePositions(cache: DataCache<T>, keys: ReadonlySet<string>): Map<string, number[]> {
+    const positions = new Map<string, number[]>()
+    cache.keys.forEach((key, index) => {
+      if (key === null || !keys.has(key)) return
+      const list = positions.get(key)
+      if (list) list.push(index)
+      else positions.set(key, [index])
+    })
+    return positions
+  }
+
+  /** Append written rows (insert, batchInsert); null when any of them cannot be patched. */
+  private patchAppend(cache: DataCache<T>, written: unknown[][]): DataCache<T> | null {
+    for (const cells of written) {
+      const entry = this.toCacheEntry(cells)
+      if (!entry) return null
+      cache.rows.push(entry.row)
+      cache.keys.push(entry.key)
+      if (entry.key !== null) cache.idCount++
+    }
+    return cache
+  }
+
+  /**
+   * Replace rewritten rows in place (update, batchUpdate). Null unless every
+   * key is distinct and sits at exactly one cache position: cache positions are
+   * not physical rows, so a missing or duplicated key cannot be mapped safely.
+   */
+  private patchReplace(
+    cache: DataCache<T>,
+    written: { key: string | null; cells: unknown[] }[]
+  ): DataCache<T> | null {
+    const keys = new Set<string>()
+    for (const { key } of written) {
+      if (key === null || keys.has(key)) return null
+      keys.add(key)
+    }
+
+    const positions = this.cachePositions(cache, keys)
+    for (const { key, cells } of written) {
+      const at = positions.get(key as string)
+      if (!at || at.length !== 1) return null
+      const entry = this.toCacheEntry(cells)
+      // id is immutable on update, so the written row keeps its key.
+      if (!entry || entry.key !== key) return null
+      cache.rows[at[0]] = entry.row
+    }
+    return cache
+  }
+
+  /**
+   * Remove deleted rows (delete, batchDelete). Null unless each key sits at
+   * exactly one cache position.
+   */
+  private patchRemove(cache: DataCache<T>, keys: string[]): DataCache<T> | null {
+    if (keys.length === 0) return cache
+
+    const wanted = new Set(keys)
+    const positions = this.cachePositions(cache, wanted)
+    const removed = new Set<number>()
+    for (const key of wanted) {
+      const at = positions.get(key)
+      if (!at || at.length !== 1) return null
+      removed.add(at[0])
+    }
+
+    return {
+      rows: cache.rows.filter((_, index) => !removed.has(index)),
+      keys: cache.keys.filter((_, index) => !removed.has(index)),
+      idCount: cache.idCount - removed.size
+    }
   }
 
   /**
@@ -883,7 +1080,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const lastRow = sheet.getLastRow()
 
     if (lastRow <= 1) {
-      this._dataCache = { rows: [], idCount: 0 }
+      this._dataCache = { rows: [], keys: [], idCount: 0 }
       return []
     }
 
@@ -892,9 +1089,13 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     const idColIndex = this.columns.indexOf(this.idColumn)
 
     const retained = values.filter(row => row.some(cell => cell !== ''))
+    // Keys come from the raw id cell, before deserialization, so count()
+    // agrees warm and cold and a patch finds rows the way a write does (#236).
+    const keys = retained.map(row => this.cacheKey(row[idColIndex]))
     this._dataCache = {
       rows: retained.map(row => this.rowToObject(row)),
-      idCount: retained.filter(row => !isEmptyCellValue(row[idColIndex])).length
+      keys,
+      idCount: keys.filter(key => key !== null).length
     }
 
     return [...this._dataCache.rows]
@@ -939,32 +1140,37 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
   insert(data: Omit<T, 'id'> | T): T {
     this.assertHeaderAligned()
-    this.invalidateDataCache()
+    const cache = this.detachCacheForPatch()
     const sheet = this.getSheet()
 
+    let written: { row: T; cells: unknown[] }
     if (this.idMode === 'client') {
       // Client mode: use client-provided ID. The uniqueness check and the write
       // share one lock so a concurrent execution cannot slip in the same id
       // between them, which would leave a row unreachable by id (#128).
       const id = this.requireClientId(data)
-      return this.withLock(() => {
+      written = this.withLock(() => {
         this.assertClientIdsAvailable([id])
         const newRow = data as T
         const rowValues = this.objectToRow(newRow)
         this.sheetsCallOnce(() => sheet.appendRow(rowValues))
-        return newRow
+        return { row: newRow, cells: rowValues }
       })
     } else {
       // Auto mode: allocate the ID and write the row atomically under the lock,
       // otherwise concurrent executions can allocate the same ID.
-      return this.withLock(() => {
+      written = this.withLock(() => {
         const id = this.allocateAutoIds(1)
         const newRow = { ...data, [this.idColumn]: id } as T
         const rowValues = this.objectToRow(newRow)
         this.sheetsCallOnce(() => sheet.appendRow(rowValues))
-        return newRow
+        return { row: newRow, cells: rowValues }
       })
     }
+
+    // appendRow lands after the last row, which is where a fresh read puts it.
+    if (cache) this._dataCache = this.patchAppend(cache, [written.cells])
+    return written.row
   }
 
   update(id: string | number, data: UpdateData<T>): T | undefined {
@@ -974,11 +1180,12 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // Locating the row and writing to that row number must be atomic: a
     // concurrent deleteRow above the target shifts rows up and the write would
     // land on a different record (#128).
-    return this.withLock(() => {
+    const outcome = this.withLock(() => {
       const found = this.locateRow(id)
+      // Nothing written: the cache is left as it is.
       if (!found) return undefined
 
-      this.invalidateDataCache()
+      const cache = this.detachCacheForPatch()
       const { rowIndex, values: currentValues } = found
 
       const currentRow = this.rowToObject(currentValues)
@@ -995,8 +1202,15 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         sheet.getRange(rowIndex, 1, 1, this.columns.length).setValues([rowValues])
       )
 
-      return updatedRow
+      const key = this.cacheKey(currentValues[this.columns.indexOf(this.idColumn)])
+      const next = cache ? this.patchReplace(cache, [{ key, cells: rowValues }]) : null
+      return { row: updatedRow, next }
     })
+
+    if (!outcome) return undefined
+    // Applied only once the lock (and its flush) returned, so a throw leaves the cache cold.
+    this._dataCache = outcome.next
+    return outcome.row
   }
 
   delete(id: string | number): boolean {
@@ -1005,7 +1219,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
     // Same find-then-write race as update(): without the lock a concurrent
     // delete above the target makes this remove the wrong row (#128).
-    return this.withLock(() => {
+    const outcome = this.withLock((): { next: DataCache<T> | null } | undefined => {
       // A hinted row is verified by its id cell alone (1 cell).
       const idColIndex = this.columns.indexOf(this.idColumn) + 1
       const rowIndex = this.locateRowIndex(id, candidate => {
@@ -1013,9 +1227,10 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         const rowId = this.unescapeCellValue(cell)
         return rowId === id || String(rowId) === String(id)
       })
-      if (rowIndex === -1) return false
+      // Nothing deleted: the cache is left as it is.
+      if (rowIndex === -1) return undefined
 
-      this.invalidateDataCache()
+      const cache = this.detachCacheForPatch()
       try {
         // deleteRow shifts every row below it up, so a repeat after a spurious
         // failure removes a second, innocent row. Attempt it exactly once.
@@ -1033,8 +1248,13 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         if (row > rowIndex) rows.set(key, row - 1)
       }
 
-      return true
+      // The row was found under String(id), the same key the cache uses.
+      return { next: cache ? this.patchRemove(cache, [String(id)]) : null }
     })
+
+    if (!outcome) return false
+    this._dataCache = outcome.next
+    return true
   }
 
   /**
@@ -1050,12 +1270,12 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     if (ids.length === 0) return 0
 
     this.assertHeaderAligned()
-    this.invalidateDataCache()
+    const cache = this.detachCacheForPatch()
     const sheet = this.getSheet()
 
-    return this.withLock(() => {
+    const outcome = this.withLock(() => {
       this.dropIdMemos()
-      this.readIdColumn()
+      const raw = this.readIdColumn()
       const rows = this._idRows!
 
       const targets = new Set<number>()
@@ -1064,6 +1284,8 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         if (row !== undefined) targets.add(row)
       }
       const descending = [...targets].sort((a, b) => b - a)
+      // Planned before the deletes, from the id column they act on.
+      const removable = cache ? this.batchDeletePatchKeys(cache, ids, raw) : null
 
       try {
         let i = 0
@@ -1080,18 +1302,51 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         this.dropIdMemos()
       }
 
-      return targets.size
+      const next = cache && removable ? this.patchRemove(cache, removable) : null
+      return { deleted: targets.size, next }
     })
+
+    this._dataCache = outcome.next
+    return outcome.deleted
+  }
+
+  /**
+   * Keys batchDelete removes from a warm cache, or null when it must drop it
+   * (#236). Only the first row per id is deleted, so an id held by several
+   * rows on the sheet cannot be mapped onto the cache, and an id the cache
+   * holds but the sheet no longer does means the cache already diverged.
+   */
+  private batchDeletePatchKeys(
+    cache: DataCache<T>,
+    ids: (string | number)[],
+    idCells: unknown[]
+  ): string[] | null {
+    const onSheet = new Map<string, number>()
+    for (const cell of idCells) {
+      const key = this.cacheKey(cell)
+      if (key !== null) onSheet.set(key, (onSheet.get(key) ?? 0) + 1)
+    }
+
+    const cached = new Set(cache.keys)
+    const keys: string[] = []
+    for (const key of new Set(ids.map(String))) {
+      const rowsOnSheet = onSheet.get(key) ?? 0
+      if (rowsOnSheet > 1) return null
+      if (rowsOnSheet === 1) keys.push(key)
+      else if (cached.has(key)) return null
+    }
+    return keys
   }
 
   batchInsert(items: (Omit<T, 'id'> | T)[]): T[] {
     if (items.length === 0) return []
 
     this.assertHeaderAligned()
-    this.invalidateDataCache()
+    const cache = this.detachCacheForPatch()
     const sheet = this.getSheet()
 
-    // Batch write all rows at once, appending after the current last row.
+    // Batch write all rows at once, appending after the current last row,
+    // which is where a fresh read puts them.
     const writeRows = (rows: unknown[][]) => {
       const lastRow = sheet.getLastRow()
       // The range is pinned before the call, so retrying rewrites the same
@@ -1099,6 +1354,10 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       this.sheetsCall(() =>
         sheet.getRange(lastRow + 1, 1, rows.length, this.columns.length).setValues(rows)
       )
+    }
+    // Applied only once the lock (and its flush) returned, so a throw leaves the cache cold.
+    const patch = (rows: unknown[][]): void => {
+      if (cache) this._dataCache = this.patchAppend(cache, rows)
     }
 
     if (this.idMode === 'client') {
@@ -1115,16 +1374,17 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         results.push(newRow)
         rowsToInsert.push(this.objectToRow(newRow))
       }
-      return this.withLock(() => {
+      this.withLock(() => {
         this.assertClientIdsAvailable(ids)
         writeRows(rowsToInsert)
-        return results
       })
+      patch(rowsToInsert)
+      return results
     }
 
     // Auto mode: allocate IDs (incl. the getLastRow used for the write
     // position) and write atomically under the lock to avoid duplicate IDs.
-    return this.withLock(() => {
+    const written = this.withLock(() => {
       const results: T[] = []
       const rowsToInsert: unknown[][] = []
       // One counter read/write covers the whole batch (#177).
@@ -1136,15 +1396,17 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         nextId++
       }
       writeRows(rowsToInsert)
-      return results
+      return { results, rows: rowsToInsert }
     })
+    patch(written.rows)
+    return written.results
   }
 
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
     if (items.length === 0) return []
 
     this.assertHeaderAligned()
-    this.invalidateDataCache()
+    const cache = this.detachCacheForPatch()
     const sheet = this.getSheet()
 
     // Build a map of id -> data for batch processing
@@ -1152,6 +1414,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     for (const { id, data } of items) {
       updateMap.set(id, data)
     }
+    const requestedKeys = new Set(items.map(({ id }) => String(id)))
 
     // Resolve row indices, read and write inside one lock. The row numbers come
     // from the id-column read made in this lock acquisition; a concurrent
@@ -1161,15 +1424,24 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // span at once (#155).
     // withScriptLock is re-entrant, so callers already holding the lock (a
     // migration delegating to batchUpdate) reuse their acquisition.
-    return this.withLock(() => {
+    const outcome = this.withLock((): { results: T[]; next: DataCache<T> | null } => {
       // Every row whose id matches is updated, duplicates included. Unescape so
       // an escaped id still matches the caller's id (#130).
       const matched: number[] = []
+      const matchedKeys = new Set<string>()
       this.readIdColumn().forEach((cell, i) => {
         const rowId = this.unescapeCellValue(cell) as string | number
-        if (updateMap.has(rowId) || updateMap.has(String(rowId))) matched.push(i + 2) // +2 for header and 1-indexing
+        if (updateMap.has(rowId) || updateMap.has(String(rowId))) {
+          matched.push(i + 2) // +2 for header and 1-indexing
+          matchedKeys.add(String(rowId))
+        }
       })
-      if (matched.length === 0) return []
+      // A requested id the cache holds but the sheet does not means the cache
+      // already diverged from the sheet; patching would keep a row a fresh read
+      // no longer returns.
+      const cacheDiverged = cache !== null &&
+        cache.keys.some(key => key !== null && !matchedKeys.has(key) && requestedKeys.has(key))
+      if (matched.length === 0) return { results: [], next: cacheDiverged ? null : cache }
 
       // One read covers the first to the last matched row; rows in between are
       // read but never written.
@@ -1181,6 +1453,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
 
       const results: T[] = []
       const updatedRows: { rowIndex: number; values: unknown[] }[] = []
+      const written: { key: string | null; cells: unknown[] }[] = []
 
       for (const rowIndex of matched) {
         const raw = span[rowIndex - first]
@@ -1195,13 +1468,21 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         ;(updatedRow as Record<string, unknown>)[this.idColumn] =
           (currentRow as Record<string, unknown>)[this.idColumn]
         results.push(updatedRow)
-        updatedRows.push({ rowIndex, values: this.objectToRow(updatedRow) })
+        const values = this.objectToRow(updatedRow)
+        updatedRows.push({ rowIndex, values })
+        written.push({ key: this.cacheKey(raw[idColIndex]), cells: values })
       }
 
       this.writeRowRuns(sheet, updatedRows)
 
-      return results
+      // patchReplace drops the cache for an id matched on several rows.
+      const next = cache && !cacheDiverged ? this.patchReplace(cache, written) : null
+      return { results, next }
     })
+
+    // Applied only once the lock (and its flush) returned, so a throw leaves the cache cold.
+    this._dataCache = outcome.next
+    return outcome.results
   }
 
   /**
