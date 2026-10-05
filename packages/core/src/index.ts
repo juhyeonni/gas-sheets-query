@@ -34,9 +34,9 @@ export type {
 // Core classes
 export { Repository } from './core/repository.js'
 export { QueryBuilder, createQueryBuilder } from './core/query-builder.js'
-export type { AggSpec, AggResult, GroupedAggResult, HavingCondition } from './core/query-builder.js'
+export type { AggSpec, AggResult, GroupedAggResult, HavingCondition, NumericColumn } from './core/query-builder.js'
 export { JoinQueryBuilder, createJoinQueryBuilder } from './core/join-query-builder.js'
-export type { JoinConfig, StoreResolver } from './core/join-query-builder.js'
+export type { JoinConfig, StoreResolver, JoinWhereField, JoinWhereKey } from './core/join-query-builder.js'
 
 // SheetsDB factory functions
 export { createSheetsDB, defineSheetsDB } from './core/sheets-db.js'
