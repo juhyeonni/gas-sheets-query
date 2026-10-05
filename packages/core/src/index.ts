@@ -19,8 +19,11 @@ export type {
   BatchUpdateItem,
   UpdateData,
   AddColumnOptions,
+  ColumnName,
   TableSchema,
+  SheetsDBTableConfig,
   SheetsDBConfig,
+  TypedSheetsDBConfig,
   RuntimeTableSchema,
   RuntimeSchema,
   // Schema-based type inference

@@ -17,6 +17,32 @@ export type Row = Record<string, unknown>
 /** Row with required id field (no index signature required) */
 export type RowWithId = { id: string | number }
 
+/**
+ * True when `A` and `B` are the same type, not merely mutually assignable.
+ *
+ * Mutual assignability is too loose for {@link ColumnName}: a row type such as
+ * `{ id: string | number; nickname?: string }` and the bare {@link RowWithId}
+ * are assignable both ways, because a missing optional field is no error.
+ */
+type IsExactly<A, B> =
+  (<G>() => G extends A ? 1 : 2) extends (<G>() => G extends B ? 1 : 2) ? true : false
+
+/**
+ * A column name a column list may hold for rows of type `T` (#246).
+ *
+ * - For a row type given by the caller: its string keys, so a typo such as
+ *   `'emial'` in `columns` fails to compile where it is written.
+ * - For exactly the bare {@link RowWithId} (no row type given): any string.
+ *   There is nothing to check against, and an untyped adapter or config keeps
+ *   accepting whatever names its sheet uses.
+ *
+ * `T` is wrapped in `NoInfer`: a column list must never be where `T` is
+ * inferred from, or `new SheetsAdapter({ columns: ['id', 'x'] })` would infer
+ * a row type `{ id; x }` from the list it is meant to be checked against.
+ */
+export type ColumnName<T extends RowWithId> =
+  IsExactly<NoInfer<T>, RowWithId> extends true ? string : keyof NoInfer<T> & string
+
 /** Comparison operators for where clauses */
 export type Operator = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'like' | 'in'
 
@@ -304,10 +330,13 @@ export interface RuntimeSchema {
 // Legacy types (backward compatible)
 // ============================================================================
 
-/** Table schema definition (legacy) */
-export interface TableSchema<T extends RowWithId = RowWithId> {
+/**
+ * One table of the erased {@link SheetsDBConfig} (legacy): its column list is
+ * plain strings. Every {@link TableSchema} is assignable to it.
+ */
+export interface SheetsDBTableConfig {
   /** Column names in order */
-  columns: readonly (keyof T & string)[]
+  columns: readonly string[]
   /**
    * ID column name (default: 'id')
    *
@@ -319,10 +348,42 @@ export interface TableSchema<T extends RowWithId = RowWithId> {
   sheetName?: string
 }
 
-/** Database configuration (legacy) */
+/**
+ * Table schema definition (legacy), typed against the row type `T` (#246).
+ *
+ * With a row type, `columns` holds only that type's keys (see
+ * {@link ColumnName}); without one (the bare `RowWithId`), any string.
+ */
+export interface TableSchema<T extends RowWithId = RowWithId> extends SheetsDBTableConfig {
+  /** Column names in order */
+  columns: readonly ColumnName<T>[]
+}
+
+/**
+ * Database configuration (legacy), erased: every column list is plain strings.
+ *
+ * This is the shape `SheetsDB.config` exposes, and the shape a config built at
+ * runtime from a {@link RuntimeSchema} has. `createSheetsDB` takes the typed
+ * {@link TypedSheetsDBConfig}, which is assignable to this one.
+ */
 export interface SheetsDBConfig {
   /** Spreadsheet ID (optional, uses active spreadsheet if not provided) */
   spreadsheetId?: string
   /** Table definitions */
-  tables: Record<string, TableSchema<any>>
+  tables: Record<string, SheetsDBTableConfig>
+}
+
+/**
+ * Database configuration (legacy) typed against the row types (#246).
+ *
+ * Each table's `columns` holds only the keys of that table's row type, so
+ * `createSheetsDB<{ users: User }>` rejects a typo'd column name. A table typed
+ * as the bare {@link RowWithId} (as when `createSheetsDB` is called with no type
+ * argument and untyped stores) accepts any column name.
+ */
+export interface TypedSheetsDBConfig<Tables extends Record<string, RowWithId>> {
+  /** Spreadsheet ID (optional, uses active spreadsheet if not provided) */
+  spreadsheetId?: string
+  /** Table definitions, one per table in `Tables` */
+  tables: { [K in keyof Tables]: TableSchema<Tables[K]> }
 }

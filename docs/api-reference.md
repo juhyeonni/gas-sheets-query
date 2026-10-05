@@ -77,6 +77,8 @@ const db = createSheetsDB<{ users: User }>({
 })
 ```
 
+Since 2.0 (#246), `config` is a `TypedSheetsDBConfig<Tables>`: it needs an entry for every table in `Tables`, and each table's `columns` accepts only the keys of its row type (`as const` tuples included), so `['id', 'emial']` fails to compile. With no type argument and untyped stores, any column name is accepted. `SheetsAdapterOptions<T>.columns` is typed the same way. Migrating from 1.x: add sheet-only columns to the row type, and type a `string[]` column variable as the row's keys. See the [API reference](../website/docs/api-reference.md#createsheetsdboptions-legacy).
+
 ### SheetsDB Interface
 
 ```typescript

@@ -1,0 +1,11 @@
+{
+  // Compiler pass for the compile-time tests in tests/types (#246), run by
+  // Vitest's typecheck mode. The main tsconfig excludes tests.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/types/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
