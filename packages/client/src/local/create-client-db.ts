@@ -114,7 +114,6 @@ export async function createClientDB<
   // Open shared IDB with all table stores in a single upgrade transaction
   const idbEnabled = !(disableIDB ?? false) && typeof indexedDB !== 'undefined'
   let sharedDb: IDBDatabase | undefined
-  let memoryOnly = disableIDB ?? false
   if (idbEnabled) {
     try {
       const allTableNames = Object.keys(schema.tables)
@@ -124,13 +123,16 @@ export async function createClientDB<
       if (err instanceof IDBUpgradeBlockedError) {
         // The blocked request stays queued, so a per-adapter open would queue
         // behind it and hang init again: skip IndexedDB for this session (#120).
-        memoryOnly = true
+        // Leaving sharedDb undefined already keeps every adapter memory-only.
         console.warn(`[gsquery] ${err.message}; continuing memory-only for this session`)
       }
     }
   }
 
-  // Create LocalAdapter per table with shared IDB handle
+  // Create LocalAdapter per table with shared IDB handle. Without one, the
+  // adapters must not open connections of their own: close() only closes
+  // sharedDb, so any other connection would leak and wedge later upgrades
+  // (#139). The mutation queue keeps its own storage either way.
   for (const [tableName, tableSchema] of Object.entries(schema.tables)) {
     const adapterOpts: LocalAdapterOptions = {
       tableName,
@@ -138,7 +140,7 @@ export async function createClientDB<
       columnTypes: tableSchema.columnTypes,
       idMode: 'client',
       mutationStorage,
-      disableIDB: memoryOnly,
+      disableIDB: sharedDb === undefined,
       initialData: options.initialData?.[tableName as keyof Tables] as any[],
       idbDb: sharedDb,
       namespace,

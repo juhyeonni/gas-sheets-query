@@ -112,4 +112,4 @@ The GAS side exposes `syncPull(tableName)` / `syncPush(tableName, mutations)` ha
 
 - **Single-tab.** Two tabs sharing a namespace can overwrite each other's queued mutations and IndexedDB snapshots. Use one tab, or give each tab its own `namespace`.
 - **No protocol versioning yet.** The transport carries no per-row base version, so a server cannot detect concurrent edits on its own; the default outcome between two clients is last-write-wins.
-- **Write-behind IndexedDB.** Row snapshots persist asynchronously; the mutation queue (synchronous) is the source of durability. A crash can leave the local *view* stale until the next sync, but no queued mutation is lost.
+- **Write-behind IndexedDB.** Row snapshots persist asynchronously; the mutation queue (synchronous) is the source of durability. A crash can lose the latest snapshot write, but no queued mutation is lost: on reload, each table's view is rebuilt from the IndexedDB snapshot plus the queued mutations, and the rebuilt view is written back to IndexedDB. If IndexedDB cannot be opened, every table runs in memory for that session (the queue still persists) and its view comes from the next sync.

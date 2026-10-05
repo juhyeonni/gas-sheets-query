@@ -26,6 +26,7 @@ import {
 import type { IndexDefinition, ColumnType } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
 import type { MutationInput, MutationStorage } from './mutation-queue.js'
+import type { MergedMutation } from './sync-transport.js'
 import { composeName } from './naming.js'
 
 /**
@@ -239,10 +240,16 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
       const seqBefore = this.queue.currentSeq()
       const rows = await this.readAllFromIDB()
-      if (rows.length === 0) return
-
       const wroteDuringRead = this.queue.currentSeq() > seqBefore
-      if (!wroteDuringRead && this.data.length === 0) {
+
+      // The snapshot is write-behind, so it can lag behind the queue, which is
+      // written synchronously. Rebuild the view from both (#139).
+      const pending = this.queue.getMerged()
+      const view = new Map<string | number, T>(rows.map(r => [r.id, r]))
+      const replayed = this.replayOnto(view, pending)
+
+      if (!replayed && rows.length === 0) return
+      if (!replayed && !wroteDuringRead && this.data.length === 0) {
         this.data = rows
         this.rebuildIndex()
         return
@@ -250,18 +257,17 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
       // Anything already in memory — initialData, or a write that landed while
       // the read was in flight — is newer than this snapshot, so hydrate
-      // underneath it rather than over it (#106). Note replaceAll() bypasses
-      // the queue, so a pull landing mid-init() would not trip wroteDuringRead;
-      // unreachable today since registerTable runs after init().
-      const merged = new Map<string | number, T>(rows.map(r => [r.id, r]))
-      for (const row of this.data) merged.set(row.id, row)
-      if (wroteDuringRead) {
-        for (const m of this.queue.getMerged()) {
-          if (m.type === 'delete') merged.delete(m.id)
-        }
+      // underneath it rather than over it (#106). Rows the queue deletes stay
+      // absent. Note replaceAll() bypasses the queue, so a pull landing
+      // mid-init() would not trip wroteDuringRead; unreachable today since
+      // registerTable runs after init().
+      for (const row of this.data) view.set(row.id, row)
+      for (const m of pending) {
+        if (m.type === 'delete') view.delete(m.id)
       }
-      this.data = [...merged.values()]
+      this.data = [...view.values()]
       this.rebuildIndex()
+      // Brings the lagging snapshot up to date with the rebuilt view.
       this.schedulePersist()
     } catch (err) {
       // IndexedDB unavailable - continue in-memory only
@@ -270,6 +276,36 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
         console.warn(`[gsquery] ${err.message}; continuing memory-only for this session`)
       }
     }
+  }
+
+  /**
+   * Apply the queue's net mutations to a hydrated snapshot, returning whether
+   * any row changed. A queued insert carries the full current row, so it sets
+   * the row outright; an update merges into an existing row and is skipped
+   * when the row is absent (the next pull applies it over server data); a
+   * delete removes the row. The queue is stored as JSON, so values run through
+   * the same column conversion as pulled rows. Neither the queue nor the
+   * mutation listener is touched: these mutations are already queued.
+   */
+  private replayOnto(view: Map<string | number, T>, pending: MergedMutation<T>[]): boolean {
+    let changed = false
+    for (const m of pending) {
+      if (m.type === 'delete') {
+        if (view.delete(m.id)) changed = true
+        continue
+      }
+      const data = deserializeRow({ ...m.data }, this.columnTypes)
+      if (m.type === 'insert') {
+        view.set(m.id, { ...data, id: m.id } as T)
+        changed = true
+        continue
+      }
+      const base = view.get(m.id)
+      if (base === undefined) continue
+      view.set(m.id, { ...base, ...data, id: base.id })
+      changed = true
+    }
+    return changed
   }
 
   /**
