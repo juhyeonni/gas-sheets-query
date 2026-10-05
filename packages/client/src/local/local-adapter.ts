@@ -99,6 +99,15 @@ export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
    * server (see replaceAll). Without it, pulled values are stored verbatim.
    */
   columnTypes?: Record<string, ColumnType>
+  /**
+   * How row ids are assigned. Defaults to `'client'`: the caller supplies
+   * every id (UUIDs recommended), which is what `createClientDB` always uses.
+   *
+   * In `'auto'` mode the counter never goes backward within a session, but
+   * it is re-derived as max(id) + 1 after a page reload (IndexedDB hydrate) or
+   * a server pull (`replaceAll`), so the ids of deleted highest rows can be
+   * issued again. Auto ids from different devices can also collide on sync.
+   */
   idMode?: IdMode
   /** Custom storage for MutationQueue (defaults to localStorage) */
   mutationStorage?: MutationStorage
