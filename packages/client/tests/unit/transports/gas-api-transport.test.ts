@@ -1,315 +1,414 @@
 /**
- * GasApiTransport push payload over google.script.run (#245)
+ * GasApiTransport tests.
  *
- * google.script.run rejects any parameter holding a `Date`, nested or not. The
- * REST path is unaffected because JSON.stringify turns a Date into its ISO
- * string, so the GAS path must send the same JSON-encoded payload: identical to
- * the REST body, with no Date left anywhere, and without touching the batch the
- * engine passed in (it keeps that batch for retries and dead-lettering).
+ * - The google.script.run dispatch path (#144): `fakeGoogleScriptRun` fakes
+ *   `google.script.run` on globalThis so the runner returned by
+ *   `withSuccessHandler(...).withFailureHandler(...)` exposes only the server
+ *   functions the test registers, the way the real runner exposes only the
+ *   script's published functions. Calling any other name is a TypeError, so a
+ *   transport that dispatched to the wrong name fails loudly here.
+ * - Per-instance routing context and the subclass seam (#115).
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import type { RowWithId } from '@gsquery/core'
 import { GasApiTransport } from '../../../src/transports/gas-api-transport.js'
 import type {
   MergedMutation,
   SyncPushResult,
 } from '../../../src/local/sync-transport.js'
-import { createClientDB } from '../../../src/local/create-client-db.js'
-import type { ClientDBSchema } from '../../../src/local/create-client-db.js'
-import type { MutationStorage } from '../../../src/local/mutation-queue.js'
 
-interface Event extends RowWithId {
+interface Todo {
   id: string
   title: string
-  startsAt: Date
-  meta?: { at: Date; history: Date[] }
 }
 
-type Tables = { Event: Event }
+const mutations: MergedMutation<Todo>[] = [
+  { id: 't1', type: 'insert', data: { id: 't1', title: 'Buy milk' } },
+]
 
-/** One call the stubbed google.script.run received. */
+// ── Fakes ────────────────────────────────────────────────────────────
+
 interface GasCall {
   fn: string
   args: unknown[]
 }
 
-interface GasStub {
-  calls: GasCall[]
-  /** Server-side handlers, keyed by GAS function name. */
-  handlers: Record<string, (...args: unknown[]) => unknown>
+type ServerFn = (...args: unknown[]) => unknown
+
+interface ServerCall {
+  fn: string
+  args: unknown[]
 }
 
-type GlobalWithGoogle = typeof globalThis & { google?: unknown }
-
-/**
- * Installs a fake `google.script.run` on the global object. Each call is
- * recorded with its raw arguments (no cloning, so a Date would show up as a
- * Date) and answered by the matching handler.
- */
-function installGoogleStub(): GasStub {
-  const stub: GasStub = { calls: [], handlers: {} }
+/** Installs a fake `google.script.run` that records every server call. */
+function installFakeGas(result: unknown): GasCall[] {
+  const calls: GasCall[] = []
   const run = {
-    withSuccessHandler: (onSuccess: (result: unknown) => void) => ({
-      withFailureHandler: (onFailure: (error: Error) => void) =>
-        new Proxy(
+    withSuccessHandler: (success: (value: unknown) => void) => ({
+      withFailureHandler: (_failure: (error: Error) => void) =>
+        new Proxy<Record<string, ServerFn>>(
           {},
           {
-            get: (_target, fn: string | symbol) => (...args: unknown[]) => {
-              const name = String(fn)
-              stub.calls.push({ fn: name, args })
-              const handler = stub.handlers[name]
-              if (!handler) {
-                onFailure(new Error(`no handler for ${name}`))
-                return
-              }
-              try {
-                onSuccess(handler(...args))
-              } catch (err) {
-                onFailure(err as Error)
-              }
+            get: (_target, fn) => (...args: unknown[]) => {
+              calls.push({ fn: String(fn), args })
+              success(result)
             },
           }
         ),
     }),
   }
-  ;(globalThis as GlobalWithGoogle).google = { script: { run } }
-  return stub
+  vi.stubGlobal('google', { script: { run } })
+  return calls
 }
 
-function removeGoogleStub(): void {
-  delete (globalThis as GlobalWithGoogle).google
+interface FetchCall {
+  url: string
+  init?: RequestInit
 }
 
-/** Walks any value and reports the paths that hold a Date. */
-function findDates(value: unknown, path = '$'): string[] {
-  if (value instanceof Date) return [path]
-  if (Array.isArray(value)) {
-    return value.flatMap((item, i) => findDates(item, `${path}[${i}]`))
-  }
-  if (value !== null && typeof value === 'object') {
-    return Object.entries(value).flatMap(([key, item]) =>
-      findDates(item, `${path}.${key}`)
-    )
-  }
-  return []
+/** Installs a fake `fetch` that records every request and answers `result`. */
+function installFakeFetch(result: unknown): FetchCall[] {
+  const calls: FetchCall[] = []
+  vi.stubGlobal(
+    'fetch',
+    async (url: string, init?: RequestInit): Promise<Response> => {
+      calls.push({ url, init })
+      return new Response(JSON.stringify(result), { status: 200 })
+    }
+  )
+  return calls
 }
 
-const AT = new Date('2024-03-01T10:00:00.000Z')
-const PATCHED = new Date('2024-04-02T08:30:00.000Z')
-const NESTED = new Date('2024-05-03T12:00:00.000Z')
-const IN_ARRAY = new Date('2024-06-04T16:45:00.000Z')
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
-/** A batch with a Date in an insert row, an update patch, and nested values. */
-function mutationsWithDates(): MergedMutation<Event>[] {
-  return [
-    {
-      id: 'e1',
-      type: 'insert',
-      data: { id: 'e1', title: 'Launch', startsAt: AT },
-    },
-    {
-      id: 'e2',
-      type: 'update',
-      data: { startsAt: PATCHED },
-    },
-    {
-      id: 'e3',
-      type: 'update',
-      data: { meta: { at: NESTED, history: [IN_ARRAY, NESTED] } },
-    },
-    { id: 'e4', type: 'delete' },
-  ]
-}
+// ── GAS path ─────────────────────────────────────────────────────────
 
-const OK: SyncPushResult<Event> = { success: true }
+describe('GasApiTransport GAS path (google.script.run)', () => {
+  it('appends the context as a trailing argument on pull and push', async () => {
+    const calls = installFakeGas({ rows: [], success: true })
+    const transport = new GasApiTransport({ context: { tenant: 'team-a' } })
 
-describe('GasApiTransport push over google.script.run (#245)', () => {
-  let stub: GasStub
+    await transport.pull<Todo>('Todo')
+    await transport.push<Todo>('Todo', mutations)
 
-  beforeEach(() => {
-    stub = installGoogleStub()
-    stub.handlers.syncPush = () => OK
-  })
-
-  afterEach(() => {
-    removeGoogleStub()
-    vi.unstubAllGlobals()
-  })
-
-  it('passes no Date anywhere in the push arguments (AC1)', async () => {
-    const transport = new GasApiTransport()
-
-    const result = await transport.push('Event', mutationsWithDates())
-
-    expect(result).toEqual(OK)
-    expect(stub.calls).toHaveLength(1)
-    const [call] = stub.calls
-    expect(call.fn).toBe('syncPush')
-    expect(call.args[0]).toBe('Event')
-    expect(findDates(call.args)).toEqual([])
-  })
-
-  it('sends Dates as their ISO strings, top-level and nested (AC1)', async () => {
-    const transport = new GasApiTransport()
-
-    await transport.push('Event', mutationsWithDates())
-
-    expect(stub.calls[0].args[1]).toEqual([
-      {
-        id: 'e1',
-        type: 'insert',
-        data: { id: 'e1', title: 'Launch', startsAt: AT.toISOString() },
-      },
-      { id: 'e2', type: 'update', data: { startsAt: PATCHED.toISOString() } },
-      {
-        id: 'e3',
-        type: 'update',
-        data: {
-          meta: {
-            at: NESTED.toISOString(),
-            history: [IN_ARRAY.toISOString(), NESTED.toISOString()],
-          },
-        },
-      },
-      { id: 'e4', type: 'delete' },
+    expect(calls).toEqual([
+      { fn: 'syncPull', args: ['Todo', { tenant: 'team-a' }] },
+      { fn: 'syncPush', args: ['Todo', mutations, { tenant: 'team-a' }] },
     ])
   })
 
-  it('sends the same mutations payload as the REST body (AC2)', async () => {
-    const gasTransport = new GasApiTransport()
-    await gasTransport.push('Event', mutationsWithDates())
-    const gasPayload = stub.calls[0].args[1]
+  it('uses the configured function names with the context', async () => {
+    const calls = installFakeGas({ rows: [], success: true })
+    const transport = new GasApiTransport({
+      pullFn: 'routedPull',
+      pushFn: 'routedPush',
+      context: { tenant: 'team-a' },
+    })
 
-    // Same mutations over REST: no google.script.run, fetch stubbed.
-    removeGoogleStub()
-    const fetchMock = vi.fn(
-      async (_url: string, _init?: RequestInit) =>
-        new Response(JSON.stringify(OK), { status: 200 })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    const restTransport = new GasApiTransport({ baseUrl: 'https://example.test' })
-    await restTransport.push('Event', mutationsWithDates())
+    await transport.pull<Todo>('Todo')
+    await transport.push<Todo>('Todo', mutations)
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const init = fetchMock.mock.calls[0][1]
-    const body = JSON.parse(String(init?.body)) as {
-      table: string
-      mutations: unknown
-    }
-    expect(body.table).toBe('Event')
-    expect(gasPayload).toEqual(body.mutations)
+    expect(calls.map((c) => c.fn)).toEqual(['routedPull', 'routedPush'])
   })
 
-  it('drops undefined keys the same way the REST body does (AC2)', async () => {
+  it('calls the server functions with no trailing argument without a context', async () => {
+    const calls = installFakeGas({ rows: [], success: true })
     const transport = new GasApiTransport()
-    const mutations: MergedMutation<Event>[] = [
-      { id: 'e1', type: 'update', data: { title: undefined, startsAt: AT } },
-    ]
 
-    await transport.push('Event', mutations)
+    await transport.pull<Todo>('Todo')
+    await transport.push<Todo>('Todo', mutations)
 
-    const [sent] = stub.calls[0].args[1] as MergedMutation[]
-    expect(sent.data).toEqual({ startsAt: AT.toISOString() })
-    expect(Object.keys(sent.data ?? {})).toEqual(['startsAt'])
+    expect(calls).toEqual([
+      { fn: 'syncPull', args: ['Todo'] },
+      { fn: 'syncPush', args: ['Todo', mutations] },
+    ])
+    expect(calls[0].args).toHaveLength(1)
+    expect(calls[1].args).toHaveLength(2)
   })
 
-  it('leaves the caller’s mutations holding their original Dates (AC3)', async () => {
-    const transport = new GasApiTransport()
-    const mutations = mutationsWithDates()
-    const insertRow = mutations[0].data
-    const nestedMeta = mutations[2].data?.meta
+  it('captures the context at construction', async () => {
+    const calls = installFakeGas({ rows: [] })
+    const context: Record<string, string> = { tenant: 'team-a' }
+    const transport = new GasApiTransport({ context })
 
-    await transport.push('Event', mutations)
+    context.tenant = 'team-b'
+    context.extra = 'x'
+    await transport.pull<Todo>('Todo')
 
-    expect(mutations[0].data).toBe(insertRow)
-    expect(mutations[0].data?.startsAt).toBe(AT)
-    expect(mutations[1].data?.startsAt).toBe(PATCHED)
-    expect(mutations[2].data?.meta).toBe(nestedMeta)
-    expect(nestedMeta?.at).toBe(NESTED)
-    expect(nestedMeta?.history[0]).toBe(IN_ARRAY)
-    expect(nestedMeta?.history[1]).toBe(NESTED)
-    // The payload is a separate copy, not the caller's objects.
-    expect(stub.calls[0].args[1]).not.toBe(mutations)
+    expect(calls[0].args).toEqual(['Todo', { tenant: 'team-a' }])
   })
 })
 
-function createMemoryStorage(): MutationStorage {
-  const store = new Map<string, string>()
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => store.set(key, value),
-    removeItem: (key: string) => store.delete(key),
+// ── REST path ────────────────────────────────────────────────────────
+
+describe('GasApiTransport REST path (fetch)', () => {
+  const baseUrl = 'https://example.test/api'
+
+  it('adds one URL-encoded query parameter per context entry on pull', async () => {
+    const calls = installFakeFetch({ rows: [] })
+    const transport = new GasApiTransport({
+      baseUrl,
+      context: { tenant: 'team a', 'x&y': 'a=b&c' },
+    })
+
+    await transport.pull<Todo>('Todo')
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(
+      `${baseUrl}/sync/pull?table=Todo&tenant=team%20a&x%26y=a%3Db%26c`
+    )
+    const params = new URL(calls[0].url).searchParams
+    expect(params.get('table')).toBe('Todo')
+    expect(params.get('tenant')).toBe('team a')
+    expect(params.get('x&y')).toBe('a=b&c')
+  })
+
+  it('adds the context as query parameters on push and keeps the body', async () => {
+    const calls = installFakeFetch({ success: true })
+    const transport = new GasApiTransport({
+      baseUrl,
+      context: { tenant: 'team a', region: '' },
+    })
+
+    await transport.push<Todo>('Todo', mutations)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toBe(`${baseUrl}/sync/push?tenant=team%20a&region=`)
+    expect(calls[0].init?.method).toBe('POST')
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      table: 'Todo',
+      mutations,
+    })
+  })
+
+  it('uses the relative default endpoints with the context', async () => {
+    const calls = installFakeFetch({ rows: [], success: true })
+    const transport = new GasApiTransport({ context: { tenant: 't1' } })
+
+    await transport.pull<Todo>('Todo')
+    await transport.push<Todo>('Todo', mutations)
+
+    expect(calls.map((c) => c.url)).toEqual([
+      '/api/sync/pull?table=Todo&tenant=t1',
+      '/api/sync/push?tenant=t1',
+    ])
+  })
+
+  it('leaves URLs and bodies unchanged without a context', async () => {
+    const calls = installFakeFetch({ rows: [], success: true })
+    const withBase = new GasApiTransport({ baseUrl })
+    const relative = new GasApiTransport()
+
+    await withBase.pull<Todo>('My Todo')
+    await withBase.push<Todo>('Todo', mutations)
+    await relative.pull<Todo>('Todo')
+    await relative.push<Todo>('Todo', mutations)
+
+    expect(calls.map((c) => c.url)).toEqual([
+      `${baseUrl}/sync/pull?table=My%20Todo`,
+      `${baseUrl}/sync/push`,
+      '/api/sync/pull?table=Todo',
+      '/api/sync/push',
+    ])
+    expect(calls[0].init).toBeUndefined()
+    expect(calls[1].init?.body).toBe(
+      JSON.stringify({ table: 'Todo', mutations })
+    )
+  })
+
+  it('treats an empty context like no context', async () => {
+    const calls = installFakeFetch({ rows: [], success: true })
+    const transport = new GasApiTransport({ baseUrl, context: {} })
+
+    await transport.pull<Todo>('Todo')
+    await transport.push<Todo>('Todo', mutations)
+
+    expect(calls.map((c) => c.url)).toEqual([
+      `${baseUrl}/sync/pull?table=Todo`,
+      `${baseUrl}/sync/push`,
+    ])
+  })
+})
+
+// ── Validation ───────────────────────────────────────────────────────
+
+describe('GasApiTransport context validation', () => {
+  it('throws when the context has a table key, naming the key', () => {
+    expect(
+      () => new GasApiTransport({ context: { table: 'x', tenant: 't1' } })
+    ).toThrow(/'table'/)
+  })
+
+  it('accepts empty-string values', () => {
+    expect(() => new GasApiTransport({ context: { tenant: '' } })).not.toThrow()
+  })
+})
+
+// ── Subclass seam ────────────────────────────────────────────────────
+
+class RecordingTransport extends GasApiTransport {
+  readonly seen: string[] = []
+
+  protected override gasPull<T extends RowWithId>(
+    tableName: string
+  ): Promise<{ rows: T[] }> {
+    this.seen.push(`gasPull:${tableName}:${GasApiTransport.isGas()}`)
+    return super.gasPull<T>(tableName)
+  }
+
+  protected override gasPush<T extends RowWithId>(
+    tableName: string,
+    pushed: MergedMutation<T>[]
+  ): Promise<SyncPushResult<T>> {
+    this.seen.push(`gasPush:${tableName}:${pushed.length}`)
+    return super.gasPush<T>(tableName, pushed)
+  }
+
+  protected override fetchPull<T extends RowWithId>(
+    tableName: string
+  ): Promise<{ rows: T[] }> {
+    this.seen.push(`fetchPull:${tableName}:${RecordingTransport.isGas()}`)
+    return super.fetchPull<T>(tableName)
+  }
+
+  protected override fetchPush<T extends RowWithId>(
+    tableName: string,
+    pushed: MergedMutation<T>[]
+  ): Promise<SyncPushResult<T>> {
+    this.seen.push(`fetchPush:${tableName}:${pushed.length}`)
+    return super.fetchPush<T>(tableName, pushed)
   }
 }
 
-const schema = {
-  tables: {
-    Event: {
-      columns: ['id', 'title', 'startsAt'] as const,
-      columnTypes: { startsAt: 'date' },
-      indexes: [],
-    },
-  },
-} satisfies ClientDBSchema
+describe('GasApiTransport subclass seam', () => {
+  it('routes pull and push through overridden GAS methods', async () => {
+    const calls = installFakeGas({ rows: [], success: true })
+    const transport = new RecordingTransport({ context: { tenant: 't1' } })
 
-describe('pulled datetime rows pushed over google.script.run (#245, AC4)', () => {
-  afterEach(() => {
-    removeGoogleStub()
+    await transport.pull<Todo>('Todo')
+    await transport.push<Todo>('Todo', mutations)
+
+    expect(transport.seen).toEqual(['gasPull:Todo:true', 'gasPush:Todo:1'])
+    expect(calls.map((c) => c.fn)).toEqual(['syncPull', 'syncPush'])
   })
 
-  it('sends a pulled-then-edited datetime as ISO and pulls it back as an equal Date', async () => {
-    const stub = installGoogleStub()
-    // A tiny server: the sheet stores what syncPush sends, syncPull returns it.
-    const sheet = new Map<string, Record<string, unknown>>([
-      ['e1', { id: 'e1', title: 'Launch', startsAt: AT.toISOString() }],
-    ])
-    stub.handlers.syncPull = () => ({ rows: [...sheet.values()] })
-    stub.handlers.syncPush = (_table: unknown, mutations: unknown) => {
-      for (const m of mutations as MergedMutation[]) {
-        if (m.type === 'delete') {
-          sheet.delete(String(m.id))
-          continue
-        }
-        const prev = sheet.get(String(m.id)) ?? {}
-        sheet.set(String(m.id), { ...prev, ...m.data, id: m.id })
+  it('routes pull and push through overridden fetch methods', async () => {
+    const calls = installFakeFetch({ rows: [], success: true })
+    const transport = new RecordingTransport({ baseUrl: 'https://example.test' })
+
+    await transport.pull<Todo>('Todo')
+    await transport.push<Todo>('Todo', mutations)
+
+    expect(transport.seen).toEqual(['fetchPull:Todo:false', 'fetchPush:Todo:1'])
+    expect(calls).toHaveLength(2)
+  })
+})
+
+// ── google.script.run dispatch (#144) ───────────────────────────────
+
+/**
+ * Install a fake `google.script.run` whose runner exposes `functions`.
+ * A server function that throws drives the failure handler with that error;
+ * otherwise its return value goes to the success handler, asynchronously, as
+ * the real runner does.
+ */
+function fakeGoogleScriptRun(functions: Record<string, ServerFn>): ServerCall[] {
+  const calls: ServerCall[] = []
+  const run = {
+    withSuccessHandler(onSuccess: (result: unknown) => void) {
+      return {
+        withFailureHandler(onFailure: (error: Error) => void) {
+          const runner: Record<string, (...args: unknown[]) => void> = {}
+          for (const [name, impl] of Object.entries(functions)) {
+            runner[name] = (...args: unknown[]) => {
+              calls.push({ fn: name, args })
+              setTimeout(() => {
+                let result: unknown
+                try {
+                  result = impl(...args)
+                } catch (error) {
+                  onFailure(error as Error)
+                  return
+                }
+                onSuccess(result)
+              }, 0)
+            }
+          }
+          return runner
+        },
       }
-      return { success: true }
-    }
+    },
+  }
+  vi.stubGlobal('google', { script: { run } })
+  return calls
+}
 
-    const { db, sync } = await createClientDB<Tables>({
-      schema,
-      transport: new GasApiTransport(),
-      disableIDB: true,
-      mutationStorage: createMemoryStorage(),
-      pushDebounceMs: 0,
+describe('GasApiTransport via google.script.run', () => {
+  it('pull calls the default syncPull with the table name and resolves with its result', async () => {
+    const rows: Todo[] = [{ id: 'a', title: 'one' }]
+    const calls = fakeGoogleScriptRun({ syncPull: () => ({ rows }) })
+
+    const result = await new GasApiTransport().pull<Todo>('Todo')
+
+    expect(calls).toEqual([{ fn: 'syncPull', args: ['Todo'] }])
+    expect(result).toEqual({ rows })
+  })
+
+  it('pull calls the server function named by pullFn', async () => {
+    const calls = fakeGoogleScriptRun({ customPull: () => ({ rows: [] }) })
+
+    const result = await new GasApiTransport({ pullFn: 'customPull' }).pull<Todo>('Todo')
+
+    expect(calls).toEqual([{ fn: 'customPull', args: ['Todo'] }])
+    expect(result).toEqual({ rows: [] })
+  })
+
+  it('pull rejects when the failure handler fires', async () => {
+    fakeGoogleScriptRun({
+      syncPull: () => {
+        throw new Error('server down')
+      },
     })
 
-    await sync.pull()
-    const pulled = db.from('Event').findById('e1')
-    expect(pulled.startsAt).toBeInstanceOf(Date)
-    expect(pulled.startsAt.getTime()).toBe(AT.getTime())
+    await expect(new GasApiTransport().pull<Todo>('Todo')).rejects.toThrow('server down')
+  })
 
-    // Edit another field the way an edit form does: the whole row goes back
-    // as the patch, so the hydrated Date rides along with it.
-    const { id: _id, ...fields } = pulled
-    db.from('Event').update('e1', { ...fields, title: 'Launch (moved)' })
-    await sync.push()
+  it('push calls the default syncPush with the table name and mutations and resolves with its result', async () => {
+    const mutations: MergedMutation<Todo>[] = [
+      { id: 'a', type: 'insert', data: { id: 'a', title: 'one' } },
+      { id: 'b', type: 'delete' },
+    ]
+    const pushResult: SyncPushResult<Todo> = { success: true, conflicts: [] }
+    const calls = fakeGoogleScriptRun({ syncPush: () => pushResult })
 
-    const pushCall = stub.calls.find(c => c.fn === 'syncPush')
-    expect(pushCall).toBeDefined()
-    expect(findDates(pushCall?.args)).toEqual([])
-    const [sent] = pushCall?.args[1] as MergedMutation[]
-    expect(sent).toEqual({
-      id: 'e1',
-      type: 'update',
-      data: { title: 'Launch (moved)', startsAt: AT.toISOString() },
+    const result = await new GasApiTransport().push<Todo>('Todo', mutations)
+
+    expect(calls).toEqual([{ fn: 'syncPush', args: ['Todo', mutations] }])
+    expect(result).toEqual(pushResult)
+  })
+
+  it('push calls the server function named by pushFn', async () => {
+    const mutations: MergedMutation<Todo>[] = [{ id: 'a', type: 'update', data: { title: 'two' } }]
+    const pushResult: SyncPushResult<Todo> = { success: true, conflicts: [] }
+    const calls = fakeGoogleScriptRun({ customPush: () => pushResult })
+
+    const result = await new GasApiTransport({ pushFn: 'customPush' }).push<Todo>('Todo', mutations)
+
+    expect(calls).toEqual([{ fn: 'customPush', args: ['Todo', mutations] }])
+    expect(result).toEqual(pushResult)
+  })
+
+  it('push rejects when the failure handler fires', async () => {
+    fakeGoogleScriptRun({
+      syncPush: () => {
+        throw new Error('write refused')
+      },
     })
 
-    // Replay the pushed row through a pull: it hydrates back to an equal Date.
-    await sync.pull()
-    const replayed = db.from('Event').findById('e1')
-    expect(replayed.title).toBe('Launch (moved)')
-    expect(replayed.startsAt).toBeInstanceOf(Date)
-    expect(replayed.startsAt.getTime()).toBe(AT.getTime())
+    await expect(
+      new GasApiTransport().push<Todo>('Todo', [{ id: 'a', type: 'delete' }])
+    ).rejects.toThrow('write refused')
   })
 })

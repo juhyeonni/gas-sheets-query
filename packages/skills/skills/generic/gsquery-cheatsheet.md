@@ -93,7 +93,9 @@ db.from('orders').query()
 // [{ category, count, total, avg }]
 ```
 
-AggSpec: `'count'` | `'sum:field'` | `'avg:field'` | `'min:field'` | `'max:field'`
+AggSpec: `'count'` | `'sum:field'` | `'avg:field'` | `'min:field'` | `'max:field'` — `field` must be a numeric column (compile error otherwise), and an unknown `having()` alias makes `agg()` throw `SheetsQueryError`
+
+JOIN `where()`: a main-table key, bare or `'<mainTable>.<key>'` (e.g. `'posts.published'`); another table's field does not compile
 
 ## Adapters
 
@@ -147,7 +149,7 @@ gsquery visualize --stdout                       # Mermaid ERD (needs @relation)
 | `RowNotFoundError` | `ROW_NOT_FOUND` | `findById`, `update`, `delete` |
 | `NoResultsError` | `NO_RESULTS` | `firstOrFail()` |
 | `TableNotFoundError` | `TABLE_NOT_FOUND` | `db.from('unknown')` |
-| `ValidationError` | `VALIDATION_ERROR` | Input validation |
+| `ValidationError` | `VALIDATION_ERROR` | `upsert` with an unknown id on an `auto` idMode store |
 | `InvalidOperatorError` | `INVALID_OPERATOR` | Bad operator in `where()` |
 
 All extend `SheetsQueryError`. Use `instanceof` or check `.code`.

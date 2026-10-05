@@ -28,6 +28,26 @@ export interface JoinConfig {
 export type StoreResolver = <T extends RowWithId>(tableName: string) => DataStore<T>
 
 /**
+ * Field accepted by JoinQueryBuilder.where(): a main-table key, or the same key
+ * prefixed with the main table's name (e.g. 'status' or 'posts.status').
+ * With `TName` left as `string`, any prefix compiles and where() checks it at runtime.
+ */
+export type JoinWhereField<T, TName extends string = string> =
+  | (keyof T & string)
+  | `${TName}.${keyof T & string}`
+
+/**
+ * The main-table key a JoinWhereField refers to, with any table prefix removed
+ * (e.g. 'posts.status' -> 'status'). The prefix itself is checked by JoinWhereField.
+ */
+export type JoinWhereKey<T, F extends string> =
+  F extends keyof T & string
+    ? F
+    : F extends `${string}.${infer K}`
+      ? Extract<K, keyof T & string>
+      : never
+
+/**
  * JoinQueryBuilder provides a fluent interface for building queries with JOIN support
  * 
  * @example
@@ -39,8 +59,11 @@ export type StoreResolver = <T extends RowWithId>(tableName: string) => DataStor
  * 
  * // Result: { ...post, users: { id, name, email, ... } }
  * ```
+ *
+ * `TName` is the main table's name, which `db.from(name)` passes as a literal
+ * type so where() accepts only `<mainTable>.<key>` prefixes. It defaults to `string`.
  */
-export class JoinQueryBuilder<T extends RowWithId> {
+export class JoinQueryBuilder<T extends RowWithId, TName extends string = string> {
   private whereConditions: WhereCondition<T>[] = []
   private orderByConditions: OrderByCondition<T>[] = []
   private limitValue?: number
@@ -49,7 +72,7 @@ export class JoinQueryBuilder<T extends RowWithId> {
 
   constructor(
     private readonly store: DataStore<T>,
-    private readonly tableName: string,
+    private readonly tableName: TName,
     private readonly storeResolver: StoreResolver
   ) {}
 
@@ -112,21 +135,37 @@ export class JoinQueryBuilder<T extends RowWithId> {
   }
 
   /**
-   * Add a where condition
-   * Supports prefixed fields for joined tables (e.g., 'posts.status')
+   * Add a where condition on a main-table field
+   * The field is a main-table key, optionally prefixed with the main table's
+   * name (e.g., 'status' or 'posts.status'). The value is typed by that key.
    *
    * When operator is 'in', value must be an array.
    * For all other operators, value must be a single value.
+   *
+   * @throws Error if the prefix names another table: filter joined data after exec()
    */
-  where<K extends keyof T & string>(field: K | string, operator: 'in', value: T[K][]): this
-  where<K extends keyof T & string>(field: K | string, operator: SingleValueOperator, value: T[K]): this
-  where<K extends keyof T & string>(
-    field: K | string,
+  where<F extends JoinWhereField<T, TName>>(
+    field: F,
+    operator: 'in',
+    value: T[JoinWhereKey<T, F>][]
+  ): this
+  where<F extends JoinWhereField<T, TName>>(
+    field: F,
+    operator: SingleValueOperator,
+    value: T[JoinWhereKey<T, F>]
+  ): this
+  where(
+    field: JoinWhereField<T, TName>,
     operator: Operator,
     value: unknown
   ): this {
-    const fieldStr = field as string
+    return this.addWhere(field, operator, value)
+  }
 
+  /**
+   * Record a where condition, checking and stripping a table prefix
+   */
+  private addWhere(fieldStr: string, operator: Operator, value: unknown): this {
     // Check for table-prefixed fields (e.g., 'users.name')
     if (fieldStr.includes('.')) {
       const [prefix] = fieldStr.split('.', 2)
@@ -139,7 +178,7 @@ export class JoinQueryBuilder<T extends RowWithId> {
       }
     }
 
-    const cleanField = this.stripTablePrefix(fieldStr) as K
+    const cleanField = this.stripTablePrefix(fieldStr) as keyof T & string
 
     this.whereConditions.push({
       field: cleanField,
@@ -153,28 +192,28 @@ export class JoinQueryBuilder<T extends RowWithId> {
    * Shorthand for where(field, '=', value)
    */
   whereEq<K extends keyof T & string>(field: K, value: T[K]): this {
-    return this.where(field, '=', value)
+    return this.addWhere(field, '=', value)
   }
 
   /**
    * Shorthand for where(field, '!=', value)
    */
   whereNot<K extends keyof T & string>(field: K, value: T[K]): this {
-    return this.where(field, '!=', value)
+    return this.addWhere(field, '!=', value)
   }
 
   /**
    * Shorthand for where(field, 'in', values)
    */
   whereIn<K extends keyof T & string>(field: K, values: T[K][]): this {
-    return this.where(field, 'in', values)
+    return this.addWhere(field, 'in', values)
   }
 
   /**
    * Shorthand for where(field, 'like', pattern)
    */
   whereLike<K extends keyof T & string>(field: K, pattern: string): this {
-    return this.where(field, 'like', pattern as T[K])
+    return this.addWhere(field, 'like', pattern)
   }
 
   /**
@@ -387,8 +426,8 @@ export class JoinQueryBuilder<T extends RowWithId> {
   /**
    * Clone this query builder for modification
    */
-  clone(): JoinQueryBuilder<T> {
-    const cloned = new JoinQueryBuilder<T>(this.store, this.tableName, this.storeResolver)
+  clone(): JoinQueryBuilder<T, TName> {
+    const cloned = new JoinQueryBuilder<T, TName>(this.store, this.tableName, this.storeResolver)
     cloned.whereConditions = [...this.whereConditions]
     cloned.orderByConditions = [...this.orderByConditions]
     cloned.limitValue = this.limitValue
@@ -401,10 +440,10 @@ export class JoinQueryBuilder<T extends RowWithId> {
 /**
  * Create a new JoinQueryBuilder for the given store
  */
-export function createJoinQueryBuilder<T extends RowWithId>(
+export function createJoinQueryBuilder<T extends RowWithId, TName extends string = string>(
   store: DataStore<T>,
-  tableName: string,
+  tableName: TName,
   storeResolver: StoreResolver
-): JoinQueryBuilder<T> {
-  return new JoinQueryBuilder<T>(store, tableName, storeResolver)
+): JoinQueryBuilder<T, TName> {
+  return new JoinQueryBuilder<T, TName>(store, tableName, storeResolver)
 }

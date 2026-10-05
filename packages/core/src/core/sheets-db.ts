@@ -10,7 +10,11 @@ import type {
   InferTablesFromConfig,
   UpdateData,
   UpsertData,
-  BatchUpdateItem
+  BatchUpdateItem,
+  DefaultCreateInput,
+  CreateInputMap,
+  CreateInputOf,
+  TableSchema
 } from './types.js'
 import { Repository } from './repository.js'
 import { QueryBuilder, createQueryBuilder } from './query-builder.js'
@@ -21,19 +25,28 @@ import { MockAdapter } from '../adapters/mock-adapter.js'
 
 /**
  * Table handle providing Repository and QueryBuilder access
+ *
+ * @typeParam T - Row type
+ * @typeParam TName - Table name, used to type JOIN `where` fields (#194)
+ * @typeParam C - Input accepted by `create`, `batchInsert` and insert-shaped
+ *   `upsert`. Defaults to `T | Omit<T, 'id'>` (#199).
  */
-export interface TableHandle<T extends RowWithId> {
+export interface TableHandle<
+  T extends RowWithId,
+  TName extends string = string,
+  C = DefaultCreateInput<T>
+> {
   /** Repository for CRUD operations */
-  readonly repo: Repository<T>
-  
+  readonly repo: Repository<T, C>
+
   /** Create a new query builder for this table */
   query(): QueryBuilder<T>
   
   /** Create a new query builder with JOIN support */
-  joinQuery(): JoinQueryBuilder<T>
+  joinQuery(): JoinQueryBuilder<T, TName>
   
   /** Shorthand: create a row */
-  create(data: T | Omit<T, 'id'>): T
+  create(data: C): T
 
   /** Shorthand: find by id */
   findById(id: string | number): T
@@ -45,13 +58,13 @@ export interface TableHandle<T extends RowWithId> {
   update(id: string | number, data: UpdateData<T>): T
 
   /** Shorthand: insert, or patch the row that already carries this id */
-  upsert(data: UpsertData<T>): T
+  upsert(data: UpsertData<T> | C): T
 
   /** Shorthand: delete by id */
   delete(id: string | number): void
 
   /** Batch insert multiple rows at once */
-  batchInsert(data: (T | Omit<T, 'id'>)[]): T[]
+  batchInsert(data: C[]): T[]
 
   /** Batch update multiple rows at once (`data` excludes the immutable `id`) */
   batchUpdate(items: BatchUpdateItem<T>[]): T[]
@@ -62,11 +75,20 @@ export interface TableHandle<T extends RowWithId> {
 
 /**
  * SheetsDB instance with typed table access
+ *
+ * @typeParam Tables - Row type per table
+ * @typeParam CreateInputs - Optional create-input type per table (#199); a
+ *   table left out accepts `T | Omit<T, 'id'>` as before
  */
-export interface SheetsDB<Tables extends Record<string, RowWithId>> {
+export interface SheetsDB<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+> {
   /** Get a table handle by name */
-  from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K]>
-  
+  from<K extends keyof Tables & string>(
+    tableName: K
+  ): TableHandle<Tables[K], K, CreateInputOf<Tables, CreateInputs, K>>
+
   /** Get raw access to the underlying data store */
   getStore<K extends keyof Tables & string>(tableName: K): DataStore<Tables[K]>
   
@@ -77,13 +99,17 @@ export interface SheetsDB<Tables extends Record<string, RowWithId>> {
 /**
  * Create a TableHandle for a given store
  */
-function createTableHandle<T extends RowWithId>(
+function createTableHandle<T extends RowWithId, TName extends string, C = DefaultCreateInput<T>>(
   store: DataStore<T>,
-  tableName: string,
-  storeResolver: StoreResolver
-): TableHandle<T> {
-  const repo = new Repository<T>(store, tableName)
-  
+  tableName: TName,
+  storeResolver: StoreResolver,
+  tableSchema?: Pick<TableSchema, 'defaults' | 'updatedAt'>
+): TableHandle<T, TName, C> {
+  const repo = new Repository<T, C>(store, tableName, {
+    defaults: tableSchema?.defaults,
+    updatedAt: tableSchema?.updatedAt
+  })
+
   return {
     repo,
     query: () => createQueryBuilder(store),
@@ -127,10 +153,16 @@ export interface CreateSheetsDBOptions<Tables extends Record<string, RowWithId>>
  *   stores: { users: new MockAdapter() }
  * })
  * ```
+ *
+ * A table's `defaults` and `updatedAt` in `config` are handed to its
+ * `Repository`, which applies them on every write it makes (#199).
  */
-export function createSheetsDB<Tables extends Record<string, RowWithId>>(
+export function createSheetsDB<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+>(
   options: CreateSheetsDBOptions<Tables>
-): SheetsDB<Tables> {
+): SheetsDB<Tables, CreateInputs> {
   const { config, stores } = options
   
   // Validate that all tables in config have stores
@@ -154,16 +186,23 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
   return {
     config,
     
-    from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K]> {
+    from<K extends keyof Tables & string>(
+      tableName: K
+    ): TableHandle<Tables[K], K, CreateInputOf<Tables, CreateInputs, K>> {
       if (!(tableName in config.tables)) {
         throw new TableNotFoundError(tableName, Object.keys(config.tables))
       }
-      
+
       if (!(tableName in handles)) {
-        handles[tableName] = createTableHandle(stores[tableName], tableName, storeResolver)
+        handles[tableName] = createTableHandle(
+          stores[tableName],
+          tableName,
+          storeResolver,
+          config.tables[tableName]
+        )
       }
-      
-      return handles[tableName] as TableHandle<Tables[K]>
+
+      return handles[tableName] as TableHandle<Tables[K], K, CreateInputOf<Tables, CreateInputs, K>>
     },
     
     getStore<K extends keyof Tables & string>(tableName: K): DataStore<Tables[K]> {
@@ -284,7 +323,7 @@ export function defineSheetsDB<
   return {
     config,
 
-    from<K extends keyof InferredTables & string>(tableName: K): TableHandle<InferredTables[K]> {
+    from<K extends keyof InferredTables & string>(tableName: K): TableHandle<InferredTables[K], K> {
       if (!(tableName in tables)) {
         throw new TableNotFoundError(tableName, Object.keys(tables))
       }
@@ -294,7 +333,7 @@ export function defineSheetsDB<
         handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>, tableName, storeResolver)
       }
 
-      return handles[tableName] as TableHandle<InferredTables[K]>
+      return handles[tableName] as TableHandle<InferredTables[K], K>
     },
 
     getStore<K extends keyof InferredTables & string>(tableName: K): DataStore<InferredTables[K]> {

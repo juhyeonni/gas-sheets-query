@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { QueryBuilder, createQueryBuilder } from '../../src/core/query-builder'
 import { MockAdapter } from '../../src/adapters/mock-adapter'
+import { SheetsQueryError } from '../../src/core/errors'
 import type { RowWithId } from '../../src/core/types'
 
 interface Order extends RowWithId {
@@ -224,6 +225,64 @@ describe('Aggregation Functions', () => {
         .agg({ count: 'count' })
       
       expect(result.length).toBe(2)
+    })
+  })
+
+  // #194 AC6: an unknown having() alias used to pass every group silently
+  describe('having with an unknown alias', () => {
+    const expectUnknownAlias = (run: () => unknown, alias: string) => {
+      let error: unknown
+      try {
+        run()
+      } catch (e) {
+        error = e
+      }
+      expect(error).toBeInstanceOf(SheetsQueryError)
+      expect((error as SheetsQueryError).code).toBe('UNKNOWN_AGGREGATION')
+      expect((error as Error).message).toContain(`"${alias}"`)
+    }
+
+    it('throws a SheetsQueryError naming the alias after groupBy()', () => {
+      expectUnknownAlias(
+        () => query.groupBy('category').having('totl', '>', 200).agg({ count: 'count', total: 'sum:amount' }),
+        'totl'
+      )
+    })
+
+    it('throws without groupBy()', () => {
+      expectUnknownAlias(() => query.having('total', '>', 1).agg({ count: 'count' }), 'total')
+    })
+
+    it('throws even when no rows match', () => {
+      expectUnknownAlias(
+        () => query.where('status', '=', 'nonexistent').groupBy('category').having('n', '>', 0).agg({ count: 'count' }),
+        'n'
+      )
+    })
+
+    it('names the first unknown alias when valid ones come before it', () => {
+      expectUnknownAlias(
+        () => query.groupBy('category')
+          .having('count', '>=', 2)
+          .having('sum', '>', 0)
+          .agg({ count: 'count', total: 'sum:amount' }),
+        'sum'
+      )
+    })
+
+    it('does not treat inherited object properties as spec names', () => {
+      expectUnknownAlias(() => query.groupBy('category').having('toString', '>', 0).agg({ count: 'count' }), 'toString')
+    })
+
+    it('throws before reading any rows', () => {
+      const find = vi.spyOn(adapter, 'find')
+      expect(() => query.groupBy('category').having('x', '>', 0).agg({ count: 'count' })).toThrow(SheetsQueryError)
+      expect(find).not.toHaveBeenCalled()
+    })
+
+    it('still ignores a valid alias without groupBy()', () => {
+      const result = query.having('count', '>', 100).agg({ count: 'count' })
+      expect(result).toEqual([{ count: 8 }])
     })
   })
 

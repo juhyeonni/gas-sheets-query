@@ -11,7 +11,7 @@ import {
   RowNotFoundError,      // ROW_NOT_FOUND — { id, tableName? }
   NoResultsError,        // NO_RESULTS — { tableName? }
   MissingStoreError,     // MISSING_STORE — { tableName }
-  ValidationError,       // VALIDATION_ERROR — { field? }
+  ValidationError,       // VALIDATION_ERROR — { field? } — upsert with an unknown id on an 'auto' idMode store
   InvalidOperatorError,  // INVALID_OPERATOR — { operator, validOperators }
   MigrationVersionError, // MIGRATION_VERSION_ERROR — { version }
   MigrationExecutionError, // MIGRATION_EXECUTION_ERROR — { version, migrationName, cause }

@@ -382,7 +382,7 @@ const monthlyRevenue = db.from('orders')
 
 ### Having (Group Filter)
 
-`having()` filters groups by aggregation results. The first argument must match a key in `agg()`.
+`having()` filters groups by aggregation results. The first argument must match a key in `agg()`: otherwise `agg()` throws a `SheetsQueryError` (code `UNKNOWN_AGGREGATION`) naming it. Each `sum:`/`avg:`/`min:`/`max:` field must be a numeric column, or the spec does not compile.
 
 ```typescript
 // Only categories with more than 10 orders
@@ -542,35 +542,45 @@ async function createOrderWithItems(order: Order, items: OrderItem[]) {
 
 ### Soft Delete
 
+Declare `deletedAt` with `nullable(...)`, so the row type is `Date | null` and
+both `null` and a `Date` fit without casts:
+
 ```typescript
-// Using deletedAt column
-class SoftDeleteRepository<T extends { id: number; deletedAt: Date | null }> {
-  constructor(
-    private table: TableHandle<T>
-  ) {}
-  
-  findAll() {
-    return this.table.query()
-      .where('deletedAt', '=', null)
-      .exec()
-  }
-  
-  delete(id: number) {
-    this.table.update(id, { deletedAt: new Date() } as Partial<T>)
-  }
-  
-  restore(id: number) {
-    this.table.update(id, { deletedAt: null } as Partial<T>)
-  }
-  
-  forceDelete(id: number) {
-    this.table.delete(id)
-  }
-  
-  findWithDeleted() {
-    return this.table.findAll()
-  }
-}
+import { defineSheetsDB, nullable } from '@gsquery/core'
+
+const db = defineSheetsDB({
+  tables: {
+    documents: {
+      columns: ['id', 'title', 'deletedAt'] as const,
+      types: {
+        id: 0,
+        title: '',
+        deletedAt: nullable(new Date())  // Date | null
+      }
+    }
+  },
+  mock: true
+})
+
+const documents = db.from('documents')
+
+// A new row is live: deletedAt is null
+const doc = documents.create({ title: 'Draft', deletedAt: null })
+
+// Soft delete: stamp deletedAt
+documents.update(doc.id, { deletedAt: new Date() })
+
+// Restore: clear deletedAt
+documents.update(doc.id, { deletedAt: null })
+
+// Live rows only
+const live = documents.query().where('deletedAt', '=', null).exec()
+
+// Every row, deleted or not
+const all = documents.findAll()
+
+// Hard delete
+documents.delete(doc.id)
 ```
 
 ### Audit Log
