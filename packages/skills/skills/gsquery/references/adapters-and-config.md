@@ -143,7 +143,9 @@ type ColumnType =
 - **Column types**: Automatic serialization/deserialization (JSON for arrays/objects, booleans, dates)
 - **Auto-detect JSON**: Parses JSON strings in cells automatically
 - **Formula safety**: Strings starting with `=`, `+`, `-`, `@`, tab or CR are written as literal
-  text (Sheets would otherwise run them as formulas) and read back unchanged. Opt out per
+  text (Sheets would otherwise run them as formulas) and read back unchanged. Strings with k
+  leading apostrophes are written behind 2k+1 of them, so they also read back unchanged
+  (older cells with 2+ leading apostrophes read back with half of them, #201). Opt out per
   adapter with `allowFormulas: true` — script-authored formulas only, never user input.
 - **Header drift**: the mapping is positional, so every read and write checks once per execution
   that row 1 still matches `columns` and throws `SchemaMismatchError` (`SCHEMA_MISMATCH`) naming
