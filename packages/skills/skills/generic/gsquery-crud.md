@@ -18,7 +18,7 @@ const db = defineSheetsDB({
 
 **Important**: Always use `as const` on the columns array for type inference.
 
-Type samples: `''` → string, `0` → number, `true` → boolean, `null` → null, `new Date()` → Date.
+Type samples: `''` → string, `0` → number, `true` → boolean, `null` → null, `new Date()` → Date. Wrappers from `@gsquery/core`: `nullable('')` → `string | null`, `optional('')` → optional key `field?: string`, `optional(nullable(0))` → `field?: number | null`.
 
 ## CRUD via TableHandle
 

@@ -9,6 +9,7 @@
  */
 
 import type { SchemaAST, TableAST, FieldAST } from '../parser/types.js'
+import { isDefaultFunction } from '../parser/types.js'
 import { escapeStringLiteral } from '../utils/sanitize.js'
 import { mapType } from './type-mapping.js'
 import { collectRelationTargets } from './types-generator.js'
@@ -68,8 +69,63 @@ function getClientFieldType(field: FieldAST): string {
 }
 
 // =============================================================================
+// Runtime Default Helpers (#199)
+// =============================================================================
+
+/** A default the runtime applies, mirroring `ColumnDefault` in @gsquery/core */
+type RuntimeDefault =
+  | { kind: 'value'; value: string | number | boolean }
+  | { kind: 'now' }
+
+/**
+ * The default `Repository` applies to this field at runtime, or null.
+ *
+ * Only literals and `now` are applied. `autoincrement`, `uuid` and `cuid` have
+ * no runtime generator for non-id fields, and `id` is never filled by a
+ * default (`idMode` owns ids), so neither is emitted.
+ */
+function getRuntimeDefault(field: FieldAST): RuntimeDefault | null {
+  if (field.name === 'id') return null
+  const attr = field.attributes.find(a => a.name === 'default')
+  if (!attr || attr.args.length === 0) return null
+  const value = attr.args[0]
+  if (value === 'now') return { kind: 'now' }
+  if (isDefaultFunction(value)) return null
+  return { kind: 'value', value }
+}
+
+/** Whether `Repository` stamps this field on insert and update */
+function isUpdatedAtField(field: FieldAST): boolean {
+  return field.name !== 'id' && field.attributes.some(a => a.name === 'updatedAt')
+}
+
+/** Name of the generated create-input type for a table */
+function createInputName(tableName: string): string {
+  return `${tableName}CreateInput`
+}
+
+// =============================================================================
 // Types File Generation
 // =============================================================================
+
+/**
+ * Generate the `<Table>CreateInput` interface: the row's fields, with `id`, the
+ * fields `Repository` fills (runtime defaults and `@updatedAt`) and the
+ * already-optional fields optional, and every other field required.
+ */
+function generateCreateInput(table: TableAST): string[] {
+  const lines = [`export interface ${createInputName(table.name)} {`]
+  for (const field of table.fields) {
+    const optional =
+      field.optional ||
+      field.name === 'id' ||
+      getRuntimeDefault(field) !== null ||
+      isUpdatedAtField(field)
+    lines.push(`  ${field.name}${optional ? '?' : ''}: ${getClientFieldType(field)}`)
+  }
+  lines.push('}')
+  return lines
+}
 
 /**
  * Generate types.ts for the generated client directory
@@ -123,6 +179,8 @@ export function generateClientTypes(ast: SchemaAST): string {
     }
 
     lines.push('}')
+    lines.push('')
+    lines.push(...generateCreateInput(table))
   }
 
   // Tables type
@@ -131,6 +189,14 @@ export function generateClientTypes(ast: SchemaAST): string {
     lines.push('export type Tables = {')
     for (const name of tableNames) {
       lines.push(`  ${name}: ${name}`)
+    }
+    lines.push('}')
+
+    // Per-table create inputs, passed to createClientFactory (#199)
+    lines.push('')
+    lines.push('export type CreateInputs = {')
+    for (const name of tableNames) {
+      lines.push(`  ${name}: ${createInputName(name)}`)
     }
     lines.push('}')
   }
@@ -181,7 +247,35 @@ function generateTableSchema(table: TableAST): string {
     parts.push(`indexes: [${indexEntries.join(', ')}]`)
   }
 
+  const defaultEntries = table.fields
+    .map(f => {
+      const def = getRuntimeDefault(f)
+      return def ? `'${escapeStringLiteral(f.name)}': ${formatRuntimeDefault(def)}` : null
+    })
+    .filter((entry): entry is string => entry !== null)
+
+  if (defaultEntries.length > 0) {
+    parts.push(`defaults: { ${defaultEntries.join(', ')} }`)
+  }
+
+  const updatedAtFields = table.fields
+    .filter(isUpdatedAtField)
+    .map(f => `'${escapeStringLiteral(f.name)}'`)
+
+  if (updatedAtFields.length > 0) {
+    parts.push(`updatedAt: [${updatedAtFields.join(', ')}]`)
+  }
+
   return `{ ${parts.join(', ')} }`
+}
+
+/** Source text of one `ColumnDefault` in the generated schema */
+function formatRuntimeDefault(def: RuntimeDefault): string {
+  if (def.kind === 'now') return "{ kind: 'now' }"
+  const value = typeof def.value === 'string'
+    ? `'${escapeStringLiteral(def.value)}'`
+    : String(def.value)
+  return `{ kind: 'value', value: ${value} }`
 }
 
 /**
@@ -230,7 +324,11 @@ export function generateClientCode(ast: SchemaAST, options: ClientPackageOptions
 
   // Imports
   lines.push("import { createClientFactory, type GeneratedSchema } from '@gsquery/client'")
-  lines.push("import type { Tables } from './types.js'")
+  lines.push(
+    tableNames.length > 0
+      ? "import type { Tables, CreateInputs } from './types.js'"
+      : "import type { Tables } from './types.js'"
+  )
   lines.push('')
 
   // Schema constant
@@ -265,7 +363,11 @@ export function generateClientCode(ast: SchemaAST, options: ClientPackageOptions
   }
   lines.push(' * ```')
   lines.push(' */')
-  lines.push('export const createClient = createClientFactory<Tables>(schema)')
+  lines.push(
+    tableNames.length > 0
+      ? 'export const createClient = createClientFactory<Tables, CreateInputs>(schema)'
+      : 'export const createClient = createClientFactory<Tables>(schema)'
+  )
   lines.push('')
 
   // createTestClient for testing

@@ -11,8 +11,10 @@ import type {
   SheetsDBConfig,
   IdMode,
   RuntimeSchema,
-  RuntimeTableSchema
+  RuntimeTableSchema,
+  CreateInputMap
 } from '@gsquery/core'
+import { toSheetsDBConfig } from './schema-config.js'
 import { 
   createSheetsDB, 
   MockAdapter, 
@@ -52,8 +54,15 @@ export type GeneratedSchema = RuntimeSchema
 
 /**
  * Client factory result type
+ *
+ * `CreateInputs` optionally narrows each table's create input (#199): a
+ * generated client passes one type per table in which fields with a runtime
+ * default or `@updatedAt` are optional.
  */
-export type Client<Tables extends Record<string, RowWithId>> = SheetsDB<Tables>
+export type Client<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+> = SheetsDB<Tables, CreateInputs>
 
 // =============================================================================
 // Environment Detection
@@ -149,9 +158,12 @@ export function createStore<T extends RowWithId>(
  * const users = db.from('User').findAll()
  * ```
  */
-export function createClientFactory<Tables extends Record<string, RowWithId>>(
+export function createClientFactory<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+>(
   schema: GeneratedSchema
-): (options?: ClientOptions) => Client<Tables> {
+): (options?: ClientOptions) => Client<Tables, CreateInputs> {
   return (options: ClientOptions = {}) => {
     // Build stores for each table
     // If custom stores provided, use them; otherwise create based on options
@@ -177,21 +189,14 @@ export function createClientFactory<Tables extends Record<string, RowWithId>>(
       }
     }
 
-    // Build config
+    // Build config. Each table's defaults and @updatedAt fields reach its
+    // Repository through it (#199).
     const config: SheetsDBConfig = {
       spreadsheetId: options.spreadsheetId,
-      tables: Object.fromEntries(
-        Object.entries(schema.tables).map(([name, s]) => [
-          name,
-          {
-            columns: [...s.columns],
-            sheetName: s.sheetName
-          }
-        ])
-      )
+      tables: toSheetsDBConfig(schema).tables
     }
 
-    return createSheetsDB<Tables>({
+    return createSheetsDB<Tables, CreateInputs>({
       config,
       stores: stores as { [K in keyof Tables]: DataStore<Tables[K]> }
     })
@@ -211,10 +216,13 @@ export function createClientFactory<Tables extends Record<string, RowWithId>>(
  * // All operations use in-memory MockAdapter
  * ```
  */
-export function createMockClient<Tables extends Record<string, RowWithId>>(
+export function createMockClient<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+>(
   schema: GeneratedSchema
-): Client<Tables> {
-  const factory = createClientFactory<Tables>(schema)
+): Client<Tables, CreateInputs> {
+  const factory = createClientFactory<Tables, CreateInputs>(schema)
   return factory({ mock: true })
 }
 
@@ -240,4 +248,4 @@ export type {
   RuntimeTableSchema,
 }
 
-export type { ColumnType, IndexDefinition } from '@gsquery/core'
+export type { ColumnType, IndexDefinition, ColumnDefault, CreateInputMap } from '@gsquery/core'
