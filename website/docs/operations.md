@@ -42,8 +42,93 @@ same execution only burns what is left of the run, so the library does not.
   is still the better tool for many rows.
 - Long jobs belong in a time-driven trigger that processes a slice per run and
   records its progress, not in one execution that races the 6-minute ceiling.
+  [`runChunked`](#long-jobs-and-the-6-minute-ceiling) does the slicing.
 - Catch `QuotaExceededError` and check `transient` before deciding to reschedule
   versus fail loudly.
+
+## Long Jobs and the 6-Minute Ceiling
+
+Apps Script kills an execution after 6 minutes, wherever it is. A single
+`batchInsert` of a few thousand rows either finishes or dies mid-job, and you
+cannot tell how far it got. `runChunked` splits the job into chunks, stops
+cleanly before the deadline, and returns a cursor the next run resumes from.
+
+```ts
+import { runChunked } from '@gsquery/core'
+
+const CURSOR_KEY = 'importUsers.cursor'
+
+// Installed once as a time-driven trigger, e.g.
+// ScriptApp.newTrigger('importUsers').timeBased().everyMinutes(10).create()
+function importUsers() {
+  const startedAt = Date.now() // first line of the handler
+
+  const props = PropertiesService.getScriptProperties()
+  const startAt = Number(props.getProperty(CURSOR_KEY) ?? 0)
+  const rows = loadRowsToImport() // the same rows, in the same order, every run
+
+  const { done } = runChunked(rows, chunk => users.batchInsert(chunk), {
+    startedAt,
+    startAt,
+    // Save the cursor after every chunk, not only at the end.
+    onChunk: ({ next }) => props.setProperty(CURSOR_KEY, String(next))
+  })
+
+  if (done) {
+    props.deleteProperty(CURSOR_KEY)
+    // Delete the trigger here if the job is one-off.
+  }
+}
+```
+
+`runChunked(items, write, options)` calls `write(chunk, offset)` once per chunk,
+in input order, and returns `{ done, next, results }`. `next` is the index in
+`items` to resume from (`items.length` once `done` is `true`), and `results`
+holds each chunk's `write` return value. `write` can be any function:
+`batchInsert`, `batchUpdate`, `batchDelete` or your own code, on any store. The
+batch methods themselves are unchanged and stay all-or-nothing.
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `startedAt` | required | When this execution started (epoch ms). The library cannot see it, so capture `Date.now()` at the top of the handler |
+| `budgetMs` | `330000` (5.5 min, `DEFAULT_CHUNK_BUDGET_MS`) | Time budget from `startedAt`. The default leaves headroom under the 6-minute ceiling |
+| `chunkSize` | `500` (`DEFAULT_CHUNK_SIZE`) | Items per `write` call. Must be a positive integer |
+| `startAt` | `0` | Index to start from: the saved cursor. Must be in `0..items.length` |
+| `onChunk` | — | `({ next, result }) => void`, called after each completed chunk. Persist `next` here |
+
+An invalid `chunkSize`, `startAt`, `startedAt` or `budgetMs` throws
+`ValidationError` before `write` is ever called.
+
+**When it stops.** No chunk starts once `startedAt + budgetMs` has been reached.
+After the first chunk, no chunk starts either if the current time plus the
+slowest chunk measured so far in this call would pass that deadline. The
+measured time adapts to table width and quota pressure, where a fixed margin
+would either waste the budget or be too small. Time spent in `onChunk` counts
+toward the chunk.
+
+**When `write` throws.** The error escapes unchanged (`QuotaExceededError`,
+`LockTimeoutError`, ... exactly as documented) and no later chunk runs. Chunks
+that completed earlier stay written; the cursor last reported through `onChunk`
+is where the next run resumes.
+
+**Locking.** The runner does not hold the script lock across chunks. Each
+`write` takes its own lock, as the batch methods already do, so other
+executions can write between chunks. Holding the lock for minutes would make
+them all fail with `LockTimeoutError` after the 10-second wait.
+
+**At-least-once, not exactly-once.** If the runtime kills the execution after a
+chunk landed but before `onChunk` saved its cursor, the next run repeats that
+chunk:
+
+- In **auto id** mode, `batchInsert` inserts the repeated rows again, under new
+  ids: duplicates.
+- With **client ids**, `batchInsert` rejects the repeated chunk with
+  [`DuplicateIdError`](./error-handling.md#duplicateiderror) and writes none of
+  it. Since one `batchInsert` is a single ranged write, that chunk is already
+  in the sheet: advance the saved cursor past it and run again.
+
+Use client ids for imports that must not duplicate rows. `batchUpdate` with the
+same patches is naturally safe to repeat.
 
 ## Retry Behavior
 
@@ -225,7 +310,8 @@ measured.
 ## Checklist Before Going to Production
 
 - Writes go through batch APIs, not per-row loops.
-- Long jobs are sliced across time-driven trigger runs.
+- Long jobs are sliced across time-driven trigger runs with `runChunked`, and
+  the cursor is saved from `onChunk`.
 - `QuotaExceededError` (check `transient`) and `LockTimeoutError` are caught and
   rescheduled rather than surfaced as generic failures.
 - Values that can grow unbounded are kept out of cells.
