@@ -353,7 +353,7 @@ class TableNotFoundError extends SheetsQueryError { tableName: string; available
 class RowNotFoundError extends SheetsQueryError { id: string | number; tableName?: string }
 class NoResultsError extends SheetsQueryError { tableName?: string }
 class MissingStoreError extends SheetsQueryError { tableName: string }
-class ValidationError extends SheetsQueryError { field?: string }
+class ValidationError extends SheetsQueryError { field?: string } // upsert with an unknown id on an 'auto' idMode store
 class InvalidOperatorError extends SheetsQueryError { operator: string; validOperators: string[] }
 class MigrationVersionError extends SheetsQueryError { version: number }
 class MigrationExecutionError extends SheetsQueryError { version: number; migrationName: string; cause: Error }

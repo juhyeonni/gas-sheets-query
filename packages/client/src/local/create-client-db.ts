@@ -108,8 +108,10 @@ export async function createClientDB<
     onPoisonedMutation,
   } satisfies SyncEngineOptions)
 
-  const stores: Record<string, DataStore<any>> = {}
-  const adapters: Record<string, LocalAdapter<any>> = {}
+  // Keyed by runtime table name, so the per-table row type is erased to
+  // RowWithId here and narrowed back to Tables[K] where the maps leave.
+  const stores: Record<string, DataStore<RowWithId>> = {}
+  const adapters: Record<string, LocalAdapter<RowWithId>> = {}
 
   // Open shared IDB with all table stores in a single upgrade transaction
   const idbEnabled = !(disableIDB ?? false) && typeof indexedDB !== 'undefined'
@@ -141,7 +143,7 @@ export async function createClientDB<
       idMode: 'client',
       mutationStorage,
       disableIDB: sharedDb === undefined,
-      initialData: options.initialData?.[tableName as keyof Tables] as any[],
+      initialData: options.initialData?.[tableName as keyof Tables],
       idbDb: sharedDb,
       namespace,
     }
@@ -180,7 +182,10 @@ export async function createClientDB<
   return {
     db,
     sync: syncEngine,
-    adapters: adapters as { [K in keyof Tables & string]: LocalAdapter<Tables[K]> },
+    // Each adapter was built for its own table (seeded from initialData[name]),
+    // but TypeScript cannot tie a runtime key to its K, and LocalAdapter is
+    // invariant in its row type, so the narrowing goes through unknown.
+    adapters: adapters as unknown as { [K in keyof Tables & string]: LocalAdapter<Tables[K]> },
     close,
   }
 }
