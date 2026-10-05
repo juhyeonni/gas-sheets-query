@@ -22,7 +22,7 @@ import { MockAdapter } from '../adapters/mock-adapter.js'
 /**
  * Table handle providing Repository and QueryBuilder access
  */
-export interface TableHandle<T extends RowWithId> {
+export interface TableHandle<T extends RowWithId, TName extends string = string> {
   /** Repository for CRUD operations */
   readonly repo: Repository<T>
   
@@ -30,7 +30,7 @@ export interface TableHandle<T extends RowWithId> {
   query(): QueryBuilder<T>
   
   /** Create a new query builder with JOIN support */
-  joinQuery(): JoinQueryBuilder<T>
+  joinQuery(): JoinQueryBuilder<T, TName>
   
   /** Shorthand: create a row */
   create(data: T | Omit<T, 'id'>): T
@@ -65,7 +65,7 @@ export interface TableHandle<T extends RowWithId> {
  */
 export interface SheetsDB<Tables extends Record<string, RowWithId>> {
   /** Get a table handle by name */
-  from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K]>
+  from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K], K>
   
   /** Get raw access to the underlying data store */
   getStore<K extends keyof Tables & string>(tableName: K): DataStore<Tables[K]>
@@ -77,11 +77,11 @@ export interface SheetsDB<Tables extends Record<string, RowWithId>> {
 /**
  * Create a TableHandle for a given store
  */
-function createTableHandle<T extends RowWithId>(
+function createTableHandle<T extends RowWithId, TName extends string>(
   store: DataStore<T>,
-  tableName: string,
+  tableName: TName,
   storeResolver: StoreResolver
-): TableHandle<T> {
+): TableHandle<T, TName> {
   const repo = new Repository<T>(store, tableName)
   
   return {
@@ -154,7 +154,7 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
   return {
     config,
     
-    from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K]> {
+    from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K], K> {
       if (!(tableName in config.tables)) {
         throw new TableNotFoundError(tableName, Object.keys(config.tables))
       }
@@ -163,7 +163,7 @@ export function createSheetsDB<Tables extends Record<string, RowWithId>>(
         handles[tableName] = createTableHandle(stores[tableName], tableName, storeResolver)
       }
       
-      return handles[tableName] as TableHandle<Tables[K]>
+      return handles[tableName] as TableHandle<Tables[K], K>
     },
     
     getStore<K extends keyof Tables & string>(tableName: K): DataStore<Tables[K]> {
@@ -284,7 +284,7 @@ export function defineSheetsDB<
   return {
     config,
 
-    from<K extends keyof InferredTables & string>(tableName: K): TableHandle<InferredTables[K]> {
+    from<K extends keyof InferredTables & string>(tableName: K): TableHandle<InferredTables[K], K> {
       if (!(tableName in tables)) {
         throw new TableNotFoundError(tableName, Object.keys(tables))
       }
@@ -294,7 +294,7 @@ export function defineSheetsDB<
         handles[tableName] = createTableHandle(store as DataStore<InferredTables[K]>, tableName, storeResolver)
       }
 
-      return handles[tableName] as TableHandle<InferredTables[K]>
+      return handles[tableName] as TableHandle<InferredTables[K], K>
     },
 
     getStore<K extends keyof InferredTables & string>(tableName: K): DataStore<InferredTables[K]> {

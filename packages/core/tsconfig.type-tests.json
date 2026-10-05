@@ -1,0 +1,11 @@
+{
+  // Compiles the compile-time assertions in tests/types (#194). `pnpm typecheck`
+  // runs it after the main project, so a misuse that compiles again fails CI.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["tests/types/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

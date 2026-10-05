@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { defineSheetsDB, SheetsDB, MockAdapter } from '../../src'
+import type { JoinQueryBuilder } from '../../src'
 import type { RowWithId } from '../../src/core/types'
 
 // Test types
@@ -437,6 +438,41 @@ describe('JoinQueryBuilder', () => {
         .exec()
 
       expect(posts.length).toBe(3)
+    })
+
+    // #194 AC3: typing where() must not change its runtime behavior
+    it('filters a <mainTable>.<key> field exactly like the bare key', () => {
+      const run = (field: 'status' | 'posts.status', op: '=' | '!=') =>
+        db.from('posts').joinQuery()
+          .join('users', 'authorId', 'id')
+          .where(field, op, 'published')
+          .exec()
+          .map(p => p.id)
+
+      expect(run('posts.status', '=')).toEqual(run('status', '='))
+      expect(run('posts.status', '!=')).toEqual(run('status', '!='))
+      expect(run('posts.status', '!=')).toEqual([2])
+
+      const inBare = db.from('posts').joinQuery().where('id', 'in', [1, 3]).exec()
+      const inPrefixed = db.from('posts').joinQuery().where('posts.id', 'in', [1, 3]).exec()
+      expect(inPrefixed).toEqual(inBare)
+      expect(inPrefixed.map(p => p.id)).toEqual([1, 3])
+    })
+
+    it('throws when a where() prefix names another table', () => {
+      const query = db.from('posts').joinQuery().join('users', 'authorId', 'id')
+      const where = query.where as (field: string, op: '=', value: unknown) => unknown
+
+      expect(() => where.call(query, 'users.name', '=', 'Alice'))
+        .toThrow('Cannot filter on joined table field "users.name"')
+    })
+
+    it('throws on a wrong prefix when the table name is typed as string', () => {
+      const loose: JoinQueryBuilder<Post> = db.from('posts').joinQuery()
+
+      expect(() => loose.where('users.status', '=', 'published'))
+        .toThrow('Only fields from the main table "posts"')
+      expect(loose.where('posts.status', '=', 'published').count()).toBe(3)
     })
 
     it('should throw error for invalid join table', () => {
