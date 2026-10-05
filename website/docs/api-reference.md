@@ -27,6 +27,23 @@ function defineSheetsDB<const TableSchemas extends Record<string, TableSchemaTyp
 
 > Either `stores` or `mock: true` must be provided.
 
+#### `nullable(sample)` / `optional(sample)`
+
+Wrap a sample value in a `types` entry to declare a nullable or optional column. They affect types only; `defineSheetsDB` does not read `types` at runtime.
+
+```ts
+function nullable<const S extends PrimitiveTypeSample>(sample: S): NullableSample<S>
+function optional<const S extends PrimitiveTypeSample | NullableSample>(sample: S): OptionalSample<S>
+```
+
+| `types` entry | Row field |
+|---------------|-----------|
+| `nullable('')` | `field: string \| null` |
+| `optional('')` | `field?: string` |
+| `optional(nullable(0))` | `field?: number \| null` |
+
+See [Schema Definition](./schema-definition.md#nullable-and-optional-columns).
+
 #### `createSheetsDB(options)` (Legacy)
 
 Create a `SheetsDB` instance with explicit type parameters.
@@ -43,7 +60,7 @@ function createSheetsDB<Tables extends Record<string, RowWithId>>(
 
 ```ts
 interface SheetsDB<Tables> {
-  from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K]>
+  from<K extends keyof Tables & string>(tableName: K): TableHandle<Tables[K], K>
   getStore<K extends keyof Tables & string>(tableName: K): DataStore<Tables[K]>
   readonly config: SheetsDBConfig
 }
@@ -54,10 +71,10 @@ interface SheetsDB<Tables> {
 ### TableHandle
 
 ```ts
-interface TableHandle<T extends RowWithId> {
+interface TableHandle<T extends RowWithId, TName extends string = string> {
   readonly repo: Repository<T>
   query(): QueryBuilder<T>
-  joinQuery(): JoinQueryBuilder<T>
+  joinQuery(): JoinQueryBuilder<T, TName>
   create(data: T | Omit<T, 'id'>): T
   findById(id: string | number): T                    // throws RowNotFoundError
   findAll(): T[]
@@ -99,7 +116,8 @@ class Repository<T extends RowWithId> {
 ### QueryBuilder
 
 ```ts
-class QueryBuilder<T extends RowWithId> {
+// G: the groupBy() keys, which agg() results expose (default: none)
+class QueryBuilder<T extends RowWithId, G extends keyof T & string = never> {
   // Where conditions
   where<K extends keyof T & string>(field: K, operator: Operator, value: T[K]): this
   where<K extends keyof T & string>(field: K, operator: 'in', value: T[K][]): this
@@ -123,40 +141,49 @@ class QueryBuilder<T extends RowWithId> {
   count(): number
   exists(): boolean
 
-  // Aggregation
-  sum<K extends keyof T & string>(field: K): number
-  avg<K extends keyof T & string>(field: K): number | null
-  min<K extends keyof T & string>(field: K): number | null
-  max<K extends keyof T & string>(field: K): number | null
+  // Aggregation (numeric columns only)
+  sum<K extends NumericColumn<T>>(field: K): number
+  avg<K extends NumericColumn<T>>(field: K): number | null
+  min<K extends NumericColumn<T>>(field: K): number | null
+  max<K extends NumericColumn<T>>(field: K): number | null
 
   // Grouped aggregation
-  groupBy<K extends keyof T & string>(...fields: K[]): this
+  groupBy<K extends keyof T & string>(...fields: K[]): QueryBuilder<T, K>
   having(aggName: string, operator: Operator, value: number): this
-  agg<A extends Record<string, AggSpec>>(specs: A): GroupedAggResult<...>[]
+  agg<A extends Record<string, AggSpec<NumericColumn<T>>>>(specs: A): GroupedAggResult<G, A>[]
+                                       // throws SheetsQueryError on an unknown having() alias
 
   // Utility
   build(): QueryOptions<T>
-  clone(): QueryBuilder<T>
+  clone(): QueryBuilder<T, G>
 }
 ```
 
 **Operators:** `'=' | '!=' | '>' | '>=' | '<' | '<=' | 'like' | 'in'`
 
-**AggSpec:** `'count' | 'sum:field' | 'avg:field' | 'min:field' | 'max:field'`
+**AggSpec:** `AggSpec<F extends string = string> = 'count' | 'sum:F' | 'avg:F' | 'min:F' | 'max:F'`. In `agg()`, `F` is `NumericColumn<T>`.
+
+**`NumericColumn<T>`:** the columns of `T` whose type can hold a number (`number`, `number | null`, an optional `number`, ...). Any other column always aggregates to `0` or `null`, so the aggregation methods reject it at compile time.
+
+**having():** each alias must be one of the `agg()` spec names, or `agg()` throws a `SheetsQueryError` (code `UNKNOWN_AGGREGATION`) naming it.
 
 ---
 
 ### JoinQueryBuilder
 
 ```ts
-class JoinQueryBuilder<T extends RowWithId> {
+// TName: the main table's name, a literal from db.from(name) (default: string)
+class JoinQueryBuilder<T extends RowWithId, TName extends string = string> {
   // Joins
   join(table: string, localField: keyof T & string, foreignField?: string, options?: { as?: string; type?: 'left' | 'inner' }): this
   leftJoin(table: string, localField: keyof T & string, foreignField?: string, options?: { as?: string }): this
   innerJoin(table: string, localField: keyof T & string, foreignField?: string, options?: { as?: string }): this
 
-  // Where, sorting, pagination (same as QueryBuilder)
-  where(...): this
+  // Where: a main-table key, bare or as `${TName}.${key}`; the value is typed by the key
+  where<F extends JoinWhereField<T, TName>>(field: F, operator: SingleValueOperator, value: T[JoinWhereKey<T, F>]): this
+  where<F extends JoinWhereField<T, TName>>(field: F, operator: 'in', value: T[JoinWhereKey<T, F>][]): this
+
+  // Shorthands, sorting, pagination (same as QueryBuilder)
   whereEq(...): this
   whereNot(...): this
   whereIn(...): this
@@ -175,7 +202,7 @@ class JoinQueryBuilder<T extends RowWithId> {
 
   // Utility
   build(): QueryOptions<T>
-  clone(): JoinQueryBuilder<T>
+  clone(): JoinQueryBuilder<T, TName>
 }
 ```
 
@@ -343,7 +370,10 @@ type Row = Record<string, unknown>
 type RowWithId = { id: string | number }
 type Operator = '=' | '!=' | '>' | '>=' | '<' | '<=' | 'like' | 'in'
 type SortDirection = 'asc' | 'desc'
-type TypeSample = string | number | boolean | null | Date
+type PrimitiveTypeSample = string | number | boolean | null | Date
+type TypeSample = PrimitiveTypeSample | NullableSample | OptionalSample
+interface NullableSample<S extends PrimitiveTypeSample> { readonly kind: 'nullable'; readonly sample: S }
+interface OptionalSample<S extends PrimitiveTypeSample | NullableSample> { readonly kind: 'optional'; readonly sample: S }
 
 interface WhereCondition<T> { field: keyof T & string; operator: Operator; value: unknown }
 interface OrderByCondition<T> { field: keyof T & string; direction: SortDirection }

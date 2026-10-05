@@ -120,7 +120,21 @@ const publishedPostsWithAuthors = db.from('posts').joinQuery()
   .exec()
 ```
 
+The field is a main-table key, either bare or in the `<mainTable>.<key>` form, and the value is typed by that key, as in the plain `QueryBuilder`:
+
+```ts
+const posts = db.from('posts').joinQuery()
+
+posts.where('published', '=', true)        // OK
+posts.where('posts.published', '=', true)  // OK: same filter
+posts.where('posts.published', '=', 'yes') // compile error: boolean column
+posts.where('nope', '=', 'x')              // compile error: unknown key
+posts.where('users.name', '=', 'Alice')    // compile error: not the main table
+```
+
 > **Note:** `where` conditions apply to the main table only. To filter on joined data, filter the results after `exec()`.
+
+The main table's name is part of the builder's type, `JoinQueryBuilder<Post, 'posts'>`, when it comes from `db.from('posts')`. A builder annotated with one type argument, `JoinQueryBuilder<Post>`, accepts any prefix before a valid key at compile time; at runtime, a prefix other than the main table's name throws.
 
 ## Sorting & Pagination
 

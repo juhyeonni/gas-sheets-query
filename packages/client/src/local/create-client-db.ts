@@ -16,8 +16,9 @@ import type {
   PoisonedMutationHandler,
 } from './sync-transport.js'
 import type { MutationStorage } from './mutation-queue.js'
-import type { RuntimeSchema } from '@gsquery/core'
+import type { RuntimeSchema, CreateInputMap } from '@gsquery/core'
 import { composeName } from './naming.js'
+import { toSheetsDBConfig } from '../schema-config.js'
 
 /**
  * Schema definition for createClientDB.
@@ -59,8 +60,11 @@ export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>>
   namespace?: string
 }
 
-export interface ClientDBResult<Tables extends Record<string, RowWithId>> {
-  db: SheetsDB<Tables>
+export interface ClientDBResult<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+> {
+  db: SheetsDB<Tables, CreateInputs>
   sync: SyncEngine
   /** Access adapters directly (for testing/advanced use) */
   adapters: { [K in keyof Tables & string]: LocalAdapter<Tables[K]> }
@@ -74,9 +78,12 @@ export interface ClientDBResult<Tables extends Record<string, RowWithId>> {
 }
 
 /** Create a local-first client DB (async init for IndexedDB hydration) */
-export async function createClientDB<Tables extends Record<string, RowWithId>>(
+export async function createClientDB<
+  Tables extends Record<string, RowWithId>,
+  CreateInputs extends CreateInputMap<Tables> = Record<never, never>
+>(
   options: CreateClientDBOptions<Tables>
-): Promise<ClientDBResult<Tables>> {
+): Promise<ClientDBResult<Tables, CreateInputs>> {
   const {
     schema,
     transport,
@@ -147,17 +154,11 @@ export async function createClientDB<Tables extends Record<string, RowWithId>>(
     syncEngine.registerTable(tableName, adapter, adapter.queue)
   }
 
-  // Build SheetsDBConfig from schema
-  const config: SheetsDBConfig = {
-    tables: Object.fromEntries(
-      Object.entries(schema.tables).map(([name, s]) => [
-        name,
-        { columns: [...s.columns], sheetName: s.sheetName },
-      ])
-    ),
-  }
+  // Build SheetsDBConfig from schema. Defaults and @updatedAt fields reach each
+  // table's Repository through it, exactly as on the server path (#199).
+  const config: SheetsDBConfig = toSheetsDBConfig(schema)
 
-  const db = createSheetsDB<Tables>({
+  const db = createSheetsDB<Tables, CreateInputs>({
     config,
     stores: stores as { [K in keyof Tables]: DataStore<Tables[K]> },
   })

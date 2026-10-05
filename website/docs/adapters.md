@@ -121,7 +121,8 @@ const store = new SheetsAdapter<User>({
     metadata: 'json'
   },
   allowFormulas: false,            // default: false, see Formula Safety below
-  skipHeaderCheck: false           // default: false, see Header Drift below
+  skipHeaderCheck: false,          // default: false, see Header Drift below
+  patchCacheOnWrite: false         // default: false, see Caching below
 })
 ```
 
@@ -173,6 +174,29 @@ returns the original string on read. Set `allowFormulas: true` only when the
 values come from your own script and are meant to run as formulas — never for
 user input.
 
+The literal-text marker is a leading apostrophe, which Sheets drops when it
+parses the write. The adapter encodes strings so they read back unchanged
+whether the sheet drops that apostrophe (normal cells) or keeps the text
+verbatim (cells formatted as plain text, imported CSV, the testing fakes):
+
+| Value | Written as | Real Sheets stores | Read back |
+|-------|------------|--------------------|-----------|
+| `=note` | `'=note` | `=note` (as text) | `=note` |
+| `'=note` | `'''=note` | `''=note` | `'=note` |
+| `''` | `'''''` | `''''` | `''` |
+| `hello` | `hello` | `hello` | `hello` |
+
+A string with k leading apostrophes is written behind 2k+1 of them. On read,
+two or more leading apostrophes decode to half of them (rounded down), and a
+single apostrophe is dropped only when a formula character follows it.
+
+**Cells written before this encoding (#201):** cells with zero or one leading
+apostrophe read back as before. An older cell with two or more leading
+apostrophes — the old escape of an apostrophe-led string, in a sheet that kept
+it verbatim — now reads back with half of them. The adapter cannot repair such
+cells, because it cannot tell which storage mode wrote them; rewrite the value
+through the adapter if it matters.
+
 ### Column Types
 
 The `columnTypes` option enables type-aware serialization for complex data:
@@ -207,6 +231,13 @@ store.findAll()    // reads from sheet again
 // Manually clear all caches (sheet refs + data)
 store.clearCache()
 ```
+
+With `patchCacheOnWrite: true`, row writes patch a warm cache with what they
+wrote instead of dropping it, so an insert + `findAll` loop reads the table once.
+Rows written by other executions then appear only after `clearCache()` or in a
+new execution, and a value Sheets may coerce (such as a string containing a
+digit) still drops the cache. See
+[Patching the cache on write](./operations.md#patching-the-cache-on-write-patchcacheonwrite).
 
 See [Operations](./operations.md) for the real read and write costs per operation.
 
