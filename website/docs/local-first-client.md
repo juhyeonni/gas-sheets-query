@@ -108,6 +108,8 @@ new GasApiTransport({ pullFn: 'syncPull', pushFn: 'syncPush' })  // GAS function
 
 The GAS side exposes `syncPull(tableName)` / `syncPush(tableName, mutations)` handlers backed by `SheetsAdapter` (typically with `idMode: 'client'`, since the browser generates IDs).
 
+`syncPush` receives the mutations JSON-encoded, the same on both paths: `datetime` values arrive as ISO-8601 strings (`Date.prototype.toISOString()`), whether the push went over `google.script.run` or the REST endpoint, and keys whose value is `undefined` are absent. (`google.script.run` rejects any parameter holding a `Date`, so the transport encodes before calling it.) `SheetsAdapter` stores such strings correctly, and the local rows and queue keep their `Date` objects — only the wire form changes.
+
 ## Limitations
 
 - **Single-tab.** Two tabs sharing a namespace can overwrite each other's queued mutations and IndexedDB snapshots. Use one tab, or give each tab its own `namespace`.

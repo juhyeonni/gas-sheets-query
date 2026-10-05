@@ -30,6 +30,20 @@ export interface GasApiTransportOptions {
   pushFn?: string
 }
 
+/**
+ * Encodes mutations into the JSON-safe form both push paths send (#245).
+ *
+ * `google.script.run` rejects any parameter holding a `Date`, top-level or
+ * nested, while the REST path's `JSON.stringify` quietly turns one into its
+ * ISO-8601 string. Running the GAS payload through the same JSON round trip
+ * makes the two paths send identical values by construction (a `Date` becomes
+ * `toISOString()`, `undefined` keys drop out) and matches what a queue restored
+ * from storage already holds. It returns a fresh copy, so the batch the engine
+ * keeps for retries and dead-lettering still holds the caller's `Date`s.
+ */
+const toWire = (mutations: readonly MergedMutation[]): unknown =>
+  JSON.parse(JSON.stringify(mutations))
+
 const isGas = (): boolean => {
   try {
     return typeof google !== 'undefined' && !!google?.script?.run
@@ -85,7 +99,7 @@ export class GasApiTransport implements SyncTransport {
       const handler = google.script.run
         .withSuccessHandler((result: SyncPushResult<T>) => resolve(result))
         .withFailureHandler((error: Error) => reject(error))
-      ;(handler as any)[this.pushFn](tableName, mutations)
+      ;(handler as any)[this.pushFn](tableName, toWire(mutations))
     })
   }
 
