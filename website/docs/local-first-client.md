@@ -58,6 +58,8 @@ The result is `{ db, sync, adapters, close }`. Call `close()` on teardown — it
 - **Conflicts.** When the server rejects rows, the strategy decides: `server-wins` overwrites local, `client-wins` keeps the local edit queued for re-push, and a custom resolver's merged row is re-enqueued so it reaches the server and survives the next pull.
 - **Partial failures.** A transport may return `appliedIds` to state exactly which mutations it committed; without it, a failed batch clears nothing. One table's failure doesn't block other tables — `sync()` isolates per table, emits per-table `error` events, and rethrows an aggregate `SyncError`.
 - **Retries and dead-lettering.** Background attempts (auto-sync, debounced pushes) back off exponentially per failing table. Explicit `sync()`/`push()`/`pull()` always run (`resetRetryState()` clears the backoff window). After `maxRetries` consecutive failures a `mutation-dead` event fires and `onPoisonedMutation` decides the fate of what is still unapplied.
+- **Overlapping `sync()` calls.** A `sync()` called while another pass is running waits for one extra pass that starts after it, so writes made since the running pass began are pushed before it resolves. Every call for the same scope (`sync()` or `sync('table')`) arriving before that extra pass starts shares it, and rejects if it fails. Auto-sync ticks skip while a pass is running.
+- **`isSyncing`** is `true` from the moment any `sync()`, `push()` or `pull()` — explicit or background — is called until every started operation has settled.
 
 ### Naming the rows a push refused
 
@@ -107,6 +109,56 @@ new GasApiTransport({ pullFn: 'syncPull', pushFn: 'syncPush' })  // GAS function
 ```
 
 The GAS side exposes `syncPull(tableName)` / `syncPush(tableName, mutations)` handlers backed by `SheetsAdapter` (typically with `idMode: 'client'`, since the browser generates IDs).
+
+| Option | Default | Purpose |
+|---|---|---|
+| `baseUrl` | — | Use `fetch` against this URL instead of `google.script.run` (outside GAS, `/api` when omitted) |
+| `pullFn` / `pushFn` | `'syncPull'` / `'syncPush'` | GAS function names for the `google.script.run` path |
+| `pushContentType` | `'text/plain'` on `script.google.com`, else `'application/json'` | `Content-Type` of the push request; the body is JSON either way |
+| `timeoutMs` | `60000` | Abort a `fetch` request after this many ms (`0` = no timeout) |
+
+With `baseUrl`, pull sends `GET <baseUrl>/sync/pull?table=<name>` and expects `{ rows: [...] }`; push sends `POST <baseUrl>/sync/push` with the JSON body `{ table, mutations }` and expects a push result with a boolean `success`. A response of any other shape is rejected with an error naming the operation and table.
+
+### Calling a deployed GAS web app with `baseUrl`
+
+`baseUrl` can be a deployed web app's `/exec` URL, so a page on another origin can sync through `fetch`:
+
+```typescript
+new GasApiTransport({ baseUrl: 'https://script.google.com/macros/s/<deployment-id>/exec' })
+```
+
+GAS web apps do not answer CORS preflight requests, and a `Content-Type: application/json` POST needs one, so the request would fail in the browser before reaching your script. On a `script.google.com` URL the transport therefore sends the push as `Content-Type: text/plain` with the JSON in the body, which needs no preflight. Your `doPost` reads the body as text and parses it; the operation arrives in `e.pathInfo`:
+
+```javascript
+// Code.gs
+function doGet(e) {
+  if (e.pathInfo === 'sync/pull') return json(syncPull(e.parameter.table))
+  return json({ error: 'not found' })
+}
+
+function doPost(e) {
+  if (e.pathInfo === 'sync/push') {
+    const { table, mutations } = JSON.parse(e.postData.contents)
+    return json(syncPush(table, mutations))
+  }
+  return json({ error: 'not found' })
+}
+
+function json(value) {
+  return ContentService.createTextOutput(JSON.stringify(value))
+    .setMimeType(ContentService.MimeType.JSON)
+}
+```
+
+Set `pushContentType` to override the choice: `'application/json'` for a proxy in front of GAS that needs it, or `'text/plain'` for another server with the same CORS limitation. A dev server that only parses JSON bodies keeps working unchanged, since any other host defaults to `'application/json'`.
+
+Deploy the web app with access set so that the browser's requests reach it (for a cross-origin page, typically "Anyone"). When access is narrower, GAS answers with a sign-in or error **HTML page with HTTP status 200**; the transport rejects such a response with an error saying GAS returned an HTML page and to check the deployment's access settings, rather than failing to parse it as JSON.
+
+### Timeouts and retries
+
+A `fetch` request that has not completed within `timeoutMs` is aborted and rejects with an error saying it timed out and after how many ms; without it, a hung connection would block every later sync operation. The `google.script.run` path has no timeout: it cannot be cancelled, and GAS fails it at its execution limit.
+
+The transport never retries. A failed request rejects once, and `SyncEngine` owns retries: background attempts back off per table, and dead-lettering counts each push failure exactly once.
 
 ## Limitations
 
