@@ -3,9 +3,11 @@ import { resolve } from 'path'
 
 export default defineConfig({
   resolve: {
-    alias: {
-      '@gsquery/core': resolve(__dirname, '../core/src/index.ts'),
-    },
+    // Exact matches, so the subpath is not resolved under the root entry.
+    alias: [
+      { find: /^@gsquery\/core\/testing$/, replacement: resolve(__dirname, '../core/src/testing/index.ts') },
+      { find: /^@gsquery\/core$/, replacement: resolve(__dirname, '../core/src/index.ts') },
+    ],
   },
   test: {
     environment: 'node',
