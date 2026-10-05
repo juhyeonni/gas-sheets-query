@@ -63,6 +63,37 @@ export type UpdateData<T extends RowWithId> = Partial<Omit<T, 'id'>>
  */
 export type UpsertData<T extends RowWithId> = Omit<T, 'id'> | (UpdateData<T> & Pick<T, 'id'>)
 
+/**
+ * Input accepted by `create` and `batchInsert` when no narrower create-input
+ * type is given: a full row, or a row without its id.
+ */
+export type DefaultCreateInput<T extends RowWithId> = T | Omit<T, 'id'>
+
+/**
+ * Per-table create-input types, keyed like the `Tables` map (#199). A table
+ * left out keeps {@link DefaultCreateInput}. Generated clients pass one entry
+ * per table, in which fields with a runtime default are optional.
+ */
+export type CreateInputMap<Tables extends Record<string, RowWithId>> = {
+  [K in keyof Tables]?: unknown
+}
+
+/** The create-input type for table `K`: its entry in `Inputs`, else {@link DefaultCreateInput} */
+export type CreateInputOf<
+  Tables extends Record<string, RowWithId>,
+  Inputs,
+  K extends keyof Tables
+> = K extends keyof Inputs ? Inputs[K] : DefaultCreateInput<Tables[K]>
+
+/**
+ * A column default applied by `Repository` on insert (#199): a literal value,
+ * or `now` (the `Date` of the write). Tagged so the schema stays plain data and
+ * a literal is never mistaken for a function.
+ */
+export type ColumnDefault =
+  | { kind: 'value'; value: string | number | boolean }
+  | { kind: 'now' }
+
 /** Options for the optional {@link DataStore.addColumn} schema operation */
 export interface AddColumnOptions {
   /**
@@ -293,6 +324,16 @@ export interface RuntimeTableSchema {
   columnTypes?: Record<string, ColumnType>
   /** Index definitions used to accelerate equality lookups */
   indexes?: IndexDefinition[]
+  /**
+   * Values `Repository` fills on insert when a field is missing or `undefined`
+   * (#199). Never applied to `id`, and never applied by an adapter directly.
+   */
+  defaults?: Record<string, ColumnDefault>
+  /**
+   * Fields `Repository` stamps with the current `Date` on insert and update
+   * unless the caller supplies a value (#199).
+   */
+  updatedAt?: readonly string[]
 }
 
 /** Runtime schema: the table map a generated client exports. */
@@ -317,6 +358,10 @@ export interface TableSchema<T extends RowWithId = RowWithId> {
   idColumn?: string
   /** Sheet name (defaults to table name if not specified) */
   sheetName?: string
+  /** Insert defaults applied by the table's `Repository` (#199). See {@link RuntimeTableSchema.defaults} */
+  defaults?: Record<string, ColumnDefault>
+  /** Fields the table's `Repository` stamps on insert and update (#199). See {@link RuntimeTableSchema.updatedAt} */
+  updatedAt?: readonly string[]
 }
 
 /** Database configuration (legacy) */

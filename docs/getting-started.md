@@ -141,17 +141,19 @@ nickname: string?    # string | undefined
 |-----------|-------------|
 | `@id` | Primary key |
 | `@unique` | Unique constraint (declarative only — not enforced at runtime) |
-| `@default(value)` | Default value |
-| `@updatedAt` | Auto-update timestamp |
+| `@default(value)` | Default filled on insert when the field is missing (literals and `now` only; `--client` only) |
+| `@updatedAt` | Stamped with the current `Date` on insert and update unless you pass a value (`--client` only) |
+
+`@default` and `@updatedAt` are applied by `Repository` in a client generated with `gsquery generate --client`, and those fields are optional in the generated `<Table>CreateInput`. Writes made directly through an adapter, the default `generate` output (without `--client`) and `defineSheetsDB` apply nothing. `autoincrement`, `uuid` and `cuid` are not applied to non-id fields.
 
 #### Default Value Examples
 
 ```yaml
-id: number @default(autoincrement)     # Auto-increment
+id: number @default(autoincrement)     # Auto-increment (the id comes from auto idMode)
 active: boolean @default(true)          # Boolean
 count: number @default(0)               # Number
 role: Role @default(USER)               # Enum
-createdAt: datetime @default(now)       # Current time
+createdAt: datetime @default(now)       # Current time (a Date)
 ```
 
 For detailed syntax, see [Schema Syntax](./schema-syntax.md).
