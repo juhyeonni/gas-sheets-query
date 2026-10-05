@@ -46,6 +46,12 @@ export interface CreateClientDBOptions<Tables extends Record<string, RowWithId>>
    * ids to drop — see {@link PoisonedMutationAction}.
    */
   onPoisonedMutation?: PoisonedMutationHandler
+  /**
+   * Most mutations per `transport.push` call (default unlimited). A larger
+   * queue is pushed in slices of this size, in order; must be a positive
+   * integer.
+   */
+  maxBatchSize?: number
   /** Custom mutation storage (defaults to localStorage) */
   mutationStorage?: MutationStorage
   /** Disable IndexedDB (for testing in non-browser environments) */
@@ -93,6 +99,7 @@ export async function createClientDB<
     retryBaseDelayMs,
     maxRetryDelayMs,
     onPoisonedMutation,
+    maxBatchSize,
     mutationStorage,
     disableIDB,
     namespace,
@@ -106,6 +113,7 @@ export async function createClientDB<
     retryBaseDelayMs,
     maxRetryDelayMs,
     onPoisonedMutation,
+    maxBatchSize,
   } satisfies SyncEngineOptions)
 
   // Keyed by runtime table name, so the per-table row type is erased to
@@ -135,6 +143,11 @@ export async function createClientDB<
   // adapters must not open connections of their own: close() only closes
   // sharedDb, so any other connection would leak and wedge later upgrades
   // (#139). The mutation queue keeps its own storage either way.
+  // Each init() is one IndexedDB round trip, so they run concurrently (#237);
+  // tables register with the engine only once every init() resolved, in schema
+  // order, so no pull can land mid-init() and tables keep syncing in a stable
+  // order.
+  const created: Array<[string, LocalAdapter<RowWithId>]> = []
   for (const [tableName, tableSchema] of Object.entries(schema.tables)) {
     const adapterOpts: LocalAdapterOptions = {
       tableName,
@@ -148,13 +161,14 @@ export async function createClientDB<
       namespace,
     }
 
-    const adapter = new LocalAdapter(adapterOpts)
-    await adapter.init()
+    created.push([tableName, new LocalAdapter(adapterOpts)])
+  }
 
+  await Promise.all(created.map(([, adapter]) => adapter.init()))
+
+  for (const [tableName, adapter] of created) {
     stores[tableName] = adapter
     adapters[tableName] = adapter
-
-    // Register with SyncEngine
     syncEngine.registerTable(tableName, adapter, adapter.queue)
   }
 

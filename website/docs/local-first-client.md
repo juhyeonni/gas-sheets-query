@@ -45,6 +45,7 @@ Passing a generated schema carries its `columnTypes` (so `datetime` columns hydr
 | `maxRetries` | `5` | Consecutive push failures per table before dead-lettering (`0` = never) |
 | `retryBaseDelayMs` / `maxRetryDelayMs` | `1000` / `60000` | Exponential backoff window for background retries |
 | `onPoisonedMutation` | — | Called after `maxRetries` failures; return `'discard'`, `'retain'`, or an array of ids to drop |
+| `maxBatchSize` | unlimited | Most mutations per `push` call; a larger queue goes out in slices of this size, in order (must be a positive integer) |
 | `namespace` | — | Partition key isolating IndexedDB + queue storage per instance (e.g. per team) |
 | `mutationStorage` | localStorage | Custom queue persistence |
 | `disableIDB` / `initialData` | — | Testing helpers: skip IndexedDB, pre-seed rows |
@@ -55,7 +56,9 @@ The result is `{ db, sync, adapters, close }`. Call `close()` on teardown — it
 
 - **Push before pull.** `sync.sync()` pushes each table's queued mutations, then pulls server rows. Pull rebases still-pending local mutations on top of server data, so unsynced edits are never clobbered.
 - **Durable queue.** Mutations persist to localStorage at enqueue time, before any network attempt. Mutations per row are merged (insert+update → insert, insert+delete → nothing) and carry a sequence number, so edits made *while* a push is in flight are never lost. Consecutive updates of one row compact into a single entry, and batch writes persist once. If storage rejects a write (for example a full quota), the write call throws; the change stays applied in memory and will still sync. Rows that cancel out are collected once a successful push proves them settled, so `queue.hasPending` means "work still has to reach the server" and create-then-delete churn doesn't grow storage.
-- **Conflicts.** When the server rejects rows, the strategy decides: `server-wins` overwrites local, `client-wins` keeps the local edit queued for re-push, and a custom resolver's merged row is re-enqueued so it reaches the server and survives the next pull.
+- **Conflicts.** When the server rejects rows, the strategy decides: `server-wins` overwrites local, `client-wins` keeps the local edit queued for re-push, and a custom resolver's merged row is re-enqueued so it reaches the server and survives the next pull. All of a push's resolutions are written to the local table in one pass.
+- **Unchanged pulls are free.** When the pulled rows equal the local rows (in order, after column conversion, so an ISO string equals the local `Date`), the local rows and IndexedDB are left untouched. `pull-complete` still fires.
+- **Push slices.** By default a table's whole queue goes out in one `push` call. With `maxBatchSize`, it goes out in slices of at most that many mutations, in queue order, one after another; each slice is cleared from the queue as soon as the server accepts it. A failing slice stops that table's push: earlier slices stay applied, later slices stay queued and are not sent, and a dead-lettered batch covers only the failing slice. `push-complete` fires once per table, after every slice landed.
 - **Partial failures.** A transport may return `appliedIds` to state exactly which mutations it committed; without it, a failed batch clears nothing. One table's failure doesn't block other tables — `sync()` isolates per table, emits per-table `error` events, and rethrows an aggregate `SyncError`.
 - **Retries and dead-lettering.** Background attempts (auto-sync, debounced pushes) back off exponentially per failing table. Explicit `sync()`/`push()`/`pull()` always run (`resetRetryState()` clears the backoff window). After `maxRetries` consecutive failures a `mutation-dead` event fires and `onPoisonedMutation` decides the fate of what is still unapplied.
 - **Overlapping `sync()` calls.** A `sync()` called while another pass is running waits for one extra pass that starts after it, so writes made since the running pass began are pushed before it resolves. Every call for the same scope (`sync()` or `sync('table')`) arriving before that extra pass starts shares it, and rejects if it fails. Auto-sync ticks skip while a pass is running.
@@ -97,6 +100,8 @@ const off = sync.on((event) => {
 sync.startAutoSync(30_000)  // periodic background sync
 sync.stopAutoSync()
 ```
+
+Auto-sync skips its ticks while the tab is hidden (`document.hidden`) or offline (`navigator.onLine === false`): a skipped tick does nothing and emits no event. The next tick after the tab is visible and online syncs as usual. Where those globals don't exist (Node, GAS), every tick runs. Explicit `sync()`/`push()`/`pull()` calls and debounced pushes are never skipped — call `sync()` yourself if you need a sync while hidden.
 
 `sync-complete` is the "everything requested is now in sync" signal — safe to wire an *all changes saved* indicator to. It fires only when every table in the pass was actually attempted and none failed. When a background pass skips tables whose backoff window is still open, it ends in `sync-deferred` (with `deferredTables`) instead: nothing moved for those tables, so the indicator should read *retrying…* rather than turning green mid-outage. A pass with failures emits per-table `error` events and rejects with a `SyncError`, and emits neither.
 
