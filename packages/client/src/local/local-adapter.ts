@@ -29,6 +29,53 @@ import type { MutationInput, MutationStorage } from './mutation-queue.js'
 import { composeName } from './naming.js'
 
 /**
+ * Rejection of {@link openSharedIDB} when the version upgrade is blocked by
+ * another open connection to the same database (#120). Internal: callers that
+ * fall back to memory-only use it to tell this cause apart and warn.
+ */
+export class IDBUpgradeBlockedError extends Error {
+  constructor(readonly dbName: string) {
+    super(
+      `IndexedDB upgrade for "${dbName}" is blocked by another open connection ` +
+        `(another tab, or a client DB that was never closed)`
+    )
+    this.name = 'IDBUpgradeBlockedError'
+  }
+}
+
+/** Callbacks run once a connection from openSharedIDB closed on versionchange. */
+const versionChangeListeners = new WeakMap<IDBDatabase, Array<() => void>>()
+
+/**
+ * Make a connection step aside for another connection's upgrade: on
+ * `versionchange` it closes itself, warns once, and tells the adapters using it
+ * to stop persisting (#120). Without this a live tab deadlocks another tab's
+ * schema upgrade.
+ */
+function yieldOnVersionChange(db: IDBDatabase, dbName: string): IDBDatabase {
+  db.onversionchange = () => {
+    db.onversionchange = null
+    db.close()
+    console.warn(
+      `[gsquery] IndexedDB connection to "${dbName}" closed because another connection ` +
+        `requested a version change (likely another tab upgrading the schema); ` +
+        `continuing memory-only for this session`
+    )
+    const listeners = versionChangeListeners.get(db) ?? []
+    versionChangeListeners.delete(db)
+    for (const listener of listeners) listener()
+  }
+  return db
+}
+
+/** Run `listener` once if `db` closes itself on versionchange. */
+function onVersionChangeClose(db: IDBDatabase, listener: () => void): void {
+  const listeners = versionChangeListeners.get(db) ?? []
+  listeners.push(listener)
+  versionChangeListeners.set(db, listeners)
+}
+
+/**
  * Open the gsquery IndexedDB with all required object stores in a single
  * upgrade transaction. This avoids the race condition where multiple
  * adapters independently try to open/upgrade the same database.
@@ -52,7 +99,7 @@ export function openSharedIDB(tableNames: string[], dbName = 'gsquery'): Promise
 
       if (missing.length === 0 && !needsMeta) {
         // All stores exist — reuse the connection
-        resolve(existing)
+        resolve(yieldOnVersionChange(existing, dbName))
         return
       }
 
@@ -71,22 +118,29 @@ export function openSharedIDB(tableNames: string[], dbName = 'gsquery'): Promise
           db.createObjectStore('_meta', { keyPath: 'tableName' })
         }
       }
-      upgrade.onsuccess = () => resolve(upgrade.result)
+      // IndexedDB fires `blocked` (not success/error) while another connection
+      // stays open, and keeps the request queued. Waiting buys little: only a
+      // tab without this fix or a leaked connection blocks, since every
+      // connection handed out below yields on versionchange (#120).
+      let blocked = false
+      upgrade.onblocked = () => {
+        blocked = true
+        reject(new IDBUpgradeBlockedError(dbName))
+      }
+      upgrade.onsuccess = () => {
+        if (blocked) {
+          // The rejected request was not cancelled; its late connection would
+          // leak and block the next upgrade, so drop it at once.
+          upgrade.result.close()
+          return
+        }
+        resolve(yieldOnVersionChange(upgrade.result, dbName))
+      }
       upgrade.onerror = () => reject(upgrade.error)
     }
-    probe.onerror = () => {
-      // DB doesn't exist yet — create fresh with version 1
-      const fresh = indexedDB.open(dbName, 1)
-      fresh.onupgradeneeded = () => {
-        const db = fresh.result
-        for (const name of tableNames) {
-          db.createObjectStore(name, { keyPath: 'id' })
-        }
-        db.createObjectStore('_meta', { keyPath: 'tableName' })
-      }
-      fresh.onsuccess = () => resolve(fresh.result)
-      fresh.onerror = () => reject(fresh.error)
-    }
+    // A versionless open creates a missing database, so this only fires for a
+    // genuine failure (e.g. storage disabled).
+    probe.onerror = () => reject(probe.error)
   })
 }
 
@@ -147,7 +201,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
     // Accept pre-opened shared IDB handle
     if (options.idbDb) {
-      this.idbDb = options.idbDb
+      this.useConnection(options.idbDb)
     }
 
     this.queue = new MutationQueue<T>({
@@ -178,7 +232,9 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     try {
       // If a shared DB handle was provided, just hydrate from it
       if (!this.idbDb) {
-        this.idbDb = await openSharedIDB([this.tableName], composeName('gsquery', this.namespace))
+        this.useConnection(
+          await openSharedIDB([this.tableName], composeName('gsquery', this.namespace))
+        )
       }
 
       const seqBefore = this.queue.currentSeq()
@@ -207,10 +263,27 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
       this.data = [...merged.values()]
       this.rebuildIndex()
       this.schedulePersist()
-    } catch {
+    } catch (err) {
       // IndexedDB unavailable - continue in-memory only
       this.idbEnabled = false
+      if (err instanceof IDBUpgradeBlockedError) {
+        console.warn(`[gsquery] ${err.message}; continuing memory-only for this session`)
+      }
     }
+  }
+
+  /**
+   * Persist through `db` until it closes on versionchange; from then on stay
+   * memory-only for the session (#120). Writes still reach the MutationQueue,
+   * which lives in its own storage, so pending pushes are not lost.
+   */
+  private useConnection(db: IDBDatabase): void {
+    this.idbDb = db
+    onVersionChangeClose(db, () => {
+      if (this.idbDb !== db) return
+      this.idbDb = null
+      this.idbEnabled = false
+    })
   }
 
   private rebuildIndex(): void {
