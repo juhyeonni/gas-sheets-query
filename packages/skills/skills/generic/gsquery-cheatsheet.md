@@ -147,7 +147,7 @@ gsquery visualize --stdout                       # Mermaid ERD (needs @relation)
 | `RowNotFoundError` | `ROW_NOT_FOUND` | `findById`, `update`, `delete` |
 | `NoResultsError` | `NO_RESULTS` | `firstOrFail()` |
 | `TableNotFoundError` | `TABLE_NOT_FOUND` | `db.from('unknown')` |
-| `ValidationError` | `VALIDATION_ERROR` | Input validation |
+| `ValidationError` | `VALIDATION_ERROR` | `upsert` with an unknown id on an `auto` idMode store |
 | `InvalidOperatorError` | `INVALID_OPERATOR` | Bad operator in `where()` |
 
 All extend `SheetsQueryError`. Use `instanceof` or check `.code`.

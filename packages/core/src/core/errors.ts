@@ -108,7 +108,12 @@ export class MissingStoreError extends SheetsQueryError {
 }
 
 /**
- * Thrown when validation fails
+ * Thrown by `Repository.upsert` when it is given an id that no row carries and
+ * the store allocates its own ids (`auto` idMode), so the row cannot be
+ * created under the requested id. `field` is `'id'` in that case.
+ *
+ * The library does no general input validation: rows are not checked against
+ * the schema on read or write, so this is the only case that throws it today.
  */
 export class ValidationError extends SheetsQueryError {
   constructor(

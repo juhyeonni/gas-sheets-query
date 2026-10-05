@@ -567,7 +567,7 @@ Options:
 | `DuplicateIdError` | Insert would duplicate an existing id (`idMode: 'client'`) |
 | `NoResultsError` | No query results (`firstOrFail`) |
 | `MissingStoreError` | DataStore not found |
-| `ValidationError` | Validation failed |
+| `ValidationError` | `upsert` with an id no row carries on an `auto` idMode store |
 | `InvalidOperatorError` | Invalid operator |
 | `MigrationVersionError` | Migration version error |
 | `MigrationExecutionError` | Migration execution failed |

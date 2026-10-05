@@ -128,11 +128,17 @@ Thrown when a table in the configuration doesn't have a corresponding data store
 
 ### ValidationError
 
-Thrown when input validation fails.
+Thrown by `upsert` when it is given an `id` that no row carries and the store
+allocates its own ids (`auto` idMode). Inserting there would write the row
+under a different id than the one asked for, so it throws instead. Omit the id
+to create a row, or use `idMode: 'client'`.
+
+This is the only case that throws it: the library does not validate rows
+against the schema on read or write.
 
 ```ts
 // code: 'VALIDATION_ERROR'
-// field?: string (optional field name)
+// field?: string ('id' for the upsert case)
 ```
 
 ### InvalidOperatorError
@@ -311,7 +317,7 @@ if (isTransientGasError(error)) scheduleRetry()
 | `ROW_NOT_FOUND` | `RowNotFoundError` | `findById(999)`, `update(999, ...)`, `delete(999)` |
 | `NO_RESULTS` | `NoResultsError` | `query.firstOrFail()` with no matches |
 | `MISSING_STORE` | `MissingStoreError` | Table config without matching store |
-| `VALIDATION_ERROR` | `ValidationError` | Input validation failure; also `upsert` with an id no row carries on an `auto` idMode store |
+| `VALIDATION_ERROR` | `ValidationError` | `upsert` with an id no row carries on an `auto` idMode store |
 | `INVALID_OPERATOR` | `InvalidOperatorError` | Invalid operator in where clause |
 | `UNKNOWN_COLUMN` | `UnknownColumnError` | `addColumn`, or `renameColumn`'s new name, for a column outside the store schema |
 | `SCHEMA_MISMATCH` | `SchemaMismatchError` | Sheet header contradicts the declared columns (also raised by `renameColumn`/`removeColumn` when the physical layout does not match) |

@@ -73,7 +73,7 @@ export class GasApiTransport implements SyncTransport {
       const handler = google.script.run
         .withSuccessHandler((result: { rows: T[] }) => resolve(result))
         .withFailureHandler((error: Error) => reject(error))
-      ;(handler as any)[this.pullFn](tableName)
+      handler[this.pullFn](tableName)
     })
   }
 
@@ -85,7 +85,7 @@ export class GasApiTransport implements SyncTransport {
       const handler = google.script.run
         .withSuccessHandler((result: SyncPushResult<T>) => resolve(result))
         .withFailureHandler((error: Error) => reject(error))
-      ;(handler as any)[this.pushFn](tableName, mutations)
+      handler[this.pushFn](tableName, mutations)
     })
   }
 
