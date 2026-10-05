@@ -49,6 +49,37 @@ export interface SyncEngineOptions {
    * (#174) — see {@link PoisonedMutationAction}.
    */
   onPoisonedMutation?: PoisonedMutationHandler
+  /**
+   * Most mutations sent in one `transport.push` call (default: unlimited). A
+   * larger queue goes out in slices of this size, in queue order, one after
+   * another; each slice is settled as soon as it returns. A failing slice
+   * stops the table's push and leaves the later slices queued. Must be a
+   * positive integer.
+   */
+  maxBatchSize?: number
+}
+
+/**
+ * Validate `maxBatchSize`. Omitted means unlimited: one all-or-nothing call,
+ * which existing servers may rely on.
+ */
+function readMaxBatchSize(value: number | undefined): number {
+  if (value === undefined) return Number.POSITIVE_INFINITY
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`maxBatchSize must be a positive integer, got ${String(value)}`)
+  }
+  return value
+}
+
+/**
+ * Whether a background tick should be skipped because the tab is hidden or the
+ * browser reports itself offline. Where `document` or `navigator` does not
+ * exist (Node, GAS) nothing is skipped.
+ */
+function isTabIdle(): boolean {
+  if (typeof document !== 'undefined' && document?.hidden === true) return true
+  if (typeof navigator !== 'undefined' && navigator?.onLine === false) return true
+  return false
 }
 
 /** A single table's failure inside an otherwise partial sync */
@@ -209,8 +240,10 @@ export class SyncEngine {
   private readonly maxRetryDelayMs: number
   private readonly onPoisonedMutation?: PoisonedMutationHandler
   private readonly retryStates = new Map<string, TableRetryState>()
+  private readonly maxBatchSize: number
 
   constructor(options: SyncEngineOptions) {
+    this.maxBatchSize = readMaxBatchSize(options.maxBatchSize)
     this.transport = options.transport
     this.conflictStrategy = options.conflictStrategy ?? 'server-wins'
     this.pushDebounceMs = options.pushDebounceMs ?? 0
@@ -501,10 +534,39 @@ export class SyncEngine {
     }
 
     // Boundary: only mutations enqueued up to this point are part of this push.
-    // Anything enqueued during the await below (higher seq) must survive the
-    // clear, otherwise concurrent local writes are silently lost (#109).
+    // Anything enqueued during the awaits below (higher seq) must survive the
+    // clear, otherwise concurrent local writes are silently lost (#109). Every
+    // slice shares it, since they all come from this one snapshot.
     const boundary = binding.queue.snapshotBoundary()
 
+    // A long offline session can queue more than one call should carry (#237).
+    // Slices go out in queue order, one after another, and each is settled the
+    // moment it returns, so a later failure never re-sends what already landed.
+    // A failing slice throws out of here: the slices after it stay queued and
+    // untried, and only its own mutations are reported as rejected (D5).
+    for (let start = 0; start < merged.length; start += this.maxBatchSize) {
+      const slice = merged.slice(start, start + this.maxBatchSize)
+      await this.pushSlice(tableName, binding, slice, boundary)
+    }
+
+    // Only a push in which every slice landed is a successful one: a slice that
+    // succeeded before a later one failed does not break the failure streak.
+    const state = this.retryStates.get(tableName)
+    if (state) state.pushFailures = 0
+    this.emit({ type: 'push-complete', table: tableName, pushedCount: merged.length })
+  }
+
+  /**
+   * Send one slice of a push and settle it: clear what the server applied,
+   * resolve its conflicts, and throw a {@link PushPhaseError} naming whatever
+   * is still unapplied when the server reports a failure.
+   */
+  private async pushSlice(
+    tableName: string,
+    binding: TableBinding,
+    merged: MergedMutation[],
+    boundary: number
+  ): Promise<void> {
     let result: SyncPushResult
     try {
       result = await this.transport.push(tableName, merged)
@@ -550,30 +612,39 @@ export class SyncEngine {
         readRejectedIds(result)
       )
     }
-
-    const state = this.retryStates.get(tableName)
-    if (state) state.pushFailures = 0
-    this.emit({ type: 'push-complete', table: tableName, pushedCount: merged.length })
   }
 
   /**
    * Apply each conflict's resolution locally and decide what happens to the
    * pending mutation behind it, by adding to / removing from `settledIds`.
+   *
+   * All resolutions are applied to one snapshot of the table, which is written
+   * back with a single `replaceAll` — or not at all when nothing was resolved
+   * locally (`client-wins`). Writing back per conflict copied the table,
+   * rebuilt its index and persisted it once per conflict, so a large rejected
+   * batch froze the UI for seconds (#237).
    */
   private resolveConflicts(
     binding: TableBinding,
     conflicts: ConflictItem[],
     settledIds: Set<string | number>
   ): void {
-    for (const conflict of conflicts) {
-      if (this.conflictStrategy === 'client-wins') {
-        // Keep the local row *and* its mutation, so the next push re-sends it;
-        // clearing it would let the next pull overwrite the local edit with the
-        // server version (#110).
-        settledIds.delete(conflict.id)
-        continue
-      }
+    if (this.conflictStrategy === 'client-wins') {
+      // Keep the local row *and* its mutation, so the next push re-sends it;
+      // clearing it would let the next pull overwrite the local edit with the
+      // server version (#110). Nothing changes locally, so nothing is written.
+      for (const conflict of conflicts) settledIds.delete(conflict.id)
+      return
+    }
 
+    const rows = binding.adapter.getRawData()
+    const positions = new Map<string | number, number>()
+    for (let i = 0; i < rows.length; i++) {
+      // First occurrence, matching the findIndex this replaced
+      if (!positions.has(rows[i].id)) positions.set(rows[i].id, i)
+    }
+
+    for (const conflict of conflicts) {
       const resolved =
         typeof this.conflictStrategy === 'function'
           ? this.conflictStrategy(conflict)
@@ -581,7 +652,17 @@ export class SyncEngine {
       // id is immutable across a resolution, mirroring update() (#98).
       const resolvedRow: RowWithId = { ...resolved, id: conflict.id }
 
-      this.applyResolvedRow(binding, resolvedRow)
+      const idx = positions.get(conflict.id)
+      if (idx !== undefined) {
+        rows[idx] = resolvedRow
+      } else {
+        // The row was deleted locally. Dropping the resolution here would leave
+        // the strategy's decision unapplied (#131); the resolution wins, so
+        // re-materialize the row. A later resolution for the same id replaces
+        // this one, so the last resolution wins either way.
+        positions.set(conflict.id, rows.length)
+        rows.push(resolvedRow)
+      }
 
       // The pending mutation was superseded by the resolution, so it must not
       // be re-pushed as it stands.
@@ -597,19 +678,7 @@ export class SyncEngine {
         binding.queue.push('update', conflict.id, fields)
       }
     }
-  }
 
-  private applyResolvedRow(binding: TableBinding, row: RowWithId): void {
-    const rows = binding.adapter.getRawData()
-    const idx = rows.findIndex(r => r.id === row.id)
-    if (idx >= 0) {
-      rows[idx] = row
-    } else {
-      // The row was deleted locally. Dropping the resolution here would leave
-      // the strategy's decision unapplied (#131); the resolution wins, so
-      // re-materialize the row.
-      rows.push(row)
-    }
     binding.adapter.replaceAll(rows)
   }
 
@@ -671,10 +740,19 @@ export class SyncEngine {
     }, this.pushDebounceMs)
   }
 
-  /** Start auto-sync at interval */
+  /**
+   * Start auto-sync at interval.
+   *
+   * A tick is skipped while `document.hidden` is true or `navigator.onLine` is
+   * false (#237): an idle hidden tab kept pulling the whole table every
+   * interval. A skipped tick does nothing and emits nothing, so it never
+   * reports a sync it did not do (#173). Where those globals do not exist
+   * (Node, GAS) every tick runs. Explicit sync()/push()/pull() are not gated.
+   */
   startAutoSync(intervalMs: number): void {
     this.stopAutoSync()
     this.autoSyncTimer = setInterval(() => {
+      if (isTabIdle()) return
       this.runSync(undefined, true).catch(err => this.emitBackgroundError(err))
     }, intervalMs)
   }

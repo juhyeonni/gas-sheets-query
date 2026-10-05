@@ -90,6 +90,46 @@ export function openSharedIDB(tableNames: string[], dbName = 'gsquery'): Promise
   })
 }
 
+/**
+ * Structural equality for row values: dates compare by time, arrays and plain
+ * objects by their own keys and values. Anything else compares with
+ * `Object.is`, so `NaN` equals `NaN`.
+ */
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) {
+    return false
+  }
+  if (a instanceof Date || b instanceof Date) {
+    return a instanceof Date && b instanceof Date && Object.is(a.getTime(), b.getTime())
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      if (!valuesEqual(a[i], b[i])) return false
+    }
+    return true
+  }
+  const aRecord = a as Record<string, unknown>
+  const bRecord = b as Record<string, unknown>
+  const aKeys = Object.keys(aRecord)
+  if (aKeys.length !== Object.keys(bRecord).length) return false
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(bRecord, key)) return false
+    if (!valuesEqual(aRecord[key], bRecord[key])) return false
+  }
+  return true
+}
+
+/** Whether two row lists hold equal rows in the same order. */
+function rowsEqual<T>(current: readonly T[], next: readonly T[]): boolean {
+  if (current.length !== next.length) return false
+  for (let i = 0; i < current.length; i++) {
+    if (!valuesEqual(current[i], next[i])) return false
+  }
+  return true
+}
+
 export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
   tableName: string
   initialData?: T[]
@@ -425,11 +465,20 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
    * values contradict the generated model types (#135). The conversion is
    * idempotent, so already-typed rows (locally created, or replayed from a
    * conflict resolution) pass through untouched.
+   *
+   * When the converted rows equal the current rows, in order and by value, this
+   * is a no-op: the rows, the index and IndexedDB stay untouched (#237). Every
+   * idle auto-sync tick pulls the whole table, and rewriting all of it each time
+   * cost a full index rebuild plus an IndexedDB clear-and-rewrite. The
+   * comparison runs after conversion because that is the only point where a
+   * wire ISO string can equal a local `Date`.
    */
   replaceAll(rows: T[]): void {
-    this.data = this.columnTypes
+    const next = this.columnTypes
       ? rows.map(row => deserializeRow(row, this.columnTypes))
       : [...rows]
+    if (rowsEqual(this.data, next)) return
+    this.data = next
     this.rebuildIndex()
     this.schedulePersist()
   }
