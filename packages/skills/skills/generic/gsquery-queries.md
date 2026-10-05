@@ -32,6 +32,16 @@ const results = db.from('posts').joinQuery()
 
 - `foreignField` defaults to `'id'`
 - `as` defaults to table name
+
+### Where
+
+`where()` filters the main table only. The field is a main-table key, bare or as `<mainTable>.<key>`, and the value is typed by that key:
+
+```ts
+db.from('posts').joinQuery().where('published', '=', true)        // OK
+db.from('posts').joinQuery().where('posts.published', '=', true)  // OK: same filter
+db.from('posts').joinQuery().where('users.name', '=', 'Alice')    // compile error: not the main table
+```
 - All joined tables must be registered in `defineSheetsDB`
 
 ### Execution
@@ -45,8 +55,10 @@ Same as QueryBuilder: `.exec()`, `.first()`, `.firstOrFail()`, `.count()`, `.exi
 ### AggSpec Format
 
 ```ts
-type AggSpec = 'count' | `sum:${string}` | `avg:${string}` | `min:${string}` | `max:${string}`
+type AggSpec<F extends string = string> = 'count' | `sum:${F}` | `avg:${F}` | `min:${F}` | `max:${F}`
 ```
+
+In `agg()`, the field must be a numeric column (`number`, `number | null`, optional `number`); `sum()`/`avg()`/`min()`/`max()` take the same columns. `'sum:status'` on a string column, or `'sum:amout'` with a typo, does not compile.
 
 ### Single-Value (no groupBy)
 
@@ -91,6 +103,6 @@ db.from('orders').query()
 ## Common Mistakes
 
 - Join results are nested objects (`result.author.name`), not flat (`result.authorName`)
-- `having()` aggName must match a key in the `agg()` specs
-- `agg()` requires `groupBy()` — use `.sum()`, `.avg()` etc. for ungrouped aggregation
+- `having()` aggName must match a key in the `agg()` specs, or `agg()` throws a `SheetsQueryError` (code `UNKNOWN_AGGREGATION`)
+- `agg()` results have the `groupBy()` keys (typed `unknown`) and the spec names only; without `groupBy()`, one row with the spec names
 - All joined tables must exist in your `defineSheetsDB` config

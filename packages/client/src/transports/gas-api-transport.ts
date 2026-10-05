@@ -31,6 +31,12 @@ const DEFAULT_TIMEOUT_MS = 60_000
 /** Host of every deployed GAS web app (`https://script.google.com/macros/s/<id>/exec`) */
 const GAS_WEB_APP_HOST = 'script.google.com'
 
+/**
+ * Query parameter the REST pull already uses for the table name. A context
+ * entry with this key would collide with it, so the constructor rejects it.
+ */
+const RESERVED_CONTEXT_KEY = 'table'
+
 export interface GasApiTransportOptions {
   /**
    * Base URL for the fetch path. If omitted, uses `google.script.run` inside
@@ -64,17 +70,42 @@ export interface GasApiTransportOptions {
    * `SyncEngine` retries with backoff.
    */
   timeoutMs?: number
+  /**
+   * Fixed routing metadata sent to the server on every pull and push, for
+   * example `{ tenant: 'team-a' }` when one backend serves several
+   * spreadsheets. Captured once at construction: build one transport per
+   * client instance. Opaque to the library and distinct from `namespace`,
+   * which only partitions local storage.
+   *
+   * Wire format:
+   * - GAS: a trailing argument, `pullFn(table, context)` /
+   *   `pushFn(table, mutations, context)`. Omitted entirely when unset.
+   * - REST: one query parameter per entry on both the pull and the push URL;
+   *   the push body stays `{ table, mutations }`.
+   *
+   * Carry an identifier the server validates and authorizes, never a resolved
+   * resource id such as a spreadsheetId. Query parameters reach access logs,
+   * so never put secrets here. A `table` key is rejected: it collides with the
+   * pull URL's `table` parameter.
+   */
+  context?: Record<string, string>
 }
 
 type Operation = 'Pull' | 'Push'
 
-const isGas = (): boolean => {
-  try {
-    return typeof google !== 'undefined' && !!google?.script?.run
-  } catch {
-    return false
-  }
-}
+/**
+ * Encodes mutations into the JSON-safe form both push paths send (#245).
+ *
+ * `google.script.run` rejects any parameter holding a `Date`, top-level or
+ * nested, while the REST path's `JSON.stringify` quietly turns one into its
+ * ISO-8601 string. Running the GAS payload through the same JSON round trip
+ * makes the two paths send identical values by construction (a `Date` becomes
+ * `toISOString()`, `undefined` keys drop out) and matches what a queue restored
+ * from storage already holds. It returns a fresh copy, so the batch the engine
+ * keeps for retries and dead-lettering still holds the caller's `Date`s.
+ */
+const toWire = (mutations: readonly MergedMutation[]): unknown =>
+  JSON.parse(JSON.stringify(mutations))
 
 /** Whether `baseUrl` points at a deployed GAS web app */
 function isGasWebAppUrl(baseUrl: string | undefined): boolean {
@@ -97,6 +128,7 @@ export class GasApiTransport implements SyncTransport {
   private readonly pushFn: string
   private readonly pushContentType: PushContentType
   private readonly timeoutMs: number
+  private readonly context?: Readonly<Record<string, string>>
 
   constructor(options: GasApiTransportOptions = {}) {
     this.baseUrl = options.baseUrl
@@ -106,10 +138,30 @@ export class GasApiTransport implements SyncTransport {
       options.pushContentType ??
       (isGasWebAppUrl(options.baseUrl) ? 'text/plain' : 'application/json')
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+
+    if (options.context !== undefined) {
+      if (Object.prototype.hasOwnProperty.call(options.context, RESERVED_CONTEXT_KEY)) {
+        throw new Error(
+          `GasApiTransport: context must not contain the reserved key '${RESERVED_CONTEXT_KEY}' ` +
+            '(it collides with the table query parameter)'
+        )
+      }
+      // Copy so later changes to the caller's object never reach the wire.
+      this.context = Object.freeze({ ...options.context })
+    }
+  }
+
+  /** Whether `google.script.run` is available (running inside a GAS web app). */
+  protected static isGas(): boolean {
+    try {
+      return typeof google !== 'undefined' && !!google?.script?.run
+    } catch {
+      return false
+    }
   }
 
   async pull<T extends RowWithId>(tableName: string): Promise<{ rows: T[] }> {
-    if (isGas()) {
+    if (GasApiTransport.isGas()) {
       return this.gasPull<T>(tableName)
     }
     return this.fetchPull<T>(tableName)
@@ -119,7 +171,7 @@ export class GasApiTransport implements SyncTransport {
     tableName: string,
     mutations: MergedMutation<T>[]
   ): Promise<SyncPushResult<T>> {
-    if (isGas()) {
+    if (GasApiTransport.isGas()) {
       return this.gasPush<T>(tableName, mutations)
     }
     return this.fetchPush<T>(tableName, mutations)
@@ -127,16 +179,16 @@ export class GasApiTransport implements SyncTransport {
 
   // ── GAS (google.script.run) ────────────────────────────────────────
 
-  private gasPull<T extends RowWithId>(tableName: string): Promise<{ rows: T[] }> {
+  protected gasPull<T extends RowWithId>(tableName: string): Promise<{ rows: T[] }> {
     return new Promise((resolve, reject) => {
       const handler = google.script.run
         .withSuccessHandler((result: { rows: T[] }) => resolve(result))
         .withFailureHandler((error: Error) => reject(error))
-      handler[this.pullFn](tableName)
+      handler[this.pullFn](...this.gasArgs(tableName))
     })
   }
 
-  private gasPush<T extends RowWithId>(
+  protected gasPush<T extends RowWithId>(
     tableName: string,
     mutations: MergedMutation<T>[]
   ): Promise<SyncPushResult<T>> {
@@ -144,18 +196,24 @@ export class GasApiTransport implements SyncTransport {
       const handler = google.script.run
         .withSuccessHandler((result: SyncPushResult<T>) => resolve(result))
         .withFailureHandler((error: Error) => reject(error))
-      handler[this.pushFn](tableName, mutations)
+      handler[this.pushFn](...this.gasArgs(tableName, toWire(mutations)))
     })
+  }
+
+  /** Server-function arguments, with the context appended only when set. */
+  private gasArgs(...args: unknown[]): unknown[] {
+    return this.context === undefined ? args : [...args, { ...this.context }]
   }
 
   // ── REST (fetch) ───────────────────────────────────────────────────
 
-  private async fetchPull<T extends RowWithId>(
+  protected async fetchPull<T extends RowWithId>(
     tableName: string
   ): Promise<{ rows: T[] }> {
+    const query = `table=${encodeURIComponent(tableName)}${this.contextQuery('&')}`
     const url = this.baseUrl
-      ? `${this.baseUrl}/sync/pull?table=${encodeURIComponent(tableName)}`
-      : `/api/sync/pull?table=${encodeURIComponent(tableName)}`
+      ? `${this.baseUrl}/sync/pull?${query}`
+      : `/api/sync/pull?${query}`
 
     const body = await this.fetchJson('Pull', tableName, url, {})
     if (!isObject(body) || !Array.isArray(body.rows)) {
@@ -166,13 +224,14 @@ export class GasApiTransport implements SyncTransport {
     return body as unknown as { rows: T[] }
   }
 
-  private async fetchPush<T extends RowWithId>(
+  protected async fetchPush<T extends RowWithId>(
     tableName: string,
     mutations: MergedMutation<T>[]
   ): Promise<SyncPushResult<T>> {
+    const query = this.contextQuery('?')
     const url = this.baseUrl
-      ? `${this.baseUrl}/sync/push`
-      : `/api/sync/push`
+      ? `${this.baseUrl}/sync/push${query}`
+      : `/api/sync/push${query}`
 
     const body = await this.fetchJson('Push', tableName, url, {
       method: 'POST',
@@ -243,5 +302,17 @@ export class GasApiTransport implements SyncTransport {
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
+  }
+
+  /**
+   * The context as URL-encoded `key=value` pairs, prefixed with `prefix`;
+   * empty when there is no context or it has no entries.
+   */
+  private contextQuery(prefix: '?' | '&'): string {
+    if (this.context === undefined) return ''
+    const pairs = Object.entries(this.context).map(
+      ([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`
+    )
+    return pairs.length === 0 ? '' : `${prefix}${pairs.join('&')}`
   }
 }

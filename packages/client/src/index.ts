@@ -89,6 +89,8 @@ export type {
   RuntimeTableSchema,
   ColumnType,
   IndexDefinition,
+  ColumnDefault,
+  CreateInputMap,
 } from "./runtime.js";
 
 // =============================================================================

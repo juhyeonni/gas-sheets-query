@@ -99,16 +99,22 @@ id: number @id
 
 Declares the field's default value.
 
-> ⚠️ **Not applied at runtime.** `@default` is parsed and carried through codegen as documentation of intent, but no adapter fills the value in: generated `create()` types still require the field, and your application code must supply it (the one exception is the primary key in auto `idMode`, which the adapter allocates regardless of this attribute). Runtime application is planned for a later release.
+> **Applied at runtime by `Repository`, in a `--client` client only.** With `gsquery generate --client`, the generated schema carries each table's literal and `now` defaults, and `create`, `batchInsert` and an `upsert` that inserts fill a field that is missing or `undefined`. A value you pass is kept, including `null`, `false`, `0` and `''`. `now` is a `Date`, and every row of one call gets the same instant. Updates never apply defaults. The generated `<Table>CreateInput` makes these fields optional; the row interface is unchanged.
+>
+> Limits:
+> - **Literals and `now` only.** `autoincrement`, `uuid` and `cuid` are not applied to non-id fields, so such a field stays required in `<Table>CreateInput`. The primary key is never filled by `@default`: `idMode` owns ids (auto `idMode` allocates them regardless of this attribute).
+> - **`Repository` only.** Writes made directly through an adapter (`SheetsAdapter`, `MockAdapter`, `LocalAdapter`) get no defaults.
+> - **`--client` only.** The default `generate` output (without `--client`) and `defineSheetsDB` emit no runtime defaults, so nothing is filled there.
 
-| Value | Description |
-|-------|-------------|
-| `autoincrement` | Auto-increment (number only) |
-| `now` | Current time (datetime only) |
-| `true` / `false` | Boolean value |
-| `0`, `100` | Numeric value |
-| `"text"` | String value |
-| `EnumValue` | Enum value |
+| Value | Description | Applied at runtime |
+|-------|-------------|--------------------|
+| `autoincrement` | Auto-increment (number only) | No (the id is allocated by auto `idMode`) |
+| `now` | Current time (datetime only) | Yes |
+| `true` / `false` | Boolean value | Yes |
+| `0`, `100` | Numeric value | Yes |
+| `"text"` | String value | Yes |
+| `EnumValue` | Enum value | Yes |
+| `uuid` / `cuid` | Generated id string | No |
 
 ```yaml
 id: number @default(autoincrement)
@@ -130,7 +136,7 @@ email: string @unique
 
 Declares that the field holds the record's last-modified time.
 
-> ⚠️ **Not applied at runtime.** Nothing auto-fills this on update today — set it from your application code (`update(id, { ..., updatedAt: new Date() })`). Runtime application is planned for a later release.
+> **Applied at runtime by `Repository`, in a `--client` client only.** `create`, `update`, `upsert`, `batchInsert` and `batchUpdate` stamp the field with the current `Date` on insert and on update, unless you pass a value: imports, migrations and replayed writes keep their own timestamps. Every row of one call gets the same instant. The field is optional in `<Table>CreateInput`. As with `@default`, writes made directly through an adapter, the default `generate` output (without `--client`) and `defineSheetsDB` stamp nothing.
 
 ```yaml
 updatedAt: datetime @updatedAt
