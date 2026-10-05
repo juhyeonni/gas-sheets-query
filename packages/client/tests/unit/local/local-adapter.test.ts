@@ -299,5 +299,32 @@ describe('LocalAdapter', () => {
       expect(typeof r2.id).toBe('number')
       expect(r2.id).toBeGreaterThan(r1.id as number)
     })
+
+    // The ID Modes docs promise that, within one session, deleting the
+    // highest-id row never frees its id (#190). Reuse is only possible after
+    // a reload or a server pull, which re-derive the counter from max(id).
+    it('never reuses a deleted highest id within a session', () => {
+      interface AutoRow {
+        id: number
+        value: number
+      }
+      const autoAdapter = new LocalAdapter<AutoRow>({
+        tableName: 'autoNoReuse',
+        idMode: 'auto',
+        disableIDB: true,
+        mutationStorage: createMemoryStorage(),
+      })
+
+      autoAdapter.insert({ value: 1 })
+      autoAdapter.insert({ value: 2 })
+      const highest = autoAdapter.insert({ value: 3 })
+      expect(autoAdapter.delete(highest.id)).toBe(true)
+
+      const next = autoAdapter.insert({ value: 4 })
+      expect(next.id).toBeGreaterThan(highest.id)
+
+      const [batched] = autoAdapter.batchInsert([{ value: 5 }])
+      expect(batched.id).toBeGreaterThan(next.id)
+    })
   })
 })

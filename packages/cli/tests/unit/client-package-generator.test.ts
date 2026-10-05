@@ -123,7 +123,7 @@ describe('generateClientCode', () => {
   it('exports createClient function', () => {
     const result = generateClientCode(simpleSchema)
 
-    expect(result).toContain('export const createClient = createClientFactory<Tables>(schema)')
+    expect(result).toContain('export const createClient = createClientFactory<Tables, CreateInputs>(schema)')
   })
 
   it('exports createTestClient function', () => {

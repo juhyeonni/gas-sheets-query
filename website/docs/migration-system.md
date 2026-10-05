@@ -229,6 +229,41 @@ await runner.migrate()
 // Users now have a 'role' column with default value 'viewer'
 ```
 
+## Interrupted Migrations: Re-run to Resume
+
+Each migration is recorded right after its own operations have been applied.
+If the execution dies in between (the 6-minute ceiling, a daily quota, a
+`deleteColumn` call that timed out), some of that migration's operations have
+been applied and the migration is not recorded. If the failure was catchable,
+`migrate()` rejects with `MigrationExecutionError`.
+
+**To resume, call `migrate()` again**, in a new execution. Migrations recorded
+earlier are skipped; the interrupted one runs again from its first operation
+and is then recorded once. There is no "started" marker and nothing to clean up
+by hand.
+
+This is safe because every `SheetsAdapter` schema operation reads the sheet
+header first and converges instead of repeating itself:
+
+| Operation | Already applied | Re-run does |
+|-----------|-----------------|-------------|
+| `addColumn` | Column present | No header write; backfills only cells that are still empty |
+| `renameColumn` | Header already reads the new name | Nothing |
+| `removeColumn` | Column already gone | Nothing |
+
+The in-memory stores converge the same way (see the sections above). The result
+is the same sheet, cell for cell, as an uninterrupted run, with one migration
+record.
+
+Two things keep it that way:
+
+- Keep `up` and `down` free of side effects other than calls on the `schema`
+  builder. They run again on resume.
+- `migrate()` has no time budget of its own and does not need one: each
+  `SheetsAdapter` operation costs a few Sheets calls whatever the row count.
+  Run it at the start of an execution, not after a long job. For long data
+  jobs, see [`runChunked`](./operations.md#long-jobs-and-the-6-minute-ceiling).
+
 ## Migration Rules
 
 1. **Version numbers** must be positive integers (1, 2, 3...)
@@ -242,7 +277,7 @@ await runner.migrate()
 | Error | When |
 |-------|------|
 | `MigrationVersionError` | Invalid version number, duplicate version, or missing definition |
-| `MigrationExecutionError` | An `up` or `down` function throws during execution |
+| `MigrationExecutionError` | An `up` or `down` function, or one of its operations, throws during execution. After `migrate()` fails this way, fix the cause and call `migrate()` again ([re-run to resume](#interrupted-migrations-re-run-to-resume)) |
 | `NoMigrationsToRollbackError` | Calling `rollback()` when no migrations have been applied |
 
 ---

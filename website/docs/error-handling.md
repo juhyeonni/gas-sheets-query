@@ -328,6 +328,7 @@ if (isTransientGasError(error)) scheduleRetry()
 | `QUOTA_EXCEEDED` | `QuotaExceededError` | GAS rate limit, daily quota, or the 6-minute execution ceiling |
 | `SHEETS_API_ERROR` | `SheetsApiError` | Sheets backend timeout / internal error / service unavailable |
 | `CELL_SIZE_LIMIT` | `CellSizeLimitError` | Value over the 50,000-character cell limit |
+| `UNKNOWN_AGGREGATION` | `SheetsQueryError` | `agg()` after a `having()` whose alias is not one of the spec names |
 
 ## Handling Patterns
 

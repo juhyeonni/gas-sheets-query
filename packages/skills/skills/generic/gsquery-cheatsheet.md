@@ -93,7 +93,9 @@ db.from('orders').query()
 // [{ category, count, total, avg }]
 ```
 
-AggSpec: `'count'` | `'sum:field'` | `'avg:field'` | `'min:field'` | `'max:field'`
+AggSpec: `'count'` | `'sum:field'` | `'avg:field'` | `'min:field'` | `'max:field'` — `field` must be a numeric column (compile error otherwise), and an unknown `having()` alias makes `agg()` throw `SheetsQueryError`
+
+JOIN `where()`: a main-table key, bare or `'<mainTable>.<key>'` (e.g. `'posts.published'`); another table's field does not compile
 
 ## Adapters
 
