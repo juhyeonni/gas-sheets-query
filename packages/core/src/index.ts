@@ -36,13 +36,17 @@ export type {
   InferTablesFromConfig
 } from './core/types.js'
 
+// Schema sample wrappers (nullable / optional columns in defineSheetsDB)
+export { nullable, optional } from './core/schema-samples.js'
+export type { PrimitiveTypeSample, NullableSample, OptionalSample } from './core/schema-samples.js'
+
 // Core classes
 export { Repository } from './core/repository.js'
 export type { RepositoryOptions } from './core/repository.js'
 export { QueryBuilder, createQueryBuilder } from './core/query-builder.js'
-export type { AggSpec, AggResult, GroupedAggResult, HavingCondition } from './core/query-builder.js'
+export type { AggSpec, AggResult, GroupedAggResult, HavingCondition, NumericColumn } from './core/query-builder.js'
 export { JoinQueryBuilder, createJoinQueryBuilder } from './core/join-query-builder.js'
-export type { JoinConfig, StoreResolver } from './core/join-query-builder.js'
+export type { JoinConfig, StoreResolver, JoinWhereField, JoinWhereKey } from './core/join-query-builder.js'
 
 // SheetsDB factory functions
 export { createSheetsDB, defineSheetsDB } from './core/sheets-db.js'
@@ -64,6 +68,7 @@ export { deserializeColumnValue, deserializeRow } from './core/column-conversion
 // Index Store
 export { IndexStore, createIndexKey, serializeValues } from './core/index-store.js'
 export type { IndexDefinition } from './core/index-store.js'
+export { findWithIndexes } from './core/indexed-find.js'
 export { assertClientIdsAvailable } from './core/client-ids.js'
 
 // Errors
@@ -90,6 +95,10 @@ export {
 // Bounded retry with backoff for transient GAS failures (#136)
 export { withRetries, DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_BASE_DELAY_MS } from './core/gas-retry.js'
 export type { RetryOptions } from './core/gas-retry.js'
+
+// Time-budgeted chunked execution with a resume cursor (#136)
+export { runChunked, DEFAULT_CHUNK_BUDGET_MS, DEFAULT_CHUNK_SIZE } from './core/run-chunked.js'
+export type { RunChunkedOptions, RunChunkedResult, ChunkProgress } from './core/run-chunked.js'
 
 // Migration System
 export {

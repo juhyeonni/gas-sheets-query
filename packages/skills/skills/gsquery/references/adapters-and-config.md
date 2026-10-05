@@ -122,6 +122,7 @@ interface SheetsAdapterOptions {
   columnTypes?: Record<string, ColumnType>
   allowFormulas?: boolean           // default: false — see Formula safety
   skipHeaderCheck?: boolean         // default: false — see Header drift
+  patchCacheOnWrite?: boolean       // default: false — see Data caching
 }
 
 type ColumnType =
@@ -137,12 +138,14 @@ type ColumnType =
 
 ### Features
 
-- **Data caching**: `find`/`findAll` read the sheet once per execution; any write drops the cache; `findById` is served from it when warm (no sheet read); `update`/`delete` act on the live sheet using a per-instance id-to-row map verified under the lock. Per-call costs: cold `findAll` `N*C + C` cells; first `update` `N + C`, later `C`; first `delete` `N`, later 1; auto `insert` `N` once per instance, later 0; `batchUpdate` `N + span*C` (span = first to last matched row); `count` `N` cold (rows with a non-empty id), 0 warm; `batchDelete` `N` plus one `deleteRows` per contiguous run; 2 `flush()` per locked write (full table: Operations, "Measured Costs")
+- **Data caching**: `find`/`findAll` read the sheet once per execution; any write drops the cache (with `patchCacheOnWrite: true`, row writes patch a warm cache instead, unless a written value may be coerced by Sheets — e.g. a string with a digit — or an id maps to no or several cached rows; other executions' rows then appear only after `clearCache()`); `findById` is served from it when warm (no sheet read); `update`/`delete` act on the live sheet using a per-instance id-to-row map verified under the lock. Per-call costs: cold `findAll` `N*C + C` cells; first `update` `N + C`, later `C`; first `delete` `N`, later 1; auto `insert` `N` once per instance, later 0; `batchUpdate` `N + span*C` (span = first to last matched row); `count` `N` cold (rows with a non-empty id), 0 warm; `batchDelete` `N` plus one `deleteRows` per contiguous run; 2 `flush()` per locked write (full table: Operations, "Measured Costs")
 - **LockService**: Concurrent-safe auto-increment ID generation
 - **Column types**: Automatic serialization/deserialization (JSON for arrays/objects, booleans, dates)
 - **Auto-detect JSON**: Parses JSON strings in cells automatically
 - **Formula safety**: Strings starting with `=`, `+`, `-`, `@`, tab or CR are written as literal
-  text (Sheets would otherwise run them as formulas) and read back unchanged. Opt out per
+  text (Sheets would otherwise run them as formulas) and read back unchanged. Strings with k
+  leading apostrophes are written behind 2k+1 of them, so they also read back unchanged
+  (older cells with 2+ leading apostrophes read back with half of them, #201). Opt out per
   adapter with `allowFormulas: true` — script-authored formulas only, never user input.
 - **Header drift**: the mapping is positional, so every read and write checks once per execution
   that row 1 still matches `columns` and throws `SchemaMismatchError` (`SCHEMA_MISMATCH`) naming
