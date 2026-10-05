@@ -323,7 +323,7 @@ describe('runGenerate', () => {
       const clientContent = readFileSync(join(CLIENT_OUTPUT_DIR, 'client.ts'), 'utf-8')
       const indexContent = readFileSync(join(CLIENT_OUTPUT_DIR, 'index.ts'), 'utf-8')
 
-      expect(clientContent).toContain("import type { Tables } from './types.js'")
+      expect(clientContent).toContain("import type { Tables, CreateInputs } from './types.js'")
       expect(clientContent).not.toContain('@gsquery/client/generated')
       expect(indexContent).not.toContain('@gsquery/client/generated')
     })

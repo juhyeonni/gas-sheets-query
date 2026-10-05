@@ -129,13 +129,24 @@ tables:
 | Attribute | Description | Example |
 |-----------|-------------|---------|
 | `@id` | Primary key field | `id: number @id` |
-| `@default(value)` | Declared default value (documentation only — see below) | `active: boolean @default(true)` |
+| `@default(value)` | Default filled on insert (literals and `now`; `--client` only — see below) | `active: boolean @default(true)` |
 | `@unique` | Unique constraint (declarative only — not enforced at runtime) | `email: string @unique` |
-| `@updatedAt` | Declared update timestamp (documentation only — see below) | `updatedAt: datetime @updatedAt` |
+| `@updatedAt` | Timestamp stamped on insert and update (`--client` only — see below) | `updatedAt: datetime @updatedAt` |
 | `@relation(Table)` | Foreign key referencing another table's `id` — see below | `authorId: number @relation(User)` |
 
-:::warning `@default` and `@updatedAt` are not applied at runtime
-These attributes are parsed and carried through codegen as documentation of intent, but **no adapter applies them**: generated `create()` types still require the fields, and nothing auto-fills timestamps on update. Supply the values from your application code (e.g. `create({ ..., createdAt: new Date() })`). Runtime application is planned for a later release.
+:::info How `@default` and `@updatedAt` apply at runtime
+With `gsquery generate --client`, the generated schema carries each table's literal and `now` defaults and its `@updatedAt` fields, and `Repository` applies them on every write it makes, on the server and on the local-first client alike:
+
+- `create`, `batchInsert` and an `upsert` that inserts fill a defaulted field that is missing or `undefined`. A value you pass is kept, including `null`, `false`, `0` and `''`. `now` is a `Date`.
+- Every insert and update stamps `@updatedAt` fields with the current `Date`, unless you pass a value. Updates never apply defaults.
+- Every row of one call gets the same instant.
+- The generated `<Table>CreateInput` makes these fields optional, so `create({ title })` type-checks. The row interface is unchanged.
+
+Limits:
+
+- **Literals and `now` only.** `@default(autoincrement)`, `@default(uuid)` and `@default(cuid)` are not applied to non-id fields, so such a field stays required. The `id` is never filled by `@default`: `idMode` owns ids.
+- **`Repository` only.** Writes made directly through an adapter get nothing.
+- **`--client` only.** The default `generate` output (without `--client`) and `defineSheetsDB` apply nothing.
 :::
 
 ### `@relation(Table)`
