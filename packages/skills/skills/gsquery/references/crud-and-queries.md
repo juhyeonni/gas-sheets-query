@@ -21,7 +21,7 @@ const db = defineSheetsDB({
 })
 ```
 
-**Type inference**: `columns: [...] as const` + `types: { field: sampleValue }` infers row types automatically. Sample values: `''` → string, `0` → number, `true` → boolean, `null` → null, `new Date()` → Date.
+**Type inference**: `columns: [...] as const` + `types: { field: sampleValue }` infers row types automatically. Sample values: `''` → string, `0` → number, `true` → boolean, `null` → null, `new Date()` → Date. For a column that may be empty, wrap the sample (both exported from `@gsquery/core`): `nullable('')` → `string | null`, `optional('')` → optional key `field?: string`, `optional(nullable(0))` → `field?: number | null`. Prefer `nullable(...)` over a bare `null` sample, which infers the unusable type `null`.
 
 ## createSheetsDB (Legacy API)
 
@@ -90,7 +90,7 @@ users.batchDelete([1, 2, 99])  // number — rows deleted; missing ids skipped
 // Access underlying Repository and QueryBuilder
 users.repo             // Repository<T>
 users.query()          // QueryBuilder<T>
-users.joinQuery()      // JoinQueryBuilder<T>
+users.joinQuery()      // JoinQueryBuilder<T, 'users'>
 ```
 
 ## Repository — Extended CRUD
@@ -169,7 +169,7 @@ Multiple `.where()` calls use AND logic.
 .max(field)      // number | null — returns null for empty
 ```
 
-These ignore limit/offset.
+These ignore limit/offset. `field` must be a numeric column (`number`, `number | null`, optional `number`); a string-only or unknown column does not compile.
 
 ### Utility Methods
 

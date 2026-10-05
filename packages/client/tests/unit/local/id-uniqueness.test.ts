@@ -1,11 +1,12 @@
 /**
- * LocalAdapter side of the client-mode id uniqueness parity suite (#154).
+ * LocalAdapter-only obligations of client-mode id uniqueness (#154).
  *
- * The scenario list mirrors `packages/core/tests/unit/id-uniqueness-parity.test.ts`,
- * which pins MockAdapter and SheetsAdapter to the same contract. LocalAdapter
- * adds two obligations of its own: a rejected insert must not enqueue a
- * mutation (it would be pushed to the server and bounce into the dead-letter
- * flow) and must not write to IndexedDB.
+ * The contract every adapter shares (a taken id throws DuplicateIdError, 7 and
+ * '7' collide, a rejected batch writes nothing, ...) is a clause of the
+ * conformance suite in `datastore-conformance.test.ts` (#195). LocalAdapter
+ * adds obligations of its own: the error names the table, and a rejected
+ * insert must not enqueue a mutation (it would be pushed to the server and
+ * bounce into the dead-letter flow) or write to IndexedDB.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { LocalAdapter } from '../../../src/local/local-adapter.js'
@@ -27,37 +28,17 @@ function createMemoryStorage(): MutationStorage {
   }
 }
 
-function createAdapter(
-  seed: Counter[] = [],
-  idMode: 'client' | 'auto' = 'client'
-): LocalAdapter<Counter> {
+function createAdapter(seed: Counter[] = []): LocalAdapter<Counter> {
   return new LocalAdapter<Counter>({
     tableName: 'Counter',
-    idMode,
+    idMode: 'client',
     initialData: seed,
     disableIDB: true,
     mutationStorage: createMemoryStorage(),
   })
 }
 
-const ids = (adapter: LocalAdapter<Counter>): string[] =>
-  adapter.findAll().map(row => String(row.id))
-
 describe('LocalAdapter client-mode id uniqueness [#154]', () => {
-  it('insert() rejects an id that already exists', () => {
-    const adapter = createAdapter([{ id: 'a', value: 1 }])
-
-    expect(() => adapter.insert({ id: 'a', value: 2 })).toThrow(DuplicateIdError)
-    expect(ids(adapter)).toEqual(['a'])
-  })
-
-  it('insert() matches ids across string/number representations', () => {
-    const adapter = createAdapter([{ id: 7, value: 1 }])
-
-    expect(() => adapter.insert({ id: '7', value: 2 })).toThrow(DuplicateIdError)
-    expect(ids(adapter)).toEqual(['7'])
-  })
-
   it('carries the offending id, the table name and a stable error code', () => {
     const adapter = createAdapter([{ id: 'a', value: 1 }])
 
@@ -70,72 +51,6 @@ describe('LocalAdapter client-mode id uniqueness [#154]', () => {
       expect((error as DuplicateIdError).code).toBe('DUPLICATE_ID')
       expect((error as DuplicateIdError).tableName).toBe('Counter')
     }
-  })
-
-  it('batchInsert() writes nothing when one id already exists', () => {
-    const adapter = createAdapter([{ id: 'a', value: 1 }])
-
-    expect(() =>
-      adapter.batchInsert([
-        { id: 'b', value: 2 },
-        { id: 'a', value: 3 },
-      ])
-    ).toThrow(DuplicateIdError)
-    expect(ids(adapter)).toEqual(['a'])
-  })
-
-  it('batchInsert() rejects ids duplicated within the same batch', () => {
-    const adapter = createAdapter()
-
-    expect(() =>
-      adapter.batchInsert([
-        { id: 'a', value: 1 },
-        { id: 'a', value: 2 },
-      ])
-    ).toThrow(DuplicateIdError)
-    expect(ids(adapter)).toEqual([])
-  })
-
-  it('batchInsert() writes nothing when a later item omits its id', () => {
-    const adapter = createAdapter()
-
-    expect(() =>
-      adapter.batchInsert([
-        { id: 'a', value: 1 },
-        { value: 2 } as Omit<Counter, 'id'>,
-      ])
-    ).toThrow(/ID is required/)
-    expect(ids(adapter)).toEqual([])
-  })
-
-  it('still accepts distinct ids', () => {
-    const adapter = createAdapter()
-
-    adapter.insert({ id: 'a', value: 1 })
-    adapter.batchInsert([
-      { id: 'b', value: 2 },
-      { id: 'c', value: 3 },
-    ])
-
-    expect(ids(adapter)).toEqual(['a', 'b', 'c'])
-  })
-
-  it('frees an id again after the row is deleted', () => {
-    const adapter = createAdapter([{ id: 'a', value: 1 }])
-
-    expect(adapter.delete('a')).toBe(true)
-    expect(() => adapter.insert({ id: 'a', value: 2 })).not.toThrow()
-    expect(adapter.findById('a')?.value).toBe(2)
-  })
-
-  it('leaves auto mode unaffected: caller ids are ignored, not rejected', () => {
-    const adapter = createAdapter([], 'auto')
-
-    adapter.insert({ id: 1, value: 1 })
-    adapter.insert({ id: 1, value: 2 })
-    adapter.batchInsert([{ id: 1, value: 3 }])
-
-    expect(ids(adapter)).toEqual(['1', '2', '3'])
   })
 
   // ── MutationQueue ───────────────────────────────────────────────────

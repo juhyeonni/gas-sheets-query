@@ -68,7 +68,20 @@ const orderDetails = db.from('orders').joinQuery()
 
 ### Where/Sort/Pagination in JoinQueryBuilder
 
-Same API as QueryBuilder:
+`where()` filters the main table only. The field is a main-table key, bare or as `<mainTable>.<key>`, and the value is typed by that key:
+
+```ts
+const posts = db.from('posts').joinQuery()   // JoinQueryBuilder<Post, 'posts'>
+posts.where('status', '=', 'published')        // OK
+posts.where('posts.status', '=', 'published')  // OK: same filter
+posts.where('posts.status', '=', 1)            // compile error: string column
+posts.where('nope', '=', 'x')                  // compile error: unknown key
+posts.where('users.name', '=', 'Alice')        // compile error: not the main table
+```
+
+A builder annotated `JoinQueryBuilder<Post>` (no table name) accepts any prefix before a valid key at compile time; a prefix other than the main table's name throws at runtime.
+
+The rest is the same API as QueryBuilder:
 
 ```ts
 .where(field, operator, value)
@@ -91,7 +104,7 @@ Same API as QueryBuilder:
 .count()         // number
 .exists()        // boolean
 .build()         // QueryOptions<T>
-.clone()         // JoinQueryBuilder<T>
+.clone()         // JoinQueryBuilder<T, TName>
 ```
 
 ### JoinConfig Type
@@ -117,12 +130,21 @@ Groups are returned in the order their first row appears in the query result, so
 ### Aggregation Specs
 
 ```ts
-type AggSpec =
-  | 'count'            // count rows in group
-  | `sum:${string}`    // sum of field
-  | `avg:${string}`    // average of field
-  | `min:${string}`    // minimum of field
-  | `max:${string}`    // maximum of field
+type AggSpec<F extends string = string> =
+  | 'count'       // count rows in group
+  | `sum:${F}`    // sum of field
+  | `avg:${F}`    // average of field
+  | `min:${F}`    // minimum of field
+  | `max:${F}`    // maximum of field
+```
+
+In `agg()`, `F` is `NumericColumn<T>`: the columns whose type can hold a number (`number`, `number | null`, optional `number`). `sum()`/`avg()`/`min()`/`max()` take the same columns. An unknown or string-only column always aggregates to 0 or null, so it does not compile:
+
+```ts
+q.agg({ total: 'sum:amount' })     // OK
+q.agg({ total: 'sum:amout' })      // compile error: unknown column
+q.agg({ total: 'sum:status' })     // compile error: string column
+q.sum('status')                    // compile error: string column
 ```
 
 ### Basic Aggregation
@@ -149,8 +171,10 @@ const stats = db.from('orders').query()
     avgAmount: 'avg:amount',
     maxAmount: 'max:amount',
   })
-// Result: { category: string; count: number; totalAmount: number; avgAmount: number; maxAmount: number }[]
+// Result: { category: unknown; count: number; totalAmount: number; avgAmount: number; maxAmount: number }[]
 ```
+
+The result type has the `groupBy()` keys (values typed `unknown`) and the spec names only: `stats[0].status` does not compile. Without `groupBy()`, `agg()` returns one row with only the spec names. A second `groupBy()` call replaces the keys.
 
 ### Grouped Aggregation with Having
 
@@ -165,6 +189,8 @@ const topCategories = db.from('orders').query()
 // Only groups where totalAmount > 1000
 ```
 
+Each `having()` alias must be an `agg()` spec name. Otherwise `agg()` throws a `SheetsQueryError` (code `UNKNOWN_AGGREGATION`) naming the alias, before reading rows, with or without `groupBy()`. Without `groupBy()`, a valid `having()` is ignored.
+
 ### Multi-field GroupBy
 
 ```ts
@@ -174,18 +200,22 @@ const byRegionAndCategory = db.from('orders').query()
     count: 'count',
     total: 'sum:amount',
   })
-// Result: { region: string; category: string; count: number; total: number }[]
+// Result: { region: unknown; category: unknown; count: number; total: number }[]
 ```
 
 ## Anti-Patterns
 
 ```ts
-// WRONG: calling agg() without groupBy — agg requires grouped data
-db.from('orders').query().agg({ count: 'count' })
-// RIGHT: use single-value aggregation methods for ungrouped
-db.from('orders').query().sum('amount')
+// WRONG: aggregating a string column — does not compile (it would always be 0)
+db.from('orders').query().agg({ total: 'sum:status' })
+// RIGHT: aggregate a numeric column
+db.from('orders').query().agg({ total: 'sum:amount' })
 
-// WRONG: having() without matching agg name
+// WRONG: prefixing a joined table's field in where() — does not compile
+db.from('posts').joinQuery().join('users', 'authorId').where('users.name', '=', 'Alice')
+// RIGHT: filter the main table in where(), joined data after exec()
+
+// WRONG: having() without matching agg name — agg() throws SheetsQueryError
 .groupBy('cat').having('total', '>', 100).agg({ count: 'count' })
 // RIGHT: having aggName must match an agg key
 .groupBy('cat').having('total', '>', 100).agg({ total: 'sum:amount' })

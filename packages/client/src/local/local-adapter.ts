@@ -19,7 +19,7 @@ import type {
 } from '@gsquery/core'
 import {
   IndexStore,
-  applyQuery,
+  findWithIndexes,
   deserializeRow,
   assertClientIdsAvailable,
 } from '@gsquery/core'
@@ -236,44 +236,12 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   // ── DataStore<T> implementation ────────────────────────────────────
 
-  /** Map indexed row ids to row positions in scan order. */
-  private positionsOf(keys: (string | number)[]): number[] {
-    const positions: number[] = []
-    for (const key of keys) {
-      const pos = this.idIndex.get(key)
-      if (pos === undefined) {
-        throw new Error(`IndexStore out of sync: id ${String(key)} not in idIndex`)
-      }
-      positions.push(pos)
-    }
-    return positions.sort((x, y) => x - y)
-  }
-
   findAll(): T[] {
     return [...this.data]
   }
 
   find(options: QueryOptions<T>): T[] {
-    let candidateIndices: number[] | undefined
-    let remainingConditions = options.where
-
-    if (options.where.length > 0) {
-      const narrowed = this.indexStore.candidates(options.where)
-      if (narrowed !== undefined) {
-        candidateIndices = this.positionsOf(narrowed.keys)
-        remainingConditions = narrowed.remaining
-      }
-    }
-
-    let candidates: T[] = this.data
-    if (candidateIndices !== undefined) {
-      candidates = []
-      for (const idx of candidateIndices) {
-        candidates.push(this.data[idx])
-      }
-    }
-
-    return applyQuery(candidates, remainingConditions, options)
+    return findWithIndexes(this.data, this.idIndex, this.indexStore, options)
   }
 
   findById(id: string | number): T | undefined {
