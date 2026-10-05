@@ -86,6 +86,10 @@ export {
 export { withRetries, DEFAULT_RETRY_ATTEMPTS, DEFAULT_RETRY_BASE_DELAY_MS } from './core/gas-retry.js'
 export type { RetryOptions } from './core/gas-retry.js'
 
+// Time-budgeted chunked execution with a resume cursor (#136)
+export { runChunked, DEFAULT_CHUNK_BUDGET_MS, DEFAULT_CHUNK_SIZE } from './core/run-chunked.js'
+export type { RunChunkedOptions, RunChunkedResult, ChunkProgress } from './core/run-chunked.js'
+
 // Migration System
 export {
   MigrationRunner,

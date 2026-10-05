@@ -5,13 +5,10 @@
  * deserialization that turns raw transport/sheet values into the runtime types
  * the generated models declare (`datetime` -> `Date`, `string[]` -> array, ...).
  *
- * Used by the local-first client (#135) so that rows arriving from a sync pull
- * get the same treatment as rows read through SheetsAdapter.
- *
- * TODO: SheetsAdapter still carries a private copy of this logic
- * (`deserializeByType`). It should delegate here once the in-flight
- * serialization work on that file lands, so there is exactly one
- * implementation.
+ * This is the single implementation. SheetsAdapter's row reader converts each
+ * typed cell through {@link deserializeColumnValue} (#156), and the local-first
+ * client (#135) applies {@link deserializeRow} to rows arriving from a sync
+ * pull, so both paths give the same result.
  */
 import type { ColumnType } from '../adapters/sheets-adapter.js'
 
