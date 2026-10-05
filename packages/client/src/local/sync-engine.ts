@@ -13,6 +13,8 @@ import type {
   PoisonedMutationAction,
   PoisonedMutationHandler,
   RejectedMutationIds,
+  RowVersion,
+  RowVersions,
 } from './sync-transport.js'
 import type { LocalAdapter } from './local-adapter.js'
 import type { MutationQueue } from './mutation-queue.js'
@@ -201,6 +203,31 @@ interface SyncQueue {
   clearForRows(ids: Set<string | number>, maxSeq?: number): void
   purgeCancelled(maxSeq?: number): void
   push(type: 'insert' | 'update' | 'delete', id: string | number, data?: Partial<RowWithId>): void
+  replaceKnownVersions(versions: RowVersions): void
+  rebaseRows(
+    updates: ReadonlyMap<string | number, RowVersion | undefined>,
+    afterSeq?: number
+  ): void
+}
+
+/**
+ * Read one row's version from a server-reported record. Defensive: the record
+ * crosses an untyped boundary, and only an own string/number entry counts (an
+ * id such as `constructor` must not pick up an inherited property).
+ */
+function readVersion(
+  versions: RowVersions | undefined,
+  id: string | number
+): RowVersion | undefined {
+  if (typeof versions !== 'object' || versions === null) return undefined
+  const key = String(id)
+  if (!Object.prototype.hasOwnProperty.call(versions, key)) return undefined
+  return toRowVersion(versions[key])
+}
+
+/** A server-reported version, or `undefined` when it is not a valid one */
+function toRowVersion(value: unknown): RowVersion | undefined {
+  return typeof value === 'string' || typeof value === 'number' ? value : undefined
 }
 
 interface TableBinding {
@@ -636,8 +663,24 @@ export class SyncEngine {
         : new Set()
 
     const conflicts = result.conflicts ?? []
+    const conflictIds = new Set(conflicts.map(c => c.id))
+
+    // The versions this push wrote become the known versions, and edits of
+    // those rows made while the push was in flight are rebased onto them. A
+    // settled row the server reported no version for is forgotten: its next
+    // edit goes out without a base, so the client's own write never raises a
+    // false conflict (#138). Conflicted rows move their base below instead.
+    const batchIds = new Set(merged.map(m => m.id))
+    const settledVersions = new Map<string | number, RowVersion | undefined>()
+    for (const id of settledIds) {
+      if (batchIds.has(id) && !conflictIds.has(id)) {
+        settledVersions.set(id, readVersion(result.versions, id))
+      }
+    }
+    binding.queue.rebaseRows(settledVersions, boundary)
+
     if (conflicts.length > 0) {
-      this.resolveConflicts(binding, conflicts, settledIds)
+      this.resolveConflicts(binding, conflicts, settledIds, boundary)
     }
 
     binding.queue.clearForRows(settledIds, boundary)
@@ -677,15 +720,35 @@ export class SyncEngine {
   private resolveConflicts(
     binding: TableBinding,
     conflicts: ConflictItem[],
-    settledIds: Set<string | number>
+    settledIds: Set<string | number>,
+    boundary: number
   ): void {
+    // Resolving a conflict moves the row's base to the server's version, so
+    // neither the re-push nor the next edit is rejected again for the same
+    // reason (#138). Collected into one rebase, so the queue is walked and
+    // persisted once per push rather than once per conflict (#237); for a
+    // repeated id the last conflict wins, as it does for the row itself.
+    const rebase = new Map<string | number, RowVersion | undefined>()
+    for (const conflict of conflicts) {
+      rebase.set(conflict.id, toRowVersion(conflict.serverVersion))
+    }
+
     if (this.conflictStrategy === 'client-wins') {
       // Keep the local row *and* its mutation, so the next push re-sends it;
       // clearing it would let the next pull overwrite the local edit with the
-      // server version (#110). Nothing changes locally, so nothing is written.
+      // server version (#110). The kept mutation is rebased onto the server's
+      // version, or the re-push would conflict forever. Nothing changes
+      // locally, so nothing is written.
+      binding.queue.rebaseRows(rebase)
       for (const conflict of conflicts) settledIds.delete(conflict.id)
       return
     }
+
+    // The resolution replaces the local row with one built on the server's
+    // version: adopt it, and rebase edits made while the push was in flight.
+    // Done before the custom resolver's mutations below are enqueued, so they
+    // are stamped with it.
+    binding.queue.rebaseRows(rebase, boundary)
 
     const rows = binding.adapter.getRawData()
     const positions = new Map<string | number, number>()
@@ -736,7 +799,7 @@ export class SyncEngine {
     const binding = this.tables.get(tableName)
     if (!binding) return
 
-    const { rows } = await this.transport.pull<RowWithId>(tableName)
+    const { rows, versions } = await this.transport.pull<RowWithId>(tableName)
 
     // If there are pending local mutations, apply them on top of server data
     const merged = binding.queue.getMerged()
@@ -762,6 +825,13 @@ export class SyncEngine {
       binding.adapter.replaceAll(Array.from(serverMap.values()))
     } else {
       binding.adapter.replaceAll(rows)
+    }
+
+    // The pulled versions become the known versions that new edits are stamped
+    // with (#138). Already-queued mutations keep their stamps: they were built
+    // on the older version. A pull without versions leaves them untouched.
+    if (typeof versions === 'object' && versions !== null) {
+      binding.queue.replaceKnownVersions(versions)
     }
 
     this.emit({ type: 'pull-complete', table: tableName, pulledCount: rows.length })
