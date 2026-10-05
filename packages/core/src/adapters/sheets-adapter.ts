@@ -45,6 +45,13 @@ const FORMULA_TRIGGER_CHARS = ['=', '+', '-', '@', '\t', '\r']
 /** Prefix that forces Sheets to store a written cell as literal text. */
 const TEXT_PREFIX = "'"
 
+/** Number of {@link TEXT_PREFIX} characters at the start of `value`. */
+function countLeadingTextPrefixes(value: string): number {
+  let count = 0
+  while (count < value.length && value.charAt(count) === TEXT_PREFIX) count++
+  return count
+}
+
 /**
  * Maximum characters Google Sheets stores in one cell.
  *
@@ -427,11 +434,22 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   }
 
   /**
-   * Prefix a string that Sheets would otherwise parse as a formula with the
-   * plain-text marker, so it is stored as the literal text it is (#130).
+   * Encode a string so Sheets stores it as the literal text it is (#130, #201).
    *
-   * A value already starting with the marker is escaped too, so it survives
-   * the round trip instead of losing its first character to the parser.
+   * - A string starting with a formula trigger is written behind one
+   *   plain-text marker: `=note` → `'=note`.
+   * - A string starting with k ≥ 1 apostrophes is written behind 2k+1 of
+   *   them: `'=note` → `'''=note`, `''` → `'''''`.
+   * - Anything else is written as is.
+   *
+   * The doubling makes the encoding independent of how the store treats the
+   * marker. Real Sheets parses the write and drops one leading apostrophe
+   * (2k+1 → 2k); the testing fakes, a cell pre-formatted as plain text and an
+   * imported CSV keep the text verbatim (2k+1). Both decode back to k in
+   * {@link unescapeCellValue}, and neither can start with a trigger. The old
+   * scheme wrote one marker in front of an apostrophe, so `'=note` was stored
+   * by real Sheets as `'=note` and read back as `=note`, a character short.
+   *
    * Non-strings are returned untouched — numbers, booleans and Dates cannot
    * open a formula.
    */
@@ -439,30 +457,42 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     if (this.allowFormulas) return value
     if (typeof value !== 'string' || value.length === 0) return value
 
-    const first = value.charAt(0)
-    if (first === TEXT_PREFIX || FORMULA_TRIGGER_CHARS.indexOf(first) !== -1) {
+    const leading = countLeadingTextPrefixes(value)
+    if (leading > 0) {
+      return TEXT_PREFIX.repeat(leading + 1) + value
+    }
+    if (FORMULA_TRIGGER_CHARS.indexOf(value.charAt(0)) !== -1) {
       return TEXT_PREFIX + value
     }
     return value
   }
 
   /**
-   * Inverse of {@link escapeCellValue}.
+   * Inverse of {@link escapeCellValue}, for both storage modes.
    *
-   * Real Sheets consumes the marker while parsing the write, so escaped cells
-   * usually come back already unescaped and this is a no-op. Stores that keep
-   * the written text verbatim (the testing fakes, a cell pre-formatted as
-   * plain text, an imported CSV) hand the marker back, and it is dropped here.
-   * The marker is only honored in front of a character that would have needed
-   * escaping, so an apostrophe belonging to the data (`"'quoted"`) is kept.
+   * - n ≥ 2 leading apostrophes decode to floor(n/2) of them plus the rest
+   *   (2k+1 from a verbatim store and 2k from real Sheets both give k).
+   * - Exactly one apostrophe is dropped only when a formula trigger follows
+   *   it: a verbatim store handing back the marker of an escaped trigger
+   *   string. On real Sheets that marker is already gone.
+   * - Anything else is returned as is, so a lone apostrophe that belongs to
+   *   the data (`"'quoted"`) is kept.
+   *
+   * Legacy limit: cells written by the old scheme with 0 or 1 leading
+   * apostrophes decode as before. An older cell with two or more (the old
+   * escape of an apostrophe-led string, kept verbatim) now decodes to half of
+   * them; repairing it would need the storage mode, which the adapter cannot
+   * know.
    */
   private unescapeCellValue(value: unknown): unknown {
     if (this.allowFormulas) return value
-    if (typeof value !== 'string' || value.length < 2) return value
-    if (value.charAt(0) !== TEXT_PREFIX) return value
+    if (typeof value !== 'string') return value
 
-    const next = value.charAt(1)
-    if (next === TEXT_PREFIX || FORMULA_TRIGGER_CHARS.indexOf(next) !== -1) {
+    const leading = countLeadingTextPrefixes(value)
+    if (leading >= 2) {
+      return TEXT_PREFIX.repeat(Math.floor(leading / 2)) + value.slice(leading)
+    }
+    if (leading === 1 && FORMULA_TRIGGER_CHARS.indexOf(value.charAt(1)) !== -1) {
       return value.slice(1)
     }
     return value
