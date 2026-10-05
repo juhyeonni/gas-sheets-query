@@ -108,6 +108,8 @@ new GasApiTransport({ pullFn: 'syncPull', pushFn: 'syncPush' })  // GAS function
 
 The GAS side exposes `syncPull(tableName)` / `syncPush(tableName, mutations)` handlers backed by `SheetsAdapter` (typically with `idMode: 'client'`, since the browser generates IDs).
 
+`syncPush` receives the mutations JSON-encoded, the same on both paths: `datetime` values arrive as ISO-8601 strings (`Date.prototype.toISOString()`), whether the push went over `google.script.run` or the REST endpoint, and keys whose value is `undefined` are absent. (`google.script.run` rejects any parameter holding a `Date`, so the transport encodes before calling it.) `SheetsAdapter` stores such strings correctly, and the local rows and queue keep their `Date` objects — only the wire form changes.
+
 ### Routing context
 
 When one backend serves several spreadsheets (for example one per team), the server has to know which one a sync request is for. Pass a `context` and the transport sends it on every pull and push:
