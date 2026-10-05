@@ -121,7 +121,8 @@ const store = new SheetsAdapter<User>({
     metadata: 'json'
   },
   allowFormulas: false,            // default: false, see Formula Safety below
-  skipHeaderCheck: false           // default: false, see Header Drift below
+  skipHeaderCheck: false,          // default: false, see Header Drift below
+  patchCacheOnWrite: false         // default: false, see Caching below
 })
 ```
 
@@ -207,6 +208,13 @@ store.findAll()    // reads from sheet again
 // Manually clear all caches (sheet refs + data)
 store.clearCache()
 ```
+
+With `patchCacheOnWrite: true`, row writes patch a warm cache with what they
+wrote instead of dropping it, so an insert + `findAll` loop reads the table once.
+Rows written by other executions then appear only after `clearCache()` or in a
+new execution, and a value Sheets may coerce (such as a string containing a
+digit) still drops the cache. See
+[Patching the cache on write](./operations.md#patching-the-cache-on-write-patchcacheonwrite).
 
 See [Operations](./operations.md) for the real read and write costs per operation.
 

@@ -142,7 +142,8 @@ const ZERO: Cost = { reads: 0, cells: 0, setValues: 0, appendRow: 0, deleteRow: 
 function seed(
   rowCount: number,
   idMode: 'auto' | 'client' = 'auto',
-  warm = true
+  warm = true,
+  options: { patchCacheOnWrite?: boolean } = {}
 ): { adapter: SheetsAdapter<Row>; recorder: Recorder; sheet: FakeSheet } {
   const rows: unknown[][] = [COLUMNS]
   for (let i = 1; i <= rowCount; i++) rows.push([i, `user-${i}`, i * 10])
@@ -157,7 +158,8 @@ function seed(
     spreadsheetId: SPREADSHEET_ID,
     sheetName: SHEET_NAME,
     columns: COLUMNS,
-    idMode
+    idMode,
+    ...options
   })
   const recorder = recordRangeCalls(sheet)
 
@@ -393,6 +395,25 @@ describe('SheetsAdapter cost budget [#218]', () => {
     after.recorder.clear()
     after.adapter.findAll()
     expect(cost(after.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C })
+  })
+
+  it.each([100, 1000, 5000])('findAll after a patched write (patchCacheOnWrite) at N=%i [#236]', N => {
+    // Not update: it rewrites the whole row, and the seeded `user-<n>` names
+    // contain digits, which Sheets may coerce, so it drops the cache instead.
+    const patched = seed(N, 'auto', true, { patchCacheOnWrite: true })
+    patched.adapter.insert({ name: 'new', score: 1 })
+    patched.adapter.batchInsert([{ name: 'more', score: 2 }, { name: 'most', score: 3 }])
+    patched.adapter.delete(1)
+    patched.recorder.clear()
+
+    expect(patched.adapter.findAll()).toHaveLength(N + 2)
+    expect(cost(patched.recorder)).toEqual(ZERO)
+
+    const dropped = seed(N, 'auto', true, { patchCacheOnWrite: true })
+    dropped.adapter.update(1, { score: 0 })
+    dropped.recorder.clear()
+    dropped.adapter.findAll()
+    expect(cost(dropped.recorder)).toEqual({ ...ZERO, reads: 1, cells: N * C })
   })
 })
 
