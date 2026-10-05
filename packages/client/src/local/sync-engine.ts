@@ -232,7 +232,15 @@ export class SyncEngine {
   private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null
   private disposed = false
   private readonly pushDebounceMs: number
-  private syncing = false
+  /** Operations (sync/push/pull, explicit or background) started but not settled */
+  private pendingOps = 0
+  /** sync() passes started but not settled, queued ones included */
+  private activeSyncPasses = 0
+  /**
+   * Explicit sync() passes that are queued but have not started yet, by scope
+   * (`undefined` = all tables). A caller arriving before one starts shares it.
+   */
+  private readonly queuedSyncs = new Map<string | undefined, Promise<void>>()
   private opChain: Promise<unknown> = Promise.resolve()
 
   private readonly maxRetries: number
@@ -301,7 +309,27 @@ export class SyncEngine {
     return run
   }
 
-  /** Full sync: push first (preserve local changes), then pull */
+  /**
+   * Count an operation as in flight from the moment it is called until it
+   * settles, so `isSyncing` covers every sync/push/pull — including the time
+   * spent waiting behind earlier operations.
+   */
+  private track<T>(start: () => Promise<T>): Promise<T> {
+    this.pendingOps += 1
+    return start().finally(() => {
+      this.pendingOps -= 1
+    })
+  }
+
+  /**
+   * Full sync: push first (preserve local changes), then pull.
+   *
+   * A call made while another pass is running does not join it: the running
+   * pass snapshotted its batch before the caller's latest writes, so it would
+   * resolve without having pushed them. Instead every such call for the same
+   * scope shares one pass queued after it, and resolves (or rejects) with that
+   * pass.
+   */
   async sync(tableName?: string): Promise<void> {
     return this.runSync(tableName, false)
   }
@@ -313,50 +341,72 @@ export class SyncEngine {
 
   /** Pull server data to local */
   async pull(tableName?: string): Promise<void> {
-    await this.serialize(() =>
-      this.runTables(tableName, false, name => this.pullTable(name))
+    await this.track(() =>
+      this.serialize(() =>
+        this.runTables(tableName, false, name => this.pullTable(name))
+      )
     )
   }
 
-  private async runSync(tableName: string | undefined, background: boolean): Promise<void> {
-    // Flag is set synchronously so overlapping sync() calls still drop rather
-    // than queue up — auto-sync ticks must not pile up behind a slow transport.
-    if (this.syncing) return
-    this.syncing = true
+  private runSync(tableName: string | undefined, background: boolean): Promise<void> {
+    if (background) {
+      // Auto-sync ticks skip while any pass is running or queued: nobody awaits
+      // them, and they must not pile up behind a slow transport — the next tick
+      // covers whatever this one would have done.
+      if (this.activeSyncPasses > 0) return Promise.resolve()
+    } else {
+      // A pass for this scope that has not started yet will push everything
+      // written so far, so this caller can share it.
+      const queued = this.queuedSyncs.get(tableName)
+      if (queued) return queued
+    }
 
-    return this.serialize(async () => {
-      try {
-        this.emit({ type: 'sync-start', table: tableName })
-
-        const outcome = await this.runTables(tableName, background, async name => {
-          await this.pushTable(name)
-          await this.pullTable(name)
-        })
-
-        // Failures never reach this point — they were reported as per-table
-        // 'error' events and raised as a SyncError. What is left is a pass in
-        // which nothing failed, which is only *complete* if nothing was left
-        // out either: a table skipped by backoff synced no data, and reporting
-        // that as a completed sync turned "all changes saved" green while the
-        // network was down (#173).
-        if (outcome.deferred.length > 0) {
-          this.emit({
-            type: 'sync-deferred',
-            table: tableName,
-            deferredTables: outcome.deferred,
-          })
-        } else {
-          this.emit({ type: 'sync-complete', table: tableName })
-        }
-      } finally {
-        this.syncing = false
-      }
+    this.activeSyncPasses += 1
+    const pass: Promise<void> = this.track(() =>
+      this.serialize(() => {
+        // The pass starts now. A write made after this point may miss its
+        // snapshot, so later callers must queue a pass of their own.
+        if (this.queuedSyncs.get(tableName) === pass) this.queuedSyncs.delete(tableName)
+        return this.runSyncPass(tableName, background)
+      })
+    ).finally(() => {
+      this.activeSyncPasses -= 1
     })
+
+    if (!background) this.queuedSyncs.set(tableName, pass)
+    return pass
+  }
+
+  private async runSyncPass(tableName: string | undefined, background: boolean): Promise<void> {
+    this.emit({ type: 'sync-start', table: tableName })
+
+    const outcome = await this.runTables(tableName, background, async name => {
+      await this.pushTable(name)
+      await this.pullTable(name)
+    })
+
+    // Failures never reach this point — they were reported as per-table
+    // 'error' events and raised as a SyncError. What is left is a pass in
+    // which nothing failed, which is only *complete* if nothing was left
+    // out either: a table skipped by backoff synced no data, and reporting
+    // that as a completed sync turned "all changes saved" green while the
+    // network was down (#173).
+    if (outcome.deferred.length > 0) {
+      this.emit({
+        type: 'sync-deferred',
+        table: tableName,
+        deferredTables: outcome.deferred,
+      })
+    } else {
+      this.emit({ type: 'sync-complete', table: tableName })
+    }
   }
 
   private async runPush(tableName: string | undefined, background: boolean): Promise<void> {
-    await this.serialize(() =>
-      this.runTables(tableName, background, name => this.pushTable(name))
+    await this.track(() =>
+      this.serialize(() =>
+        this.runTables(tableName, background, name => this.pushTable(name))
+      )
     )
   }
 
@@ -765,9 +815,12 @@ export class SyncEngine {
     }
   }
 
-  /** Check if currently syncing */
+  /**
+   * Whether any sync(), push() or pull() — explicit or background — has been
+   * called and not yet settled, including time spent queued behind another.
+   */
   get isSyncing(): boolean {
-    return this.syncing
+    return this.pendingOps > 0
   }
 
   /** Cleanup */

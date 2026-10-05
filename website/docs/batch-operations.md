@@ -125,6 +125,14 @@ repo.batchDelete([...])
 
 If an adapter doesn't implement the optional `batchInsert`, `batchUpdate` or `batchDelete` methods, the Repository falls back to sequential individual operations automatically (`batchDelete` counts the `delete` calls that removed a row).
 
+## Jobs Longer Than One Execution
+
+Each batch call is all-or-nothing and runs in one execution. For a job that may
+not finish inside Apps Script's 6-minute limit, wrap the batch call in
+`runChunked`: it writes in chunks, stops before the deadline and returns a
+cursor to resume from. See
+[Operations: Long Jobs](./operations.md#long-jobs-and-the-6-minute-ceiling).
+
 ---
 
 ## See Also

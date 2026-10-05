@@ -19,14 +19,62 @@ import type {
 } from '@gsquery/core'
 import {
   IndexStore,
-  applyQuery,
+  findWithIndexes,
   deserializeRow,
   assertClientIdsAvailable,
 } from '@gsquery/core'
 import type { IndexDefinition, ColumnType } from '@gsquery/core'
 import { MutationQueue } from './mutation-queue.js'
 import type { MutationInput, MutationStorage } from './mutation-queue.js'
+import type { MergedMutation } from './sync-transport.js'
 import { composeName } from './naming.js'
+
+/**
+ * Rejection of {@link openSharedIDB} when the version upgrade is blocked by
+ * another open connection to the same database (#120). Internal: callers that
+ * fall back to memory-only use it to tell this cause apart and warn.
+ */
+export class IDBUpgradeBlockedError extends Error {
+  constructor(readonly dbName: string) {
+    super(
+      `IndexedDB upgrade for "${dbName}" is blocked by another open connection ` +
+        `(another tab, or a client DB that was never closed)`
+    )
+    this.name = 'IDBUpgradeBlockedError'
+  }
+}
+
+/** Callbacks run once a connection from openSharedIDB closed on versionchange. */
+const versionChangeListeners = new WeakMap<IDBDatabase, Array<() => void>>()
+
+/**
+ * Make a connection step aside for another connection's upgrade: on
+ * `versionchange` it closes itself, warns once, and tells the adapters using it
+ * to stop persisting (#120). Without this a live tab deadlocks another tab's
+ * schema upgrade.
+ */
+function yieldOnVersionChange(db: IDBDatabase, dbName: string): IDBDatabase {
+  db.onversionchange = () => {
+    db.onversionchange = null
+    db.close()
+    console.warn(
+      `[gsquery] IndexedDB connection to "${dbName}" closed because another connection ` +
+        `requested a version change (likely another tab upgrading the schema); ` +
+        `continuing memory-only for this session`
+    )
+    const listeners = versionChangeListeners.get(db) ?? []
+    versionChangeListeners.delete(db)
+    for (const listener of listeners) listener()
+  }
+  return db
+}
+
+/** Run `listener` once if `db` closes itself on versionchange. */
+function onVersionChangeClose(db: IDBDatabase, listener: () => void): void {
+  const listeners = versionChangeListeners.get(db) ?? []
+  listeners.push(listener)
+  versionChangeListeners.set(db, listeners)
+}
 
 /**
  * Open the gsquery IndexedDB with all required object stores in a single
@@ -52,7 +100,7 @@ export function openSharedIDB(tableNames: string[], dbName = 'gsquery'): Promise
 
       if (missing.length === 0 && !needsMeta) {
         // All stores exist — reuse the connection
-        resolve(existing)
+        resolve(yieldOnVersionChange(existing, dbName))
         return
       }
 
@@ -71,22 +119,29 @@ export function openSharedIDB(tableNames: string[], dbName = 'gsquery'): Promise
           db.createObjectStore('_meta', { keyPath: 'tableName' })
         }
       }
-      upgrade.onsuccess = () => resolve(upgrade.result)
+      // IndexedDB fires `blocked` (not success/error) while another connection
+      // stays open, and keeps the request queued. Waiting buys little: only a
+      // tab without this fix or a leaked connection blocks, since every
+      // connection handed out below yields on versionchange (#120).
+      let blocked = false
+      upgrade.onblocked = () => {
+        blocked = true
+        reject(new IDBUpgradeBlockedError(dbName))
+      }
+      upgrade.onsuccess = () => {
+        if (blocked) {
+          // The rejected request was not cancelled; its late connection would
+          // leak and block the next upgrade, so drop it at once.
+          upgrade.result.close()
+          return
+        }
+        resolve(yieldOnVersionChange(upgrade.result, dbName))
+      }
       upgrade.onerror = () => reject(upgrade.error)
     }
-    probe.onerror = () => {
-      // DB doesn't exist yet — create fresh with version 1
-      const fresh = indexedDB.open(dbName, 1)
-      fresh.onupgradeneeded = () => {
-        const db = fresh.result
-        for (const name of tableNames) {
-          db.createObjectStore(name, { keyPath: 'id' })
-        }
-        db.createObjectStore('_meta', { keyPath: 'tableName' })
-      }
-      fresh.onsuccess = () => resolve(fresh.result)
-      fresh.onerror = () => reject(fresh.error)
-    }
+    // A versionless open creates a missing database, so this only fires for a
+    // genuine failure (e.g. storage disabled).
+    probe.onerror = () => reject(probe.error)
   })
 }
 
@@ -139,6 +194,15 @@ export interface LocalAdapterOptions<T extends RowWithId = RowWithId> {
    * server (see replaceAll). Without it, pulled values are stored verbatim.
    */
   columnTypes?: Record<string, ColumnType>
+  /**
+   * How row ids are assigned. Defaults to `'client'`: the caller supplies
+   * every id (UUIDs recommended), which is what `createClientDB` always uses.
+   *
+   * In `'auto'` mode the counter never goes backward within a session, but
+   * it is re-derived as max(id) + 1 after a page reload (IndexedDB hydrate) or
+   * a server pull (`replaceAll`), so the ids of deleted highest rows can be
+   * issued again. Auto ids from different devices can also collide on sync.
+   */
   idMode?: IdMode
   /** Custom storage for MutationQueue (defaults to localStorage) */
   mutationStorage?: MutationStorage
@@ -178,7 +242,7 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
     // Accept pre-opened shared IDB handle
     if (options.idbDb) {
-      this.idbDb = options.idbDb
+      this.useConnection(options.idbDb)
     }
 
     this.queue = new MutationQueue<T>({
@@ -209,15 +273,23 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
     try {
       // If a shared DB handle was provided, just hydrate from it
       if (!this.idbDb) {
-        this.idbDb = await openSharedIDB([this.tableName], composeName('gsquery', this.namespace))
+        this.useConnection(
+          await openSharedIDB([this.tableName], composeName('gsquery', this.namespace))
+        )
       }
 
       const seqBefore = this.queue.currentSeq()
       const rows = await this.readAllFromIDB()
-      if (rows.length === 0) return
-
       const wroteDuringRead = this.queue.currentSeq() > seqBefore
-      if (!wroteDuringRead && this.data.length === 0) {
+
+      // The snapshot is write-behind, so it can lag behind the queue, which is
+      // written synchronously. Rebuild the view from both (#139).
+      const pending = this.queue.getMerged()
+      const view = new Map<string | number, T>(rows.map(r => [r.id, r]))
+      const replayed = this.replayOnto(view, pending)
+
+      if (!replayed && rows.length === 0) return
+      if (!replayed && !wroteDuringRead && this.data.length === 0) {
         this.data = rows
         this.rebuildIndex()
         return
@@ -225,23 +297,69 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
       // Anything already in memory — initialData, or a write that landed while
       // the read was in flight — is newer than this snapshot, so hydrate
-      // underneath it rather than over it (#106). Note replaceAll() bypasses
-      // the queue, so a pull landing mid-init() would not trip wroteDuringRead;
-      // unreachable today since registerTable runs after init().
-      const merged = new Map<string | number, T>(rows.map(r => [r.id, r]))
-      for (const row of this.data) merged.set(row.id, row)
-      if (wroteDuringRead) {
-        for (const m of this.queue.getMerged()) {
-          if (m.type === 'delete') merged.delete(m.id)
-        }
+      // underneath it rather than over it (#106). Rows the queue deletes stay
+      // absent. Note replaceAll() bypasses the queue, so a pull landing
+      // mid-init() would not trip wroteDuringRead; unreachable today since
+      // registerTable runs after init().
+      for (const row of this.data) view.set(row.id, row)
+      for (const m of pending) {
+        if (m.type === 'delete') view.delete(m.id)
       }
-      this.data = [...merged.values()]
+      this.data = [...view.values()]
       this.rebuildIndex()
+      // Brings the lagging snapshot up to date with the rebuilt view.
       this.schedulePersist()
-    } catch {
+    } catch (err) {
       // IndexedDB unavailable - continue in-memory only
       this.idbEnabled = false
+      if (err instanceof IDBUpgradeBlockedError) {
+        console.warn(`[gsquery] ${err.message}; continuing memory-only for this session`)
+      }
     }
+  }
+
+  /**
+   * Apply the queue's net mutations to a hydrated snapshot, returning whether
+   * any row changed. A queued insert carries the full current row, so it sets
+   * the row outright; an update merges into an existing row and is skipped
+   * when the row is absent (the next pull applies it over server data); a
+   * delete removes the row. The queue is stored as JSON, so values run through
+   * the same column conversion as pulled rows. Neither the queue nor the
+   * mutation listener is touched: these mutations are already queued.
+   */
+  private replayOnto(view: Map<string | number, T>, pending: MergedMutation<T>[]): boolean {
+    let changed = false
+    for (const m of pending) {
+      if (m.type === 'delete') {
+        if (view.delete(m.id)) changed = true
+        continue
+      }
+      const data = deserializeRow({ ...m.data }, this.columnTypes)
+      if (m.type === 'insert') {
+        view.set(m.id, { ...data, id: m.id } as T)
+        changed = true
+        continue
+      }
+      const base = view.get(m.id)
+      if (base === undefined) continue
+      view.set(m.id, { ...base, ...data, id: base.id })
+      changed = true
+    }
+    return changed
+  }
+
+  /**
+   * Persist through `db` until it closes on versionchange; from then on stay
+   * memory-only for the session (#120). Writes still reach the MutationQueue,
+   * which lives in its own storage, so pending pushes are not lost.
+   */
+  private useConnection(db: IDBDatabase): void {
+    this.idbDb = db
+    onVersionChangeClose(db, () => {
+      if (this.idbDb !== db) return
+      this.idbDb = null
+      this.idbEnabled = false
+    })
   }
 
   private rebuildIndex(): void {
@@ -267,44 +385,12 @@ export class LocalAdapter<T extends RowWithId> implements DataStore<T> {
 
   // ── DataStore<T> implementation ────────────────────────────────────
 
-  /** Map indexed row ids to row positions in scan order. */
-  private positionsOf(keys: (string | number)[]): number[] {
-    const positions: number[] = []
-    for (const key of keys) {
-      const pos = this.idIndex.get(key)
-      if (pos === undefined) {
-        throw new Error(`IndexStore out of sync: id ${String(key)} not in idIndex`)
-      }
-      positions.push(pos)
-    }
-    return positions.sort((x, y) => x - y)
-  }
-
   findAll(): T[] {
     return [...this.data]
   }
 
   find(options: QueryOptions<T>): T[] {
-    let candidateIndices: number[] | undefined
-    let remainingConditions = options.where
-
-    if (options.where.length > 0) {
-      const narrowed = this.indexStore.candidates(options.where)
-      if (narrowed !== undefined) {
-        candidateIndices = this.positionsOf(narrowed.keys)
-        remainingConditions = narrowed.remaining
-      }
-    }
-
-    let candidates: T[] = this.data
-    if (candidateIndices !== undefined) {
-      candidates = []
-      for (const idx of candidateIndices) {
-        candidates.push(this.data[idx])
-      }
-    }
-
-    return applyQuery(candidates, remainingConditions, options)
+    return findWithIndexes(this.data, this.idIndex, this.indexStore, options)
   }
 
   findById(id: string | number): T | undefined {

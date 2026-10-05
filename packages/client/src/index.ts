@@ -60,7 +60,7 @@ export type {
 // Transports
 export { MockTransport } from "./transports/index.js";
 export { GasApiTransport } from "./transports/index.js";
-export type { GasApiTransportOptions } from "./transports/index.js";
+export type { GasApiTransportOptions, PushContentType } from "./transports/index.js";
 
 // Runtime exports (always available)
 export {
@@ -89,6 +89,8 @@ export type {
   RuntimeTableSchema,
   ColumnType,
   IndexDefinition,
+  ColumnDefault,
+  CreateInputMap,
 } from "./runtime.js";
 
 // =============================================================================

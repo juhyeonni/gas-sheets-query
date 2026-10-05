@@ -1,18 +1,63 @@
 /**
  * Repository - high-level CRUD operations over a DataStore
  */
-import type { RowWithId, DataStore, QueryOptions, BatchUpdateItem, UpdateData, UpsertData } from './types.js'
+import type {
+  RowWithId,
+  DataStore,
+  QueryOptions,
+  BatchUpdateItem,
+  UpdateData,
+  UpsertData,
+  DefaultCreateInput
+} from './types.js'
 import { RowNotFoundError, ValidationError } from './errors.js'
 import { withScriptLock } from './script-lock.js'
+import {
+  compileWriteDefaults,
+  applyInsertDefaults,
+  applyUpdateStamp,
+  type CompiledWriteDefaults,
+  type WriteDefaults
+} from './column-defaults.js'
+
+/**
+ * Options for {@link Repository} (#199).
+ *
+ * `defaults` are filled on insert when a field is missing or `undefined`;
+ * `updatedAt` fields are stamped with the write's `Date` on insert and update
+ * unless the caller supplies a value. Neither ever touches `id`. Writes made
+ * directly through a `DataStore` get neither.
+ */
+export type RepositoryOptions = WriteDefaults
 
 /**
  * Repository provides a clean CRUD interface over any DataStore implementation
+ *
+ * @typeParam T - Row type
+ * @typeParam C - Input accepted by `create`, `batchInsert` and insert-shaped
+ *   `upsert`. Defaults to `T | Omit<T, 'id'>`; generated clients pass a type in
+ *   which fields with a runtime default are optional (#199).
  */
-export class Repository<T extends RowWithId> {
+export class Repository<T extends RowWithId, C = DefaultCreateInput<T>> {
+  private readonly writeDefaults: CompiledWriteDefaults | undefined
+
   constructor(
     private readonly store: DataStore<T>,
-    private readonly tableName?: string
-  ) {}
+    private readonly tableName?: string,
+    options?: RepositoryOptions
+  ) {
+    this.writeDefaults = compileWriteDefaults(options)
+  }
+
+  /** The create input with defaults and stamps applied, as the store takes it */
+  private prepareInsert(data: C | UpsertData<T>, now: Date): DefaultCreateInput<T> {
+    return applyInsertDefaults(data as DefaultCreateInput<T>, this.writeDefaults, now)
+  }
+
+  /** The update patch with `@updatedAt` stamped, as the store takes it */
+  private prepareUpdate(data: UpdateData<T>, now: Date): UpdateData<T> {
+    return applyUpdateStamp(data, this.writeDefaults, now)
+  }
 
   /**
    * Get all rows from the repository
@@ -50,8 +95,8 @@ export class Repository<T extends RowWithId> {
   /**
    * Insert a new row
    */
-  create(data: T | Omit<T, 'id'>): T {
-    return this.store.insert(data)
+  create(data: C): T {
+    return this.store.insert(this.prepareInsert(data, new Date()))
   }
 
   /**
@@ -59,7 +104,7 @@ export class Repository<T extends RowWithId> {
    * @throws RowNotFoundError if not found
    */
   update(id: string | number, data: UpdateData<T>): T {
-    const updated = this.store.update(id, data)
+    const updated = this.store.update(id, this.prepareUpdate(data, new Date()))
     if (!updated) {
       throw new RowNotFoundError(id, this.tableName)
     }
@@ -70,7 +115,7 @@ export class Repository<T extends RowWithId> {
    * Update a row by ID, returns undefined if not found
    */
   updateOrNull(id: string | number, data: UpdateData<T>): T | undefined {
-    return this.store.update(id, data)
+    return this.store.update(id, this.prepareUpdate(data, new Date()))
   }
 
   /**
@@ -92,14 +137,19 @@ export class Repository<T extends RowWithId> {
    * the row under a different id than the caller asked for, leaving every
    * reference to the requested id dangling with no error. Omit the id to
    * create a row in an `auto` store.
+   *
+   * With runtime defaults (#199), the update attempt stamps `@updatedAt` only;
+   * defaults are applied only when the call falls through to insert, since in
+   * the patch they would overwrite the existing row's values.
    */
-  upsert(data: UpsertData<T>): T {
+  upsert(data: UpsertData<T> | C): T {
+    const now = new Date()
     return withScriptLock(() => {
-      const id = (data as Partial<T>).id
+      const id = (data as Partial<RowWithId>).id
       if (id !== undefined) {
-        const patch = { ...(data as T) } as Record<string, unknown>
+        const patch = { ...(data as Record<string, unknown>) }
         delete patch.id
-        const updated = this.store.update(id, patch as UpdateData<T>)
+        const updated = this.store.update(id, this.prepareUpdate(patch as UpdateData<T>, now))
         if (updated) return updated
 
         if (this.store.idMode === 'auto') {
@@ -111,7 +161,7 @@ export class Repository<T extends RowWithId> {
           )
         }
       }
-      return this.store.insert(data as T | Omit<T, 'id'>)
+      return this.store.insert(this.prepareInsert(data, now))
     })
   }
 
@@ -150,13 +200,19 @@ export class Repository<T extends RowWithId> {
   /**
    * Batch insert multiple rows at once
    * More efficient than calling create() in a loop
+   *
+   * Every row of one call gets the same `now` for defaults and stamps (#199).
    */
-  batchInsert(data: (T | Omit<T, 'id'>)[]): T[] {
+  batchInsert(data: C[]): T[] {
+    const now = new Date()
+    const rows: DefaultCreateInput<T>[] = this.writeDefaults
+      ? data.map(row => this.prepareInsert(row, now))
+      : (data as unknown as DefaultCreateInput<T>[])
     if (this.store.batchInsert) {
-      return this.store.batchInsert(data)
+      return this.store.batchInsert(rows)
     }
     // Fallback: insert one by one
-    return data.map(row => this.store.insert(row))
+    return rows.map(row => this.store.insert(row))
   }
 
   /**
@@ -168,12 +224,16 @@ export class Repository<T extends RowWithId> {
    * `Partial<T>` here let an id through the ordinary public API with no cast.
    */
   batchUpdate(items: BatchUpdateItem<T>[]): T[] {
+    const now = new Date()
+    const stamped: BatchUpdateItem<T>[] = this.writeDefaults?.updatedAt.length
+      ? items.map(({ id, data }) => ({ id, data: this.prepareUpdate(data, now) }))
+      : items
     if (this.store.batchUpdate) {
-      return this.store.batchUpdate(items)
+      return this.store.batchUpdate(stamped)
     }
     // Fallback: update one by one
     const results: T[] = []
-    for (const { id, data } of items) {
+    for (const { id, data } of stamped) {
       const updated = this.store.update(id, data)
       if (updated) {
         results.push(updated)

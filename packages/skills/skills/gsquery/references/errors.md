@@ -32,7 +32,7 @@ import {
 | `RowNotFoundError` | `ROW_NOT_FOUND` | `findById`, `update`, `delete` | `id`, `tableName?` |
 | `NoResultsError` | `NO_RESULTS` | `firstOrFail()` | `tableName?` |
 | `MissingStoreError` | `MISSING_STORE` | `getStore('unknown')` | `tableName` |
-| `ValidationError` | `VALIDATION_ERROR` | Input validation | `field?` |
+| `ValidationError` | `VALIDATION_ERROR` | `upsert` with an id no row carries on an `auto` idMode store | `field?` |
 | `InvalidOperatorError` | `INVALID_OPERATOR` | `where()` with bad operator | `operator`, `validOperators` |
 | `MigrationVersionError` | `MIGRATION_VERSION_ERROR` | Duplicate/invalid version | `version` |
 | `MigrationExecutionError` | `MIGRATION_EXECUTION_ERROR` | Migration up/down fails | `version`, `migrationName`, `cause` |

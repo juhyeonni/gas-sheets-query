@@ -4,8 +4,8 @@
  * IndexedDB isn't available in the Node test environment (see other test
  * files, which all pass `disableIDB: true`). To verify `openSharedIDB` and
  * `createClientDB` request the correctly-composed database name, these tests
- * install a minimal fake `indexedDB` that always takes the "database not
- * found yet" branch (probe errors, fresh open succeeds) — enough to observe
+ * install a minimal fake `indexedDB` that always takes the first-run branch
+ * (probe finds an empty database, the upgrade open succeeds) — enough to observe
  * which name/version each call site requests without emulating the full
  * IndexedDB upgrade state machine.
  */
@@ -32,8 +32,15 @@ function installFakeIndexedDB() {
       const req: any = {}
       queueMicrotask(() => {
         if (version === undefined) {
-          // Probe: pretend the database doesn't exist yet.
-          req.onerror?.()
+          // Probe: a versionless open creates the missing database empty at
+          // version 1, so openSharedIDB goes on to upgrade it.
+          req.result = {
+            version: 1,
+            objectStoreNames: { contains: () => false },
+            createObjectStore: () => {},
+            close: () => {},
+          } satisfies FakeIDBDatabase
+          req.onsuccess?.()
           return
         }
         const stores = new Set<string>()
