@@ -42,8 +42,93 @@ same execution only burns what is left of the run, so the library does not.
   is still the better tool for many rows.
 - Long jobs belong in a time-driven trigger that processes a slice per run and
   records its progress, not in one execution that races the 6-minute ceiling.
+  [`runChunked`](#long-jobs-and-the-6-minute-ceiling) does the slicing.
 - Catch `QuotaExceededError` and check `transient` before deciding to reschedule
   versus fail loudly.
+
+## Long Jobs and the 6-Minute Ceiling
+
+Apps Script kills an execution after 6 minutes, wherever it is. A single
+`batchInsert` of a few thousand rows either finishes or dies mid-job, and you
+cannot tell how far it got. `runChunked` splits the job into chunks, stops
+cleanly before the deadline, and returns a cursor the next run resumes from.
+
+```ts
+import { runChunked } from '@gsquery/core'
+
+const CURSOR_KEY = 'importUsers.cursor'
+
+// Installed once as a time-driven trigger, e.g.
+// ScriptApp.newTrigger('importUsers').timeBased().everyMinutes(10).create()
+function importUsers() {
+  const startedAt = Date.now() // first line of the handler
+
+  const props = PropertiesService.getScriptProperties()
+  const startAt = Number(props.getProperty(CURSOR_KEY) ?? 0)
+  const rows = loadRowsToImport() // the same rows, in the same order, every run
+
+  const { done } = runChunked(rows, chunk => users.batchInsert(chunk), {
+    startedAt,
+    startAt,
+    // Save the cursor after every chunk, not only at the end.
+    onChunk: ({ next }) => props.setProperty(CURSOR_KEY, String(next))
+  })
+
+  if (done) {
+    props.deleteProperty(CURSOR_KEY)
+    // Delete the trigger here if the job is one-off.
+  }
+}
+```
+
+`runChunked(items, write, options)` calls `write(chunk, offset)` once per chunk,
+in input order, and returns `{ done, next, results }`. `next` is the index in
+`items` to resume from (`items.length` once `done` is `true`), and `results`
+holds each chunk's `write` return value. `write` can be any function:
+`batchInsert`, `batchUpdate`, `batchDelete` or your own code, on any store. The
+batch methods themselves are unchanged and stay all-or-nothing.
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `startedAt` | required | When this execution started (epoch ms). The library cannot see it, so capture `Date.now()` at the top of the handler |
+| `budgetMs` | `330000` (5.5 min, `DEFAULT_CHUNK_BUDGET_MS`) | Time budget from `startedAt`. The default leaves headroom under the 6-minute ceiling |
+| `chunkSize` | `500` (`DEFAULT_CHUNK_SIZE`) | Items per `write` call. Must be a positive integer |
+| `startAt` | `0` | Index to start from: the saved cursor. Must be in `0..items.length` |
+| `onChunk` | — | `({ next, result }) => void`, called after each completed chunk. Persist `next` here |
+
+An invalid `chunkSize`, `startAt`, `startedAt` or `budgetMs` throws
+`ValidationError` before `write` is ever called.
+
+**When it stops.** No chunk starts once `startedAt + budgetMs` has been reached.
+After the first chunk, no chunk starts either if the current time plus the
+slowest chunk measured so far in this call would pass that deadline. The
+measured time adapts to table width and quota pressure, where a fixed margin
+would either waste the budget or be too small. Time spent in `onChunk` counts
+toward the chunk.
+
+**When `write` throws.** The error escapes unchanged (`QuotaExceededError`,
+`LockTimeoutError`, ... exactly as documented) and no later chunk runs. Chunks
+that completed earlier stay written; the cursor last reported through `onChunk`
+is where the next run resumes.
+
+**Locking.** The runner does not hold the script lock across chunks. Each
+`write` takes its own lock, as the batch methods already do, so other
+executions can write between chunks. Holding the lock for minutes would make
+them all fail with `LockTimeoutError` after the 10-second wait.
+
+**At-least-once, not exactly-once.** If the runtime kills the execution after a
+chunk landed but before `onChunk` saved its cursor, the next run repeats that
+chunk:
+
+- In **auto id** mode, `batchInsert` inserts the repeated rows again, under new
+  ids: duplicates.
+- With **client ids**, `batchInsert` rejects the repeated chunk with
+  [`DuplicateIdError`](./error-handling.md#duplicateiderror) and writes none of
+  it. Since one `batchInsert` is a single ranged write, that chunk is already
+  in the sheet: advance the saved cursor past it and run again.
+
+Use client ids for imports that must not duplicate rows. `batchUpdate` with the
+same patches is naturally safe to repeat.
 
 ## Retry Behavior
 
@@ -138,7 +223,8 @@ the same execution from that snapshot — one API call instead of one per query.
 The consequence is that writes made by *other* executions are invisible until:
 
 - any write by this adapter drops the cache (an `insert` drops it even if it
-  throws, e.g. `DuplicateIdError`), or
+  throws, e.g. `DuplicateIdError`) — unless the adapter was built with
+  `patchCacheOnWrite: true`, see below, or
 - you call `adapter.clearCache()`, or
 - a new execution starts.
 
@@ -167,6 +253,56 @@ types into the sheet by hand during the same execution is only absorbed after
 Long-running triggers that poll for external edits must call `clearCache()`
 between passes.
 
+### Patching the cache on write (`patchCacheOnWrite`)
+
+By default (`patchCacheOnWrite: false`) every write drops the cache, so a loop of
+`insert` + `findAll` re-reads the whole table on every iteration. Construct the
+adapter with `patchCacheOnWrite: true` and `insert`, `batchInsert`, `update`,
+`batchUpdate`, `delete` and `batchDelete` instead apply what they wrote to a warm
+cache, so the loop reads the table once:
+
+```ts
+const store = new SheetsAdapter<User>({
+  sheetName: 'users',
+  columns: ['id', 'name', 'email'],
+  patchCacheOnWrite: true // default: false
+})
+```
+
+The trade-off is staleness. With the option on, a write no longer refreshes the
+snapshot, so rows that **other executions** wrote appear only after
+`adapter.clearCache()` or in a new execution. With it off, they also appear after
+this adapter's next write. Turn it on for executions that own the table while
+they run (an import, a batch job); leave it off when other executions write the
+same sheet and you rely on writes to pick up their rows.
+
+A patched row is exactly what a fresh read would return: the written cells are
+run back through the same deserialization (formula escaping, JSON, typed
+columns), not copied from the object you passed. When that is not certain, the
+write drops the cache as it does with the option off, and the next read re-reads
+the table:
+
+- a written string Sheets may parse into something else: any string containing a
+  digit (`"123"`, `"007"`, `"2024-01-01"`, `"10:30"`, `"user-1"`), `true`/`false`
+  in any case, a string with leading or trailing whitespace or a leading `#`;
+- any value in a `date`-typed column, including a `Date`;
+- with `allowFormulas: true`, a string that opens a formula (`=`, `+`, `-`, `@`,
+  tab, CR) or starts with `'`;
+- an `update`, `batchUpdate`, `delete` or `batchDelete` of an id that has no
+  cached row (another execution inserted it after the snapshot), has several
+  (a duplicate typed by hand), or that the cache holds but the sheet no longer
+  does;
+- a write that throws, because its outcome is unknown.
+
+`update` and `batchUpdate` rewrite every cell of the row, so the check covers the
+cells you did not change too: updating one column of a row whose other cells
+hold such a string drops the cache. Plain text, numbers, booleans, `Date`s in
+untyped columns, JSON array and object columns, `boolean`-typed columns, and
+strings `SheetsAdapter` escapes as text are patched.
+
+A cold cache stays cold, so a write never adds a read. `reset()` and the schema
+operations (`addColumn`, `renameColumn`, `removeColumn`) always drop the cache.
+
 ## Measured Costs
 
 Sheet calls made by `SheetsAdapter` on the data sheet, for a table with `N`
@@ -179,6 +315,7 @@ stated). A *cell* is one value returned by `getValues`; `flush` is
 | `findAll`, cold (first read, or after `clearCache()`) | 2 | `N*C + C` | 0 | 0 | 303 | 3,003 | 15,003 |
 | `findAll` / `find`, warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `findAll` after a write | 1 | `N*C` | 0 | 0 | 300 | 3,000 | 15,000 |
+| `findAll` after a patched write (`patchCacheOnWrite: true`, cache was warm) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `findById`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `count`, cache warm | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | `count` after a write (cache cold, header verified) | 1 | `N` | 0 | 0 | 100 | 1,000 | 5,000 |
@@ -225,7 +362,8 @@ measured.
 ## Checklist Before Going to Production
 
 - Writes go through batch APIs, not per-row loops.
-- Long jobs are sliced across time-driven trigger runs.
+- Long jobs are sliced across time-driven trigger runs with `runChunked`, and
+  the cursor is saved from `onChunk`.
 - `QuotaExceededError` (check `transient`) and `LockTimeoutError` are caught and
   rescheduled rather than surfaced as generic failures.
 - Values that can grow unbounded are kept out of cells.
