@@ -1,5 +1,51 @@
 # Changelog
 
+## [2.0.0](https://github.com/juhyeonni/gas-sheets-query/compare/v1.2.0...v2.0.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** type column lists against the row type ([#263](https://github.com/juhyeonni/gas-sheets-query/issues/263))
+
+### Features
+
+* apply [@default](https://github.com/default) and [@updated](https://github.com/updated)At at runtime in --client clients ([#264](https://github.com/juhyeonni/gas-sheets-query/issues/264)) ([abade47](https://github.com/juhyeonni/gas-sheets-query/commit/abade470f0139b07a3964db264d451cc295f8492))
+* **client:** add routing context to GasApiTransport ([#249](https://github.com/juhyeonni/gas-sheets-query/issues/249)) ([4339523](https://github.com/juhyeonni/gas-sheets-query/commit/43395239129bf7f3b69f68b621565977f9943bd3))
+* **client:** carry row base versions on the sync protocol ([#262](https://github.com/juhyeonni/gas-sheets-query/issues/262)) ([f257a2a](https://github.com/juhyeonni/gas-sheets-query/commit/f257a2ac1e75aa68edc2b41b9bb4b386fdee2d9f))
+* **core:** add a shared DataStore conformance suite ([#259](https://github.com/juhyeonni/gas-sheets-query/issues/259)) ([3069c68](https://github.com/juhyeonni/gas-sheets-query/commit/3069c68401880b682e928aa8fa0df55ed4be6944))
+* **core:** add nullable() and optional() schema sample wrappers ([#257](https://github.com/juhyeonni/gas-sheets-query/issues/257)) ([5780086](https://github.com/juhyeonni/gas-sheets-query/commit/57800869190d6dc0425343fb1b14d6f065fd9386))
+* **core:** add opt-in patchCacheOnWrite to SheetsAdapter ([#260](https://github.com/juhyeonni/gas-sheets-query/issues/260)) ([65a6062](https://github.com/juhyeonni/gas-sheets-query/commit/65a60629ce4e062821ea749a7041c405a78a9768))
+* **core:** add runChunked for time-budgeted batch jobs ([#256](https://github.com/juhyeonni/gas-sheets-query/issues/256)) ([75d0b86](https://github.com/juhyeonni/gas-sheets-query/commit/75d0b86e7f4558df450819f8ced14e9a3ce772c7))
+* **core:** type column lists against the row type ([#263](https://github.com/juhyeonni/gas-sheets-query/issues/263)) ([d4ca1ce](https://github.com/juhyeonni/gas-sheets-query/commit/d4ca1ce251194f435a1cf7bf61da0c34efbd72d4))
+* **core:** type-check JOIN where, aggregation fields and group keys ([#261](https://github.com/juhyeonni/gas-sheets-query/issues/261)) ([0ccf1bf](https://github.com/juhyeonni/gas-sheets-query/commit/0ccf1bf3797217e8be55bfdef45d72e3ba16cc89))
+* remove per-call O(N) costs in SheetsAdapter and shared query code, add batchDelete and count ([#243](https://github.com/juhyeonni/gas-sheets-query/issues/243)) ([7806d7f](https://github.com/juhyeonni/gas-sheets-query/commit/7806d7fe577af939645a15499fe345c42a2f1c9f))
+
+
+### Bug Fixes
+
+* **client:** handle GAS web-app fetch realities and overlapping sync ([#258](https://github.com/juhyeonni/gas-sheets-query/issues/258)) ([a97f8f4](https://github.com/juhyeonni/gas-sheets-query/commit/a97f8f43852784cff3d4245ef045f1dc21a19a5b))
+* **client:** JSON-encode gasPush mutations so Dates reach the server ([#250](https://github.com/juhyeonni/gas-sheets-query/issues/250)) ([34f492c](https://github.com/juhyeonni/gas-sheets-query/commit/34f492ced0a1f8e8952e7d9e86da8b72686d08fa))
+* **client:** stop a blocked IndexedDB upgrade from hanging init ([#253](https://github.com/juhyeonni/gas-sheets-query/issues/253)) ([572d75e](https://github.com/juhyeonni/gas-sheets-query/commit/572d75eee7999bec415569c6a4b4104559444c95))
+* **client:** stop IDB connection leak and replay queue on cold start ([#252](https://github.com/juhyeonni/gas-sheets-query/issues/252)) ([c58a62f](https://github.com/juhyeonni/gas-sheets-query/commit/c58a62f8d8fea87c48c838a7826f3e223c5c8631))
+* compact MutationQueue writes, align index and groupBy semantics, avoid Math.max spread, correct perf docs ([#241](https://github.com/juhyeonni/gas-sheets-query/issues/241)) ([42ead06](https://github.com/juhyeonni/gas-sheets-query/commit/42ead06a9b6230807a15706415f69319645a8d56))
+* **core:** round-trip leading apostrophes through formula escape ([#254](https://github.com/juhyeonni/gas-sheets-query/issues/254)) ([a9c36a3](https://github.com/juhyeonni/gas-sheets-query/commit/a9c36a3950bb6c5d5fa855c788fd5b9e157616e6))
+
+
+### Performance
+
+* **client:** bound sync cost per conflict, idle tick and push batch ([#255](https://github.com/juhyeonni/gas-sheets-query/issues/255)) ([bc5fc94](https://github.com/juhyeonni/gas-sheets-query/commit/bc5fc9495ba2ba081d8e68a912f95c157a19ecd0))
+
+
+### Refactors
+
+* **client:** remove explicit any and fix ValidationError docs ([#251](https://github.com/juhyeonni/gas-sheets-query/issues/251)) ([01f767d](https://github.com/juhyeonni/gas-sheets-query/commit/01f767dbd6bad049bed1e53c446b520710da30ef))
+* **core:** dedupe SheetsAdapter cell deserialization ([#248](https://github.com/juhyeonni/gas-sheets-query/issues/248)) ([1ba0123](https://github.com/juhyeonni/gas-sheets-query/commit/1ba01239fa03ce8d1c94263f08331a9544da6048))
+
+
+### Documentation
+
+* **client:** document LocalAdapter auto-mode id reuse window ([#247](https://github.com/juhyeonni/gas-sheets-query/issues/247)) ([2cdaec8](https://github.com/juhyeonni/gas-sheets-query/commit/2cdaec8f30ef72d43f6d836a7006c7145e8f0a1f))
+
 ## [1.2.0](https://github.com/juhyeonni/gas-sheets-query/compare/v1.1.0...v1.2.0) (2026-09-15)
 
 
