@@ -20,6 +20,7 @@ import {
 } from '../core/errors.js'
 import { withScriptLock } from '../core/script-lock.js'
 import { withRetries } from '../core/gas-retry.js'
+import { deserializeColumnValue } from '../core/column-conversion.js'
 
 /** Column type definition for schema-based serialization */
 export type ColumnType = 
@@ -486,9 +487,11 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
         value = value.toISOString()
       }
 
-      // Schema-based deserialization
+      // Schema-based deserialization: the one implementation shared with the
+      // local-first client. Runs after the unescape above, so the formula
+      // marker never reaches Number/JSON.parse.
       if (colType) {
-        value = this.deserializeByType(value, colType)
+        value = deserializeColumnValue(value, colType)
       } else {
         // Auto-detect: try to parse JSON strings (arrays and objects)
         if (typeof value === 'string' && value.length > 0) {
@@ -507,53 +510,6 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
       obj[col] = value
     }
     return obj as T
-  }
-
-  /** Deserialize value based on column type */
-  private deserializeByType(value: unknown, colType: ColumnType): unknown {
-    if (value === '' || value === null || value === undefined) {
-      // Return appropriate empty value for type
-      if (colType === 'string[]' || colType === 'number[]') return []
-      if (colType === 'object' || colType === 'json') return null
-      if (colType === 'boolean') return false
-      if (colType === 'number') return 0
-      return value
-    }
-
-    switch (colType) {
-      case 'string[]':
-      case 'number[]':
-      case 'object':
-      case 'json':
-        if (typeof value === 'string') {
-          try {
-            return JSON.parse(value)
-          } catch {
-            return colType.endsWith('[]') ? [] : null
-          }
-        }
-        return value
-      case 'boolean':
-        if (typeof value === 'string') {
-          return value.toLowerCase() === 'true'
-        }
-        return Boolean(value)
-      case 'number':
-        return Number(value)
-      case 'date': {
-        // Date columns deserialize to a real Date so the runtime value matches
-        // the generated `Date` type (#97). rowToObject may have pre-converted a
-        // GAS Date to an ISO string, so parse strings/numbers back to a Date.
-        if (value instanceof Date) return value
-        if (typeof value === 'string' || typeof value === 'number') {
-          const parsed = new Date(value)
-          if (!isNaN(parsed.getTime())) return parsed
-        }
-        return value
-      }
-      default:
-        return value
-    }
   }
 
   /**
