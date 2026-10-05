@@ -3,6 +3,7 @@
  */
 import type { ColumnType } from '../adapters/sheets-adapter.js'
 import type { IndexDefinition } from './index-store.js'
+import type { PrimitiveTypeSample, NullableSample, OptionalSample } from './schema-samples.js'
 
 /**
  * ID generation mode for insert operations
@@ -190,20 +191,27 @@ export interface DataStore<T extends RowWithId = RowWithId> {
 // ============================================================================
 
 /**
- * Primitive type samples for inference
+ * Type samples for inference
  * Use sample values to hint the type:
  * - 0 or 1 → number
  * - '' or 'sample' → string
  * - true or false → boolean
- * - null → null
+ * - null → null (for a `T | null` column, use `nullable(sample)`)
  * - new Date() → Date
+ * - nullable(sample) → the sample's type | null
+ * - optional(sample) → an optional key of the sample's type
  */
-export type TypeSample = string | number | boolean | null | Date
+export type TypeSample = PrimitiveTypeSample | NullableSample | OptionalSample
 
 /**
- * Infer TypeScript type from a sample value
+ * Infer TypeScript type from a sample value.
+ *
+ * `optional(s)` infers the value type of `s`; {@link InferRowFromSchema}
+ * makes its key optional.
  */
-export type InferType<T> = 
+export type InferType<T> =
+  T extends OptionalSample<infer S> ? InferType<S> :
+  T extends NullableSample<infer S> ? InferType<S> | null :
   T extends string ? string :
   T extends number ? number :
   T extends boolean ? boolean :
@@ -247,15 +255,27 @@ export interface TableSchemaTyped<
   idColumn?: string
 }
 
+/** Columns of `C` whose sample in `T` is wrapped in `optional()` */
+type OptionalSampleKeys<C extends string, T> = {
+  [K in C]: K extends keyof T ? (T[K] extends OptionalSample ? K : never) : never
+}[C]
+
 /**
  * Infer row type from a typed schema
  * - If types provided: use inferred types from samples
+ *   (`optional(...)` samples become optional keys)
  * - If no types: fallback to { [column]: unknown }
  */
-export type InferRowFromSchema<S extends TableSchemaTyped> = 
+export type InferRowFromSchema<S extends TableSchemaTyped> =
   S extends TableSchemaTyped<infer C, infer T>
     ? T extends Record<string, TypeSample>
-      ? { [K in C[number]]: K extends keyof T ? InferType<T[K]> : unknown } & { id: string | number }
+      ? {
+          [K in Exclude<C[number], OptionalSampleKeys<C[number], T>>]: K extends keyof T
+            ? InferType<T[K]>
+            : unknown
+        } & {
+          [K in OptionalSampleKeys<C[number], T>]?: InferType<T[K & keyof T]>
+        } & { id: string | number }
       : { [K in C[number]]: unknown } & { id: string | number }
     : RowWithId
 

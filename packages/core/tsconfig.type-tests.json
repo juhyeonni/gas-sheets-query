@@ -1,0 +1,13 @@
+{
+  // Compiles the type-level tests in tests/types (#200). Vitest does not
+  // typecheck, and tests/ is excluded from the main tsconfig, so without this
+  // project an `@ts-expect-error` or type assertion there would check nothing.
+  // Only tests/types is included: the rest of the suite is not type-checked.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["tests/types/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

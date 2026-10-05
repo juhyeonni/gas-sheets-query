@@ -21,7 +21,7 @@ const db = defineSheetsDB({
 })
 ```
 
-**Type inference**: `columns: [...] as const` + `types: { field: sampleValue }` infers row types automatically. Sample values: `''` → string, `0` → number, `true` → boolean, `null` → null, `new Date()` → Date.
+**Type inference**: `columns: [...] as const` + `types: { field: sampleValue }` infers row types automatically. Sample values: `''` → string, `0` → number, `true` → boolean, `null` → null, `new Date()` → Date. For a column that may be empty, wrap the sample (both exported from `@gsquery/core`): `nullable('')` → `string | null`, `optional('')` → optional key `field?: string`, `optional(nullable(0))` → `field?: number | null`. Prefer `nullable(...)` over a bare `null` sample, which infers the unusable type `null`.
 
 ## createSheetsDB (Legacy API)
 
