@@ -240,7 +240,6 @@ Use SheetsAdapter when connecting to actual Google Sheets:
 import { defineSheetsDB, SheetsAdapter } from '@gsquery/core'
 
 const db = defineSheetsDB({
-  spreadsheetId: 'YOUR_SPREADSHEET_ID',
   tables: {
     users: {
       columns: ['id', 'email', 'name', 'role'] as const,

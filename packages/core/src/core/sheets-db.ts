@@ -229,14 +229,6 @@ export function createSheetsDB<
 export interface DefineSheetsDBOptions<
   TableSchemas extends Record<string, TableSchemaTyped>
 > {
-  /**
-   * Spreadsheet ID.
-   * @deprecated No-op in defineSheetsDB — store creation here uses the provided
-   * stores or a MockAdapter and does not read this. Configure the spreadsheet on
-   * the adapter/client instead. Kept for backward compatibility with the legacy
-   * config shape; will be removed in a future major.
-   */
-  spreadsheetId?: string
   /** Table schemas with optional type hints */
   tables: TableSchemas
   /** Data stores (for testing or custom implementations). Optional when mock is true. */
@@ -279,7 +271,7 @@ export function defineSheetsDB<
 >(
   options: DefineSheetsDBOptions<TableSchemas>
 ): SheetsDB<InferTablesFromConfig<TableSchemas>> {
-  const { spreadsheetId, tables, mock } = options
+  const { tables, mock } = options
 
   // Build or auto-create stores
   let resolvedStores: Record<string, DataStore<RowWithId>>
@@ -296,12 +288,8 @@ export function defineSheetsDB<
 
   // Build legacy config
   const config: SheetsDBConfig = {
-    spreadsheetId,
     tables: Object.fromEntries(
-      Object.entries(tables).map(([name, schema]) => [
-        name,
-        { columns: schema.columns, idColumn: schema.idColumn }
-      ])
+      Object.entries(tables).map(([name, schema]) => [name, { columns: schema.columns }])
     )
   }
 

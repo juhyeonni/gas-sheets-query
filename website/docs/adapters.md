@@ -113,7 +113,6 @@ const store = new SheetsAdapter<User>({
   spreadsheetId: 'abc123...',     // optional, uses active spreadsheet if omitted
   sheetName: 'users',
   columns: ['id', 'name', 'email', 'age', 'active'],
-  idColumn: 'id',                  // default: 'id'
   createIfNotExists: true,         // default: true, auto-creates sheet with headers
   idMode: 'auto',                  // default: 'auto'
   columnTypes: {                   // optional: explicit type serialization

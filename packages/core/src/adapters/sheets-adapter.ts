@@ -110,17 +110,6 @@ export interface SheetsAdapterOptions<T extends RowWithId = RowWithId> {
   columns: readonly ColumnName<T>[]
   /** Whether to create sheet if it doesn't exist (default: true) */
   createIfNotExists?: boolean
-  /**
-   * ID column name (default: 'id')
-   *
-   * @deprecated 1.0 fixes the primary key at `'id'` (#101). SheetsAdapter is
-   * the only layer that honors this — MockAdapter and LocalAdapter have no
-   * such option, the CLI rejects a non-`id` `@id` field, and
-   * `InferRowFromSchema` always types the row as `& { id }`. Setting it yields
-   * rows whose declared type does not match their runtime shape. Custom
-   * primary-key names are planned for a later release.
-   */
-  idColumn?: string
   /** 
    * ID generation mode (default: 'auto')
    * - 'auto': server generates numeric IDs (default, backward compatible)
@@ -250,7 +239,7 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
   private spreadsheetId?: string
   private sheetName: string
   private columns: string[]
-  private idColumn: string
+  private readonly idColumn = 'id'
   private createIfNotExists: boolean
   readonly idMode: IdMode
   private columnTypes: Record<string, ColumnType>
@@ -294,7 +283,6 @@ export class SheetsAdapter<T extends RowWithId> implements DataStore<T> {
     // mutable type only satisfies `Range.setValues`, which takes `any[][]`.
     const columns: readonly string[] = options.columns
     this.columns = columns as string[]
-    this.idColumn = options.idColumn || 'id'
     this.createIfNotExists = options.createIfNotExists ?? true
     this.idMode = options.idMode ?? 'auto'
     this.columnTypes = options.columnTypes ?? {}

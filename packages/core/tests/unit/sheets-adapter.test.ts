@@ -116,34 +116,20 @@ describe('SheetsAdapter', () => {
       expect(() => {
         new SheetsAdapter<TestRow>({
           sheetName: 'Test',
-          columns: ['name', 'age'],
-          idColumn: 'id'
+          columns: ['name', 'age']
         })
       }).toThrow("ID column 'id' must be included in columns")
     })
 
-    it('should use default idColumn and idMode', () => {
+    it('should use the id column and default idMode', () => {
       const sheet = createFakeSheet([['id', 'name']])
       setupGASGlobals(sheet)
 
-      // id is default idColumn, auto is default idMode — should not throw
+      // auto is the default idMode — should not throw
       const adapter = new SheetsAdapter<{ id: number; name: string }>({
         spreadsheetId: 'test',
         sheetName: 'Test',
         columns: ['id', 'name']
-      })
-      expect(adapter).toBeDefined()
-    })
-
-    it('should accept custom idColumn', () => {
-      const sheet = createFakeSheet([['uid', 'name']])
-      setupGASGlobals(sheet)
-
-      const adapter = new SheetsAdapter<{ uid: number; name: string } & { id: number }>({
-        spreadsheetId: 'test',
-        sheetName: 'Test',
-        columns: ['uid', 'name'],
-        idColumn: 'uid'
       })
       expect(adapter).toBeDefined()
     })
