@@ -301,15 +301,6 @@ export interface TableSchemaTyped<
   columns: C
   /** Type hints using sample values */
   types?: T
-  /**
-   * ID column name (default: 'id')
-   *
-   * @deprecated 1.0 fixes the primary key at `'id'` (#101). This value is
-   * stored on the config but never read — `defineSheetsDB` ignores it, and
-   * `InferRowFromSchema` always types the row as `& { id }`. Custom primary-key
-   * names are planned for a later release.
-   */
-  idColumn?: string
 }
 
 /** Columns of `C` whose sample in `T` is wrapped in `optional()` */
@@ -398,13 +389,6 @@ export interface RuntimeSchema {
 export interface SheetsDBTableConfig {
   /** Column names in order */
   columns: readonly string[]
-  /**
-   * ID column name (default: 'id')
-   *
-   * @deprecated 1.0 fixes the primary key at `'id'` (#101). Stored but never
-   * read. Custom primary-key names are planned for a later release.
-   */
-  idColumn?: string
   /** Sheet name (defaults to table name if not specified) */
   sheetName?: string
   /** Insert defaults applied by the table's `Repository` (#199). See {@link RuntimeTableSchema.defaults} */

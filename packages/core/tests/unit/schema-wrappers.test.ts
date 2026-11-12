@@ -65,8 +65,7 @@ describe('nullable() / optional() sample wrappers', () => {
   it('leave the store config unchanged: only columns are passed on', () => {
     const db = createMembersDB()
     expect(db.config.tables.members).toEqual({
-      columns: ['id', 'name', 'deletedAt', 'nickname', 'score'],
-      idColumn: undefined
+      columns: ['id', 'name', 'deletedAt', 'nickname', 'score']
     })
   })
 })

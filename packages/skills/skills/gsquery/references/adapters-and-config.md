@@ -98,7 +98,6 @@ const store = new SheetsAdapter<User>({
   sheetName: 'Users',               // required — name of the sheet tab
   columns: ['id', 'name', 'email', 'age', 'active'],  // required — column order
   createIfNotExists: true,          // default: true — creates sheet if missing
-  // idColumn is deprecated — 1.0 fixes the primary key at 'id' (#101)
   idMode: 'auto',                   // default: 'auto'
   columnTypes: {                    // optional — type-aware serialization
     age: 'number',
@@ -117,7 +116,6 @@ interface SheetsAdapterOptions {
   sheetName: string
   columns: string[]
   createIfNotExists?: boolean
-  idColumn?: string                 // deprecated — 1.0 fixes it at 'id'
   idMode?: IdMode
   columnTypes?: Record<string, ColumnType>
   allowFormulas?: boolean           // default: false — see Formula safety

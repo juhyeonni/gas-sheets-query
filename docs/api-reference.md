@@ -25,7 +25,6 @@ Factory function using schema-based automatic type inference. (Recommended)
 import { defineSheetsDB, MockAdapter } from '@gsquery/core'
 
 const db = defineSheetsDB({
-  spreadsheetId: 'optional-id',
   tables: {
     users: {
       columns: ['id', 'name', 'email', 'role'] as const,
@@ -47,7 +46,6 @@ const db = defineSheetsDB({
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `spreadsheetId` | `string` | ✗ | Google Spreadsheet ID |
 | `tables` | `Record<string, TableSchemaTyped>` | ✓ | Table schema definitions |
 | `stores` | `Record<string, DataStore>` | ✗ | DataStore for each table (optional when `mock` is true) |
 | `mock` | `boolean` | ✗ | Auto-create MockAdapter for all tables (for testing) |

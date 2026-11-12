@@ -23,7 +23,6 @@ function defineSheetsDB<const TableSchemas extends Record<string, TableSchemaTyp
 | `tables` | `Record<string, TableSchemaTyped>` | Yes | Table schemas with columns and type hints |
 | `stores` | `Record<string, DataStore>` | No | Custom data stores per table |
 | `mock` | `boolean` | No | Use MockAdapter for all tables |
-| `spreadsheetId` | `string` | No | Google Spreadsheet ID |
 
 > Either `stores` or `mock: true` must be provided.
 
@@ -66,7 +65,6 @@ interface TypedSheetsDBConfig<Tables> {
 interface TableSchema<T extends RowWithId = RowWithId> {
   columns: readonly ColumnName<T>[]  // only T's keys; `as const` tuples accepted
   sheetName?: string
-  idColumn?: string                  // deprecated
 }
 
 // T's string keys; any string when T is exactly the bare RowWithId (no row type given)
@@ -306,7 +304,6 @@ interface SheetsAdapterOptions<T extends RowWithId = RowWithId> {
   sheetName: string
   columns: readonly ColumnName<T>[] // only T's keys; any string when no row type is given
   createIfNotExists?: boolean       // default: true
-  idColumn?: string                 // default: 'id'
   idMode?: 'auto' | 'client'       // default: 'auto'
   columnTypes?: Record<string, ColumnType>
   allowFormulas?: boolean           // default: false

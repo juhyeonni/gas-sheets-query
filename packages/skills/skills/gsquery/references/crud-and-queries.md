@@ -16,8 +16,6 @@ const db = defineSheetsDB({
   mock: true,
   // Option B: provide custom stores
   // stores: { users: new SheetsAdapter({ sheetName: 'Users', columns: ['id', 'name', 'email', 'age', 'active'] }) },
-  // Option C: set spreadsheetId (used by SheetsAdapter)
-  // spreadsheetId: 'your-spreadsheet-id',
 })
 ```
 
